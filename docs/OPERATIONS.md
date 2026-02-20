@@ -445,3 +445,303 @@ Sans-compatible font. The project Docker image installs `ttf-dejavu` to
 provide that dependency. For custom images/hosts, install `ttf-dejavu` (or an
 equivalent Sans font package) to avoid fallback failures like `Cannot find a
 valid font for the family Sans`.
+
+## Playlist and Channel Lifecycle
+
+- On startup, if `playlist.url` is configured (via persisted settings or `PLAYLIST_URL`), the service performs an initial playlist sync job.
+- Startup initial playlist sync is scheduled only after the primary HTTP listener answers `/healthz` readiness probes to avoid startup-window DVR reload races against an unopened listener.
+- Startup sync uses bounded retry/backoff only for transient Jellyfin lineup reload failures (`reload dvr lineup after playlist sync` + Jellyfin provider + transient network/5xx signatures): up to `4` attempts, exponential backoff from `1s` capped at `8s`, within a `3m` overall retry budget.
+- Non-transient startup sync failures abort immediately without retries.
+- Startup sync emits structured log records (`msg="initial playlist sync phase"`) with `initial_sync_phase=scheduled_after_listener_start|completed|failed` and includes attempt/duration metadata on completion.
+- Periodic refresh uses the automation schedule in `jobs.playlist_sync.cron`.
+- `--refresh-schedule` / `REFRESH_SCHEDULE` and the UI/API automation settings update the same persisted schedule keys.
+- Refresh is serialized by an internal lock (one refresh at a time).
+- Playlist upsert behavior:
+  - upserts existing entries
+  - inserts new entries
+  - marks stale entries inactive instead of deleting them
+- Published channel behavior:
+  - channels are ordered explicitly
+  - guide numbers are contiguous and start at `100`
+  - add/remove/reorder operations renumber guide numbers to keep them dense
+  - `/ui/catalog` supports a rapid source-add workflow:
+    - choose one target channel once in the toolbar
+    - row actions switch to `Add Source` for rapid attachment
+    - clear target selection to return to row-level `Create Channel` actions
+    - dynamic channel creation is toolbar-driven from current filter context
+  - dynamic channel blocks materialize generated channels into reserved guide ranges (`10000+`) and are managed separately from traditional channel ordering
+  - each channel may have multiple ordered sources (`priority_index`)
+  - each channel also has a `dynamic_rule`:
+    - if enabled, matching catalog items are synchronized into channel sources asynchronously
+    - when disabled, pending/in-flight dynamic sync is canceled
+    - newer enabled updates also preempt/cancel stale in-flight sync runs so broad scans converge to the latest rule quickly
+    - `dynamic_rule.search_query` is required when enabled
+    - `dynamic_rule.search_query` uses the same OR-capable include/exclude semantics as `/api/items` (`|`/`OR` plus `-term`/`!term`; no OR separator preserves legacy AND behavior)
+    - only `dynamic_query`-managed associations are automatically removed when no longer matched; manual associations are preserved
+  - non-matching source attachments require explicit override (`allow_cross_channel`)
+  - lineup responses include only enabled channels
+  - source health cooldown uses a bounded fail ladder (`10s`, `30s`, `2m`, `10m`, `1h` cap)
+  - successful source startup clears cooldown and resets failure state (`fail_count`, `last_fail_at`, `last_fail_reason`)
+
+## Operations Workflow
+
+### Playlist Sync vs Auto-prioritize
+
+- Run playlist sync when catalog content changed, channel sources need to be reconciled, or lineup entries seem stale.
+- Run auto-prioritize when channel source order quality needs to be recalculated from fresh probes.
+- Use playlist sync first, then auto-prioritize, after major playlist/provider updates.
+- Schedule playlist sync more frequently than auto-prioritize in most deployments because sync is correctness-focused and analyze/reorder is probe-heavy.
+- If providers enforce strict concurrent session caps, reduce auto-prioritize frequency and verify `AUTO_PRIORITIZE_PROBE_TUNE_DELAY`.
+
+### DVR Forward Sync vs Reverse Sync
+
+- Use forward sync (`POST /api/admin/dvr/sync`) to push hdhriptv channel mapping intent into DVR custom lineup mapping.
+- Use reverse sync (`POST /api/admin/dvr/reverse-sync`) to pull provider-side custom mapping back into hdhriptv.
+- Use per-channel reverse sync (`POST /api/channels/{channelID}/dvr/reverse-sync`) to import a single channel without touching the rest.
+- By default, DVR mapping/sync workflows target traditional channels only; set `include_dynamic=true` on sync APIs only when you intentionally want dynamic generated channels included.
+- In `configured_only` mode, forward sync updates only configured channels.
+- In `mirror_device` mode, forward sync also clears unmatched provider mappings to mirror current hdhriptv state.
+- Forward/reverse sync endpoints are intended for the `channels` DVR provider.
+  Jellyfin provider mode is for lineup refresh orchestration (`ReloadLineup`)
+  and does not implement custom mapping APIs.
+
+### Jellyfin DVR Provider Notes
+
+- Configure primary provider workflows with `provider`, and configure
+  post-playlist-sync reload fan-out with `active_providers`.
+- Use per-provider base URLs:
+  - `channels_base_url` for Channels DVR.
+  - `jellyfin_base_url` for Jellyfin API root.
+  - legacy `base_url` still maps to the selected primary provider.
+- Jellyfin post-sync reload requires both `jellyfin_base_url` and
+  `jellyfin_api_token`.
+- hdhriptv Jellyfin requests use header auth only:
+  `X-Emby-Token: <token>`.
+  `api_key` query-token auth is not used by the provider implementation.
+- `GET /api/admin/dvr` and `PUT /api/admin/dvr` responses redact
+  `jellyfin_api_token` (write-only semantics) and expose
+  `jellyfin_api_token_configured=true|false`.
+- Optional `jellyfin_tuner_host_id` can pin refresh targeting when multiple
+  Jellyfin HDHomeRun tuner hosts exist.
+- Jellyfin lineup refresh flow after HDHR changes:
+  `GET /System/Configuration/livetv` -> `POST /LiveTv/TunerHosts` ->
+  best-effort `GET /ScheduledTasks?isHidden=false` observability probe.
+- Playlist-sync-triggered DVR reload uses provider-aware gating for each active
+  provider (`active_providers`):
+  - Channels reload runs for active `channels`.
+  - Jellyfin reload runs for active `jellyfin` only when
+    `jellyfin_base_url` and `jellyfin_api_token` are configured.
+  - Mixed outcomes are reported as `dvr_lineup_reload_status=partial`.
+  - Skipped provider reasons are encoded in
+    `dvr_lineup_reload_skip_reason` (for example
+    `jellyfin:missing_jellyfin_api_token`).
+  - Job summaries include
+    `dvr_lineup_reload_status=<disabled|reloaded|partial|skipped>`
+    and `dvr_lineup_reload_skip_reason=<reason>`.
+
+### Job Status Interpretation
+
+- Query `GET /api/admin/jobs/{runID}` or `GET /api/admin/jobs?name=...`.
+- Supported `name` filters are `playlist_sync`, `auto_prioritize`, and `dvr_lineup_sync`.
+- `running` means job execution has started and may update `progress_cur` and `progress_max`.
+- `success` means terminal completion without errors.
+- `error` means terminal completion with failure details in `error`.
+- `canceled` means terminal cancellation, usually due to shutdown or context cancellation.
+- A second trigger while the same job is active returns HTTP `409`.
+- If a run remains `running` without progress changes for an extended period, correlate with logs (`job started`, `job finished`, and subsystem-specific warnings/errors).
+
+## Shared Session Streaming Behavior
+
+- Streaming is shared per published channel: multiple viewers of the same guide number reuse one upstream producer session.
+- Tuner usage is per active channel session, not per viewer.
+- Shared sessions use a size-or-time chunk pump and flush each chunk to subscribers to reduce no-data gaps.
+- Stall recovery is policy-driven (`STALL_POLICY`); default behavior fails over to alternate sources (`failover_source`), with optional same-source retry (`restart_same`) or immediate session close (`close_session`) when configured.
+- In `failover_source`, when no startup-eligible alternates are available in the current recovery pass, recovery automatically downgrades to restart-like same-source retry behavior (`restart_same` parity) while recovery filler keepalive remains active until startup succeeds or recovery deadline is reached.
+- Repeated same-source `source_eof` recoveries are paced with bounded inter-cycle backoff (`250ms` -> `2s`) so retry loops do not burn recovery-cycle budget in millisecond bursts. Recovery burst accounting is time-aware (`recovery_burst_budget_count` / `recovery_burst_pace_window`), and repetitive `shared session recovery triggered` warnings are coalesced (`recovery_trigger_logs_coalesced`).
+
+## Observability and Hardening
+
+- `GET /healthz` returns `{"status":"ok"}` with HTTP `200`.
+- `GET /metrics` available when `ENABLE_METRICS=true`.
+- Per-client IP rate limiting via token bucket:
+  - configured by `RATE_LIMIT_RPS`, `RATE_LIMIT_BURST`, and `RATE_LIMIT_MAX_CLIENTS`
+  - for reverse-proxy deployments, set `RATE_LIMIT_TRUSTED_PROXIES` so client identity is derived from trusted forwarded headers instead of collapsing all traffic to the proxy IP
+  - `Forwarded`/`X-Forwarded-For` chains are interpreted from right to left; trusted proxy hops are stripped from the right and the first non-trusted hop is used as the limiter key
+  - returns HTTP `429` when exceeded
+  - stale client entries are incrementally evicted and limiter-map cardinality can be capped to avoid unbounded growth
+  - `/healthz` is exempt
+- Request timeout middleware:
+  - controlled by `REQUEST_TIMEOUT`
+  - applies to non-stream endpoints
+  - `/auto/...` streaming is exempt
+- Admin mutation JSON size hardening:
+  - controlled by `ADMIN_JSON_BODY_LIMIT_BYTES`
+  - applies to admin mutation endpoints that decode JSON bodies
+  - oversized bodies are rejected with HTTP `413 Request Entity Too Large`
+- Channel tune startup-failure backoff:
+  - controlled by `TUNE_BACKOFF_MAX_TUNES`, `TUNE_BACKOFF_INTERVAL`, and `TUNE_BACKOFF_COOLDOWN`
+  - applies only to requests that would create a new shared session/source startup
+  - counts startup-cycle outcomes only (startup leader path), so concurrent joiners sharing the same startup do not overcount failures or overclear successes
+  - counts startup failures only; successful startups clear outstanding failure budget
+  - scope is per channel, so one failing channel does not throttle unrelated channel startups
+  - existing active shared sessions can continue accepting additional subscribers during cooldown
+  - returns HTTP `503` with `Retry-After` while backoff is active
+- Server read hardening:
+  - `ReadTimeout=30s`
+  - `ReadHeaderTimeout=5s`
+  - `IdleTimeout=120s`
+
+### Operational Log Events
+
+Key info-level events emitted by the service:
+
+- Stream/session lifecycle: `shared session created`, `shared session reused`, `shared session ready`, `shared session subscriber connected`, `shared session subscriber disconnected`, `shared session canceled while idle`, `stream tune rejected`, `stream tune failed`, `stream subscriber started`, `stream subscriber ended`, `stream subscriber canceled`, `stream subscriber disconnected due to lag`, `stream subscriber ended with error`.
+- Recovery diagnostics include burst and pacing fields on `shared session recovery triggered` / `shared session recovery cycle budget exhausted` (`recovery_burst_count`, `recovery_burst_budget_count`, `recovery_burst_pace_window`, and `recovery_trigger_logs_coalesced` when repeated warnings are rate-limited).
+- Tuner lifecycle: `tuner lease acquired`, `tuner lease reused`, `tuner lease released`, `tuner probe preempted`, `tuner idle-client preempted`.
+- Admin mutation lifecycle: `admin channel created`, `admin channel updated`, `admin channels reordered`, `admin channel deleted`, `admin source added`, `admin source updated`, `admin sources reordered`, `admin source deleted`, `admin source health cleared`, `admin all source health cleared`, `admin automation updated`, `admin automation timezone updated`, `admin automation schedule updated`, `admin automation settings updated`, `admin manual job run started`, `admin auto-prioritize cache cleared`, `admin dvr config updated`, `admin dvr schedule updated`, `admin dvr sync requested`, `admin dvr sync completed`, `admin dvr reverse-sync requested`, `admin dvr reverse-sync completed`, `admin channel dvr reverse-sync requested`, `admin channel dvr reverse-sync completed`, `admin channel dvr mapping updated`.
+- Dynamic channel immediate-sync lifecycle: `admin dynamic channel immediate sync queued`, `admin dynamic channel immediate sync started`, `admin dynamic channel immediate sync completed`, `admin dynamic channel immediate sync canceled`, `admin dynamic channel immediate sync skipped stale run`, `admin dynamic channel immediate sync failed`.
+- Dynamic block materialization lifecycle: `admin dynamic block sync queued`, `admin dynamic block immediate sync started`, `admin dynamic block immediate sync completed`, `admin dynamic block immediate sync canceled`, `admin dynamic block immediate sync failed`, `admin dynamic generated channels reordered`.
+- Dynamic block DVR lineup reload lifecycle: `admin dynamic block dvr lineup reload completed`, `admin dynamic block dvr lineup reload failed`.
+- Jobs/scheduler/playlist lifecycle: `job started`, `job finished`, `job panic recovered`, `job run persistence failed`, `scheduler loaded schedules`, `scheduler schedule updated`, `scheduler timezone updated`, `playlist refresh started`, `playlist refresh finished`.
+- SQLite IOERR diagnostics lifecycle: `sqlite_ioerr_diag_bundle` (one-shot pragma/db-file snapshot) and `sqlite_ioerr_trace_dump` (rate-limited in-memory DB operation timeline).
+- Discovery lifecycle: `discovery response sent` (debug-level).
+- Recovery filler normalization (debug-level): `shared session slate AV recovery filler profile normalized` with `original_resolution`, `normalized_resolution`, and `normalization_reason`.
+
+Common correlation fields on these events include:
+
+- `channel_id`, `guide_number`, `guide_name`
+- `tuner_id`, `source_id`, `source_item_key`
+- `subscriber_id`, `client_addr`, `remote_addr`
+- `run_id`, `job_name`, `triggered_by`
+- `result`, `reason`, `duration`
+
+## Persistence, Backup, and Restore
+
+- Catalog, channels, source mappings, and persisted device identity are stored in SQLite at `DB_PATH`.
+- Default path is `./hdhr-iptv.db`.
+- In Docker, default DB path is `/data/hdhr-iptv.db`; mount `/data` to persist.
+- Backups:
+  - stop service cleanly
+  - copy DB file to backup storage
+- Restore:
+  - stop service
+  - replace DB file
+  - start service
+
+Operational recommendation:
+
+- If `DB_PATH` is persistent, identity remains stable across restarts automatically.
+- Set explicit `DEVICE_ID` and `DEVICE_AUTH` when you need fixed identity across
+  fresh databases, DB replacements/restores, or multiple deployments.
+
+## Troubleshooting
+
+### Discovery Does Not Find Device
+
+- Confirm UDP `65001` is open between client and server.
+- Verify service is running and listening.
+- Validate client and server are on reachable subnets/VLANs.
+- Try manual endpoint: `http://<server-ip>:5004/discover.json`.
+
+### DVR Finds Device But No Channels
+
+- `lineup.json` is published-channel only.
+- Publish at least one channel in `/ui/catalog` or via `/api/channels`.
+- Confirm playlist refresh succeeded and catalog has items.
+
+### Streams Fail To Start
+
+- HTTP `503`: all tuners are in use. Increase `TUNER_COUNT` or reduce concurrent playback.
+- HTTP `502`: upstream URL unavailable or ffmpeg process failed.
+- In ffmpeg modes, validate `FFMPEG_PATH` and local ffmpeg installation.
+- For `ffmpeg-copy` startup-timeout errors, increase `STARTUP_TIMEOUT` and/or tune startup detection (`FFMPEG_STARTUP_PROBESIZE_BYTES`, `FFMPEG_STARTUP_ANALYZEDURATION`) so ffmpeg emits initial bytes before failover deadline.
+- If initial startup frequently times out on random-access gating but recovery continuity still needs strict cutover behavior, keep `STARTUP_RANDOM_ACCESS_RECOVERY_ONLY=true` (the default) so random-access enforcement applies only during recovery cycles.
+- Startup expects both video and audio components. If startup inventory reports an explicit component-incomplete state (`video_only` or `audio_only`), startup is rejected. Inspect diagnostics in logs and `/api/admin/tuners` (`source_startup_component_state`, `source_startup_video_streams`, `source_startup_audio_streams`). For random-access startup, compare `source_startup_probe_raw_bytes` vs `source_startup_probe_trimmed_bytes` and monitor `source_startup_probe_cutover_offset`/`source_startup_probe_dropped_bytes` to see how much pre-IDR data is discarded before stream handoff.
+- High random-access cutover (>=75% dropped from startup probe) emits `shared session startup probe cutover warning` log events with bounded coalescing metadata (`source_startup_probe_cutover_warn_logs_coalesced`) to reduce repetitive log spam under rapid recovery churn.
+- The runtime automatically retries once with relaxed startup probe/analyze settings (`source_startup_retry_relaxed_probe=true`) when startup detection initially appears component-incomplete. Startup is accepted only when inventory reaches `video_audio`; if the relaxed retry fails or still reports incomplete inventory, startup fails and failover continues.
+- If DVR logs show disconnects after no data for several seconds, reduce `BUFFER_PUBLISH_FLUSH_INTERVAL`, confirm producer pacing (`PRODUCER_READRATE=1`), and confirm recovery keepalive remains enabled (`RECOVERY_FILLER_ENABLED=true`, default). For picky clients, try `RECOVERY_FILLER_MODE=slate_av` (decodable filler) or `RECOVERY_FILLER_MODE=psi` before `null`.
+- For `RECOVERY_FILLER_MODE=slate_av`, odd source resolutions (for example `853x480`) are normalized to even dimensions for `libx264`/`yuv420p` encoder safety. Use debug logs to confirm normalization and watch `/api/admin/tuners` keepalive fallback counters if the session still degrades to `psi`/`null`.
+- If recovery resumes cleanly but playback is far behind live edge, inspect `/api/admin/tuners` keepalive telemetry:
+  - sustained high `recovery_keepalive_rate_bytes_per_second` relative to `recovery_keepalive_expected_rate_bytes_per_second`,
+  - `recovery_keepalive_realtime_multiplier` significantly above `1.0` when profile bitrate is known,
+  - non-zero `recovery_keepalive_guardrail_count` indicating safety fallback was required.
+
+### Playlist Sync SQLite IOERR (Before-Restart Capture)
+
+When playlist sync fails with SQLite IOERR codes (for example `SQLITE_IOERR_WRITE`
+/ extended code `778`), capture diagnostics before restarting the process.
+
+1. Keep the process running and preserve current logs.
+2. Collect the first `sqlite_ioerr_diag_bundle` event for the failing run:
+   - includes `phase`, `item_index`/`item_total`, `run_id`, sqlite code/name, `db.Stats()`, runtime pragmas, and DB/WAL/SHM file metadata.
+3. If trace ring diagnostics are enabled, collect `sqlite_ioerr_trace_dump`:
+   - provides the bounded pre-failure DB operation timeline (`op`, `phase`, duration, error classification/code).
+4. Correlate timestamps with host and storage telemetry (kernel, filesystem, volume/backend metrics) before restart.
+5. Restart only after capture is complete.
+
+Rapid rollback switches (if diagnostic verbosity needs to be reduced immediately):
+
+- Disable trace ring: `HDHRIPTV_SQLITE_IOERR_TRACE_ENABLED=false`.
+- Reduce trace dump volume: lower `HDHRIPTV_SQLITE_IOERR_TRACE_DUMP_LIMIT` and/or increase `HDHRIPTV_SQLITE_IOERR_TRACE_DUMP_INTERVAL`.
+- Disable optional checkpoint probing: `HDHRIPTV_SQLITE_IOERR_CHECKPOINT_PROBE=false`.
+
+### Dynamic Rule Updates Do Not Apply Expected Sources
+
+- Verify `dynamic_rule.enabled=true` and a non-empty `dynamic_rule.search_query`.
+- Confirm target catalog rows are active and match both optional `group_name` and `search_query` (same behavior as `GET /api/items` filtering, including `-term`/`!term` exclusion support).
+- Check logs for dynamic sync lifecycle events (`queued`, `started`, `completed`, `failed`, `canceled`, `skipped stale run`) and correlate by `channel_id`.
+- `canceled` events include `cancel_reason` (`superseded`, `disabled_or_deleted`, `state_removed`, or `canceled`) to distinguish expected preemption from unexpected failures.
+- If you disable a rule or delete a channel while sync is running, cancellation is expected and stale results are intentionally discarded.
+
+### Automation Cron and Timezone Validation
+
+- Invalid cron updates return HTTP `400` from automation or DVR config endpoints when a schedule is enabled.
+- Disabling a schedule does not require cron validation; you can disable first and fix cron later.
+- Scheduler timezone updates require a valid IANA timezone string; blank values return HTTP `400`.
+- If persisted timezone is invalid at load time, scheduler falls back to `UTC` and logs a warning (`invalid scheduler timezone; falling back to UTC`).
+
+### Automation and DVR Config Apply / Rollback Behavior
+
+- `PUT /api/admin/automation` snapshots prior scheduler-related settings before applying updates and performs apply/rollback work under a detached `30s` timeout budget. If `Scheduler.LoadFromSettings(...)` fails, the handler restores the prior values and returns HTTP `500`.
+- `PUT /api/admin/dvr` updates persisted DVR config first, then applies scheduler changes for `dvr_lineup_sync`. If schedule apply fails, the previous DVR config is restored before the error response is sent.
+- If rollback itself fails, the error response includes both the apply failure and rollback failure details; immediately re-read config state from `GET /api/admin/automation` and `GET /api/admin/dvr` before retrying writes.
+
+### Job Runs Stay Running, Error, or Conflict
+
+- HTTP `409` when triggering a run means that job (or another job under global job lock) is already running.
+- Inspect run state with `GET /api/admin/jobs/{runID}` and check `status`, `progress_cur`, `progress_max`, `summary`, and `error`.
+- `status=error` with empty progress usually indicates early validation/config errors (for example missing playlist URL or provider access failure).
+- `status=canceled` is expected on shutdown or canceled request contexts.
+- If a run appears stalled in `running`, correlate with log events: `job started`, `job finished`, `playlist refresh*`, `admin dvr sync*`, and upstream/provider error messages.
+
+### DVR Sync Mapping Edge Cases
+
+- If lineup entries expose `station_ref` without `lineup_channel`, sync can still succeed using station-ref-only mapping.
+- Station-ref-only behavior is surfaced as warnings in sync responses and should not be treated as automatic failure.
+- Forward sync unresolved counts (`unresolved_count`) usually indicate missing tuner-number matches or lineup station lookup mismatches.
+- Reverse sync missing counts (`missing_tuner_count`, `missing_mapping_count`, `missing_station_ref_count`) identify which side lacks matching metadata.
+
+### Channels Page DVR Mapping Refresh and Rate Limiting
+
+- `/ui/channels` uses paged bulk mapping fetch (`GET /api/channels/dvr` with `limit`/`offset`) to reduce per-row request fan-out and avoid one unbounded mapping payload.
+- If DVR mappings render empty after refresh, check for HTTP `429` responses and adjust `RATE_LIMIT_RPS`/`RATE_LIMIT_BURST` for your admin workload.
+- Confirm the DVR backend is reachable with `POST /api/admin/dvr/test` before treating blank mappings as UI-only issues.
+- Use browser devtools network logs to confirm mapping payload content and response codes when diagnosing render gaps.
+
+### Reverse Proxy Rate-Limit Bucketing
+
+- If all users behind a reverse proxy appear to share one limiter bucket (frequent cross-user `429`), set `RATE_LIMIT_TRUSTED_PROXIES` (or `--rate-limit-trusted-proxies`) to the proxy CIDR/IP.
+- Include only proxy hops you operate and trust to sanitize forwarded headers.
+- Header precedence for trusted peers is `Forwarded`, then `X-Forwarded-For`, then `X-Real-IP`.
+- `Forwarded` and `X-Forwarded-For` values are resolved right-to-left by peeling trusted hops from the right; malformed chains or all-trusted chains fall back to `RemoteAddr`.
+
+### Auth Problems
+
+- HTTP `401`: credentials are missing or wrong.
+- HTTP `500` on all admin routes: `ADMIN_AUTH` format is invalid; use `user:pass`.
+
+### Clients Ignore Advertised Port
+
+- Enable legacy listener for compatibility:
+  - set `HTTP_ADDR_LEGACY=:80`
+  - expose/open TCP `80`
