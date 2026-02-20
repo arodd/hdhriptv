@@ -1,0 +1,2838 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #eff4fb;
+      --panel: #ffffff;
+      --panel-soft: #f7faff;
+      --border: #d0dae8;
+      --text: #132037;
+      --muted: #5b697f;
+      --brand: #0c62e4;
+      --brand-soft: #eaf2ff;
+      --ok: #0d7a38;
+      --warn: #9a6100;
+      --danger: #ac2318;
+      --ink-dark: #0d1625;
+      --radius: 12px;
+      --shadow: 0 10px 26px rgba(19, 32, 55, 0.08);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 10% -10%, #dceaff 0%, transparent 30%),
+        radial-gradient(circle at 90% 0%, #e6f5ff 0%, transparent 34%),
+        linear-gradient(180deg, #f3f7fd 0%, #ecf2fa 100%);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: var(--ink-dark);
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2d4f80;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1e3d6b;
+      border-color: #3768af;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1540px;
+      margin: 0 auto;
+      padding: 14px;
+      display: grid;
+      gap: 14px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 10px 12px;
+      font-size: 0.98rem;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-soft);
+      letter-spacing: 0.01em;
+    }
+
+    .panel h3 {
+      margin: 0;
+      font-size: 0.86rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .panel-body {
+      padding: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .status {
+      border-radius: 10px;
+      padding: 8px 10px;
+      border: 1px solid #bed4ff;
+      background: #eaf2ff;
+      color: #17478d;
+      font-size: 0.86rem;
+    }
+
+    .status.error {
+      border-color: #f0c2c2;
+      background: #fff1f1;
+      color: #9a2222;
+    }
+
+    .status.warn {
+      border-color: #f3dbb2;
+      background: #fff6e8;
+      color: #8a5700;
+    }
+
+    .command-bar {
+      position: sticky;
+      top: 0;
+      z-index: 15;
+      border-color: #bfd0ea;
+      background: rgba(252, 254, 255, 0.95);
+      backdrop-filter: blur(6px);
+    }
+
+    .command-grid {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .command-primary,
+    .command-secondary {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .command-secondary {
+      justify-content: flex-end;
+    }
+
+    button,
+    select,
+    input[type="search"] {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.86rem;
+      line-height: 1.25;
+      min-height: 34px;
+    }
+
+    button {
+      cursor: pointer;
+    }
+
+    button.primary {
+      background: var(--brand);
+      border-color: var(--brand);
+      color: #fff;
+      font-weight: 600;
+    }
+
+    button.warn {
+      border-color: #e9c285;
+      background: #fff7e7;
+      color: #8a5400;
+    }
+
+    button.ghost {
+      background: #f3f8ff;
+      border-color: #bad1fb;
+      color: #184d96;
+    }
+
+    button.chip {
+      border-radius: 999px;
+      padding: 5px 10px;
+      min-height: 30px;
+      background: #f7f9fd;
+      color: #374860;
+    }
+
+    button.chip.active,
+    button.chip[aria-pressed="true"] {
+      background: var(--brand-soft);
+      border-color: #9fc3ff;
+      color: #144a95;
+      font-weight: 600;
+    }
+
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    button:focus-visible,
+    select:focus-visible,
+    input[type="search"]:focus-visible,
+    input[type="checkbox"]:focus-visible,
+    .history-list-item:focus-visible,
+    tr.selectable:focus-visible {
+      outline: 2px solid #72a9ff;
+      outline-offset: 1px;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      font-size: 0.84rem;
+    }
+
+    .search-form {
+      display: inline-flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .search-form input[type="search"] {
+      min-width: 270px;
+    }
+
+    .inline-check {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 0.82rem;
+    }
+
+    .summary-note {
+      color: var(--muted);
+      font-size: 0.78rem;
+      white-space: nowrap;
+    }
+
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(7, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .kpi-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 9px;
+      display: grid;
+      gap: 4px;
+      min-height: 78px;
+    }
+
+    .kpi-card.severity-ok {
+      border-color: #b7ddc7;
+      background: linear-gradient(180deg, #f5fcf8 0%, #fff 100%);
+    }
+
+    .kpi-card.severity-warn {
+      border-color: #efd18d;
+      background: linear-gradient(180deg, #fff9ec 0%, #fff 100%);
+    }
+
+    .kpi-card.severity-danger {
+      border-color: #ebbbb4;
+      background: linear-gradient(180deg, #fff4f3 0%, #fff 100%);
+    }
+
+    .kpi-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .kpi-label {
+      color: var(--muted);
+      font-size: 0.76rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .kpi-help {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 16px;
+      height: 16px;
+      border: 1px solid #bdd2ef;
+      border-radius: 999px;
+      font-size: 0.7rem;
+      color: #2a4f84;
+      background: #f5f9ff;
+      cursor: help;
+      user-select: none;
+      line-height: 1;
+    }
+
+    .kpi-help:focus-visible {
+      outline: 2px solid #75a8ff;
+      outline-offset: 1px;
+    }
+
+    .kpi-value {
+      font-weight: 700;
+      font-size: 1.15rem;
+    }
+
+    .kpi-meta {
+      color: var(--muted);
+      font-size: 0.76rem;
+    }
+
+    .kpi-severity {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      width: fit-content;
+      padding: 2px 8px;
+      font-size: 0.7rem;
+      font-weight: 700;
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+      color: var(--muted);
+      background: #f7f9ff;
+    }
+
+    .kpi-severity.ok {
+      border-color: #bee4c8;
+      background: #eefbf3;
+      color: var(--ok);
+    }
+
+    .kpi-severity.warn {
+      border-color: #f2daad;
+      background: #fff9eb;
+      color: #8f5a02;
+    }
+
+    .kpi-severity.danger {
+      border-color: #f2c4c4;
+      background: #fff2f2;
+      color: var(--danger);
+    }
+
+    .grid-primary,
+    .grid-secondary {
+      display: grid;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: 12px;
+    }
+
+    .span-8 { grid-column: span 8; }
+    .span-4 { grid-column: span 4; }
+
+    .panel-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      flex-wrap: wrap;
+    }
+
+    .panel-tools {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fff;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid #e5ebf5;
+      text-align: left;
+      padding: 7px;
+      vertical-align: top;
+      white-space: nowrap;
+    }
+
+    th {
+      color: var(--muted);
+      font-size: 0.75rem;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      font-weight: 600;
+    }
+
+    tr:last-child td {
+      border-bottom: 0;
+    }
+
+    tr.selectable {
+      cursor: pointer;
+    }
+
+    tr.selectable:hover {
+      background: #f7fbff;
+    }
+
+    tr.selected {
+      background: #edf5ff;
+    }
+
+    .tag {
+      display: inline-block;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+      color: var(--muted);
+      background: #f7f9ff;
+    }
+
+    .tag.ok {
+      border-color: #bee4c8;
+      background: #eefbf3;
+      color: var(--ok);
+    }
+
+    .tag.warn {
+      border-color: #f2daad;
+      background: #fff9eb;
+      color: #8f5a02;
+    }
+
+    .tag.info {
+      border-color: #bdd8ff;
+      background: #edf5ff;
+      color: #1c57a1;
+    }
+
+    .tag.danger {
+      border-color: #f2c4c4;
+      background: #fff2f2;
+      color: var(--danger);
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.78rem;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.86rem;
+      border: 1px dashed #cfd8e7;
+      border-radius: 10px;
+      padding: 10px;
+      background: #fbfcff;
+    }
+
+    .details-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .detail-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fbfdff;
+      display: grid;
+      gap: 4px;
+    }
+
+    .detail-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      font-size: 0.82rem;
+      align-items: baseline;
+    }
+
+    .detail-row span:last-child {
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+
+    .detail-row .key {
+      color: var(--muted);
+    }
+
+    .alert-list {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      gap: 8px;
+    }
+
+    .alert-list li {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fbfdff;
+      display: grid;
+      gap: 4px;
+    }
+
+    .alert-list li.warn {
+      border-color: #f3debc;
+      background: #fff9ef;
+    }
+
+    .alert-list li.danger {
+      border-color: #f0cbcb;
+      background: #fff3f3;
+    }
+
+    .history-controls {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      align-items: center;
+    }
+
+    .history-search-input {
+      width: 100%;
+      min-width: 0;
+    }
+
+    .history-master-detail {
+      display: grid;
+      grid-template-columns: minmax(320px, 40%) minmax(0, 1fr);
+      gap: 10px;
+      min-height: 340px;
+    }
+
+    .history-list-pane,
+    .history-detail-pane {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fcfdff;
+      display: grid;
+      gap: 8px;
+      align-content: start;
+    }
+
+    .history-list {
+      display: grid;
+      gap: 8px;
+      max-height: 560px;
+      overflow: auto;
+      padding: 2px 2px 2px 0;
+    }
+
+    .history-list-item {
+      width: 100%;
+      text-align: left;
+      border: 1px solid var(--border);
+      border-radius: 9px;
+      background: #fff;
+      padding: 7px 8px;
+      display: grid;
+      gap: 5px;
+      cursor: pointer;
+      line-height: 1.25;
+      transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+    }
+
+    .history-list-item:hover {
+      border-color: #b9cff0;
+      background: #f5f9ff;
+    }
+
+    .history-list-item[aria-selected="true"] {
+      border-color: #88b6ff;
+      background: #edf5ff;
+      box-shadow: inset 3px 0 0 #2f73da;
+    }
+
+    .history-list-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .history-list-title {
+      font-size: 0.82rem;
+      font-weight: 600;
+      line-height: 1.2;
+    }
+
+    .history-list-meta {
+      display: grid;
+      gap: 1px;
+      font-size: 0.78rem;
+      color: var(--muted);
+      line-height: 1.2;
+    }
+
+    .history-list-meta > div {
+      overflow-wrap: anywhere;
+    }
+
+    .history-list-terminal {
+      color: var(--muted);
+      font-size: 0.76rem;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      -webkit-line-clamp: 2;
+    }
+
+    .history-tabs {
+      display: inline-flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+
+    .history-tab {
+      border-radius: 999px;
+      padding: 4px 11px;
+      background: #f6f9ff;
+      border-color: #bfd2f3;
+      color: #1b4f95;
+      min-height: 28px;
+      font-size: 0.78rem;
+      letter-spacing: 0.02em;
+    }
+
+    .history-tab[aria-selected="true"] {
+      background: #e7f1ff;
+      border-color: #8fb7f7;
+      color: #123f7a;
+      font-weight: 700;
+    }
+
+    .history-tabpanel {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      background: #fff;
+    }
+
+    .history-detail-pane .details-grid {
+      gap: 6px;
+    }
+
+    .history-detail-pane .detail-card {
+      padding: 7px;
+    }
+
+    .history-tabpanel[hidden] {
+      display: none;
+    }
+
+    .history-subsection {
+      display: grid;
+      gap: 6px;
+    }
+
+    .history-subsection h4 {
+      margin: 0;
+      font-size: 0.76rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .source-cell {
+      max-width: 380px;
+      min-width: 220px;
+      white-space: normal;
+      word-break: break-word;
+    }
+
+    .mono {
+      font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
+      letter-spacing: -0.01em;
+    }
+
+    .client-groups {
+      display: grid;
+      gap: 8px;
+    }
+
+    .client-group {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #fbfdff;
+      padding: 8px;
+    }
+
+    .client-group > summary {
+      cursor: pointer;
+      list-style: none;
+    }
+
+    .client-group > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .client-group-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 6px;
+      align-items: center;
+    }
+
+    .client-group-label {
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
+
+    .client-group-count {
+      justify-self: end;
+    }
+
+    .client-group-body {
+      margin-top: 8px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .client-group table {
+      font-size: 0.8rem;
+    }
+
+    @media (max-width: 1340px) {
+      .kpi-grid {
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+      }
+
+      .span-8,
+      .span-4 {
+        grid-column: span 12;
+      }
+
+      .history-master-detail {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    @media (max-width: 980px) {
+      .command-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .command-secondary {
+        justify-content: flex-start;
+      }
+
+      .kpi-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .details-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .client-group-head {
+        grid-template-columns: 1fr;
+      }
+
+      .client-group-count {
+        justify-self: start;
+      }
+
+      .search-form input[type="search"] {
+        min-width: 0;
+        width: 100%;
+      }
+
+      .history-controls {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .history-list {
+        max-height: 300px;
+      }
+    }
+
+    @media (max-width: 720px) {
+      main {
+        padding: 10px;
+      }
+
+      .topbar {
+        padding: 12px;
+      }
+
+      .kpi-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .command-primary,
+      .command-secondary,
+      .search-form,
+      .panel-toolbar,
+      .panel-tools {
+        width: 100%;
+      }
+
+      .command-primary > *,
+      .command-secondary > * {
+        flex: 1 1 auto;
+      }
+
+      button,
+      select,
+      input[type="search"] {
+        width: 100%;
+      }
+
+      .chip-row {
+        width: 100%;
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 6px;
+      }
+
+      .history-controls {
+        grid-template-columns: 1fr;
+      }
+
+      .history-tabs {
+        width: 100%;
+      }
+
+      .history-tab {
+        flex: 1 1 auto;
+        text-align: center;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners" class="active">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section id="tuner-command-bar" class="panel command-bar" aria-label="Tuner diagnostics command bar">
+      <h2>Diagnostics Command Bar</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+        <div class="command-grid">
+          <div class="command-primary">
+            <button id="refresh-btn" type="button" class="primary">Refresh Now</button>
+            <label>
+              <input id="auto-refresh" type="checkbox" checked>
+              Auto-refresh (3s)
+            </label>
+            <span id="last-refresh" class="summary-note">Last refresh: -</span>
+          </div>
+          <div class="command-secondary">
+            <form id="search-form" class="search-form" role="search" aria-label="Tuner diagnostics search">
+              <input id="tuner-search-input" type="search" placeholder="Search tuner/history/client fields" autocomplete="off">
+              <button id="search-apply" type="submit" class="ghost">Apply</button>
+              <button id="search-reset" type="button">Reset</button>
+            </form>
+          </div>
+        </div>
+        <div class="command-grid">
+          <div class="command-primary">
+            <span class="summary-note">Quick filter:</span>
+            <div class="chip-row" id="quick-filter-chips" role="group" aria-label="Quick status filters">
+              <button type="button" class="chip active" id="quick-filter-all" data-filter="all" aria-pressed="true">All</button>
+              <button type="button" class="chip" id="quick-filter-active" data-filter="active" aria-pressed="false">Active</button>
+              <button type="button" class="chip" id="quick-filter-recovering" data-filter="recovering" aria-pressed="false">Recovering</button>
+              <button type="button" class="chip" id="quick-filter-errors" data-filter="errors" aria-pressed="false">Errors</button>
+              <button type="button" class="chip" id="quick-filter-idle" data-filter="idle" aria-pressed="false">Idle</button>
+            </div>
+          </div>
+          <div class="command-secondary">
+            <label>
+              Active sort
+              <select id="active-sort-key">
+                <option value="tuner">Tuner</option>
+                <option value="state">State</option>
+                <option value="channel">Channel</option>
+                <option value="source">Source</option>
+                <option value="subscribers">Subscribers</option>
+                <option value="last_push">Last Push</option>
+                <option value="bytes">Bytes</option>
+              </select>
+            </label>
+            <button id="active-sort-dir" type="button" class="ghost" data-panel="active" aria-pressed="false">Asc</button>
+            <label>
+              History sort
+              <select id="history-sort-key">
+                <option value="opened">Opened</option>
+                <option value="closed">Closed</option>
+                <option value="status">Status</option>
+                <option value="recovery">Recovery</option>
+                <option value="subscribers">Subscribers</option>
+                <option value="duration">Duration</option>
+              </select>
+            </label>
+            <button id="history-sort-dir" type="button" class="ghost" data-panel="history" aria-pressed="true">Desc</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="kpi-grid" aria-label="Tuner summary metrics">
+      <article id="summary-card-configured" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Configured Tuners</div>
+          <span class="kpi-help" tabindex="0" title="Total tuner slots configured for the runtime.">?</span>
+        </div>
+        <div id="summary-configured" class="kpi-value">0</div>
+        <div id="summary-configured-severity" class="kpi-severity">Stable</div>
+        <div class="kpi-meta">Total available tuner slots</div>
+      </article>
+      <article id="summary-card-inuse" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Tuners In Use</div>
+          <span class="kpi-help" tabindex="0" title="Active tuner leases in the latest status snapshot.">?</span>
+        </div>
+        <div id="summary-inuse" class="kpi-value">0</div>
+        <div id="summary-inuse-severity" class="kpi-severity">Stable</div>
+        <div id="summary-inuse-meta" class="kpi-meta">Live leases in the current snapshot</div>
+      </article>
+      <article id="summary-card-idle" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Tuners Idle</div>
+          <span class="kpi-help" tabindex="0" title="Immediately available tuner slots after current allocations.">?</span>
+        </div>
+        <div id="summary-idle" class="kpi-value">0</div>
+        <div id="summary-idle-severity" class="kpi-severity">Stable</div>
+        <div class="kpi-meta">Available for immediate tuning</div>
+      </article>
+      <article id="summary-card-streams" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Client Streams</div>
+          <span class="kpi-help" tabindex="0" title="Connected subscribers across active tuner sessions.">?</span>
+        </div>
+        <div id="summary-streams" class="kpi-value">0</div>
+        <div id="summary-streams-severity" class="kpi-severity">Stable</div>
+        <div class="kpi-meta">Active subscribers across all sessions</div>
+      </article>
+      <article id="summary-card-recovering" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Recovering Sessions</div>
+          <span class="kpi-help" tabindex="0" title="Sessions currently running recovery logic after a stall/error transition.">?</span>
+        </div>
+        <div id="summary-recovering" class="kpi-value">0</div>
+        <div id="summary-recovering-severity" class="kpi-severity">Stable</div>
+        <div class="kpi-meta">Sessions with active recovery cycles</div>
+      </article>
+      <article id="summary-card-reselect-alert" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Reselect Alert Sessions</div>
+          <span class="kpi-help" tabindex="0" title="Sessions above the same-source reselect threshold and likely to need attention.">?</span>
+        </div>
+        <div id="summary-reselect-alert" class="kpi-value">0</div>
+        <div id="summary-reselect-alert-severity" class="kpi-severity">Stable</div>
+        <div id="summary-reselect-alert-meta" class="kpi-meta">Sessions over churn threshold</div>
+      </article>
+      <article id="summary-card-max-reselect" class="kpi-card">
+        <div class="kpi-head">
+          <div class="kpi-label">Max Same-source Reselect</div>
+          <span class="kpi-help" tabindex="0" title="Highest same-source reselect count among active sessions in this snapshot.">?</span>
+        </div>
+        <div id="summary-max-reselect" class="kpi-value">0</div>
+        <div id="summary-max-reselect-severity" class="kpi-severity">Stable</div>
+        <div id="summary-max-reselect-meta" class="kpi-meta">No churn hotspot detected</div>
+      </article>
+    </section>
+
+    <section class="grid-primary">
+      <section class="panel span-8" aria-labelledby="active-sessions-title">
+        <h2 id="active-sessions-title">Active Sessions</h2>
+        <div class="panel-body">
+          <div class="panel-toolbar">
+            <span id="active-summary-note" class="summary-note">0 rows</span>
+            <span id="active-filter-note" class="summary-note"></span>
+          </div>
+          <div id="tuners-empty" class="empty" hidden>No tuner sessions are currently in use.</div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Tuner</th>
+                  <th>State</th>
+                  <th>Channel</th>
+                  <th>Source</th>
+                  <th>Throughput</th>
+                  <th>Subs</th>
+                  <th>Last Push</th>
+                  <th>Actions</th>
+                </tr>
+              </thead>
+              <tbody id="tuners-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <aside class="panel span-4" aria-labelledby="alerts-title">
+        <h2 id="alerts-title">Alerts / Health Rail</h2>
+        <div class="panel-body">
+          <ul id="alerts-list" class="alert-list"></ul>
+        </div>
+      </aside>
+    </section>
+
+    <section class="grid-secondary">
+      <section class="panel span-8" aria-labelledby="clients-title">
+        <h2 id="clients-title">Client Streams</h2>
+        <div class="panel-body">
+          <div id="clients-empty" class="empty" hidden>No active subscribers in this view.</div>
+          <div id="client-groups" class="client-groups"></div>
+        </div>
+      </section>
+
+      <aside class="panel span-4" aria-labelledby="details-title">
+        <h2 id="details-title">Selected Active Session</h2>
+        <div class="panel-body">
+          <div id="selected-session-detail" class="empty">Select an active session row to inspect detail metrics.</div>
+        </div>
+      </aside>
+    </section>
+
+    <section class="panel" aria-labelledby="history-title">
+      <h2 id="history-title">Shared Session History</h2>
+      <div class="panel-body">
+        <div class="history-controls" role="group" aria-label="History filters">
+          <label>
+            History status
+            <select id="history-status-filter">
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="completed">Completed</option>
+              <option value="canceled">Canceled</option>
+              <option value="failed">Failed</option>
+            </select>
+          </label>
+          <label class="inline-check">
+            <input id="history-errors-only" type="checkbox">
+            Errors only
+          </label>
+          <label class="inline-check">
+            <input id="history-recovery-only" type="checkbox">
+            Had recovery
+          </label>
+          <div class="search-form" role="search" aria-label="History session search">
+            <input id="history-search-input" class="history-search-input" type="search" placeholder="Search history sessions">
+            <button id="history-search-reset" type="button">Clear</button>
+          </div>
+        </div>
+        <div id="history-truncated" class="status warn" hidden></div>
+        <div id="history-empty" class="empty" hidden>No shared-session history entries match the current view.</div>
+        <div id="history-master-detail" class="history-master-detail">
+          <section class="history-list-pane" aria-labelledby="history-list-title">
+            <h3 id="history-list-title">Session List</h3>
+            <div id="history-list" class="history-list" role="listbox" aria-label="Shared session history sessions"></div>
+          </section>
+          <section class="history-detail-pane" aria-labelledby="history-detail-title">
+            <h3 id="history-detail-title">Session Detail</h3>
+            <div id="history-detail-empty" class="empty">Select a history session row to inspect terminal and recovery context.</div>
+            <div id="history-detail-shell" hidden>
+              <div id="history-tablist" class="history-tabs" role="tablist" aria-label="History detail tabs">
+                <button id="history-tab-summary" type="button" class="history-tab" role="tab" aria-selected="true" aria-controls="history-tabpanel-summary" data-tab="summary" tabindex="0">Summary</button>
+                <button id="history-tab-sources" type="button" class="history-tab" role="tab" aria-selected="false" aria-controls="history-tabpanel-sources" data-tab="sources" tabindex="-1">Sources</button>
+                <button id="history-tab-subscribers" type="button" class="history-tab" role="tab" aria-selected="false" aria-controls="history-tabpanel-subscribers" data-tab="subscribers" tabindex="-1">Subscribers</button>
+                <button id="history-tab-recovery" type="button" class="history-tab" role="tab" aria-selected="false" aria-controls="history-tabpanel-recovery" data-tab="recovery" tabindex="-1">Recovery</button>
+              </div>
+              <section id="history-tabpanel-summary" class="history-tabpanel" role="tabpanel" aria-labelledby="history-tab-summary"></section>
+              <section id="history-tabpanel-sources" class="history-tabpanel" role="tabpanel" aria-labelledby="history-tab-sources" hidden></section>
+              <section id="history-tabpanel-subscribers" class="history-tabpanel" role="tabpanel" aria-labelledby="history-tab-subscribers" hidden></section>
+              <section id="history-tabpanel-recovery" class="history-tabpanel" role="tabpanel" aria-labelledby="history-tab-recovery" hidden></section>
+            </div>
+          </section>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const tunersBodyEl = document.getElementById("tuners-body");
+    const tunersEmptyEl = document.getElementById("tuners-empty");
+    const clientGroupsEl = document.getElementById("client-groups");
+    const clientsEmptyEl = document.getElementById("clients-empty");
+    const historyListEl = document.getElementById("history-list");
+    const historyEmptyEl = document.getElementById("history-empty");
+    const historyTruncatedEl = document.getElementById("history-truncated");
+    const historyMasterDetailEl = document.getElementById("history-master-detail");
+    const historyDetailEmptyEl = document.getElementById("history-detail-empty");
+    const historyDetailShellEl = document.getElementById("history-detail-shell");
+    const historyStatusFilterEl = document.getElementById("history-status-filter");
+    const historyErrorsOnlyEl = document.getElementById("history-errors-only");
+    const historyRecoveryOnlyEl = document.getElementById("history-recovery-only");
+    const historySearchInputEl = document.getElementById("history-search-input");
+    const historySearchResetEl = document.getElementById("history-search-reset");
+    const historyTablistEl = document.getElementById("history-tablist");
+    const historyTabSummaryEl = document.getElementById("history-tab-summary");
+    const historyTabSourcesEl = document.getElementById("history-tab-sources");
+    const historyTabSubscribersEl = document.getElementById("history-tab-subscribers");
+    const historyTabRecoveryEl = document.getElementById("history-tab-recovery");
+    const historyTabPanelSummaryEl = document.getElementById("history-tabpanel-summary");
+    const historyTabPanelSourcesEl = document.getElementById("history-tabpanel-sources");
+    const historyTabPanelSubscribersEl = document.getElementById("history-tabpanel-subscribers");
+    const historyTabPanelRecoveryEl = document.getElementById("history-tabpanel-recovery");
+    const alertsListEl = document.getElementById("alerts-list");
+    const lastRefreshEl = document.getElementById("last-refresh");
+    const autoRefreshEl = document.getElementById("auto-refresh");
+    const activeSummaryNoteEl = document.getElementById("active-summary-note");
+    const activeFilterNoteEl = document.getElementById("active-filter-note");
+    const selectedSessionDetailEl = document.getElementById("selected-session-detail");
+
+    const summaryConfiguredEl = document.getElementById("summary-configured");
+    const summaryInUseEl = document.getElementById("summary-inuse");
+    const summaryIdleEl = document.getElementById("summary-idle");
+    const summaryStreamsEl = document.getElementById("summary-streams");
+    const summaryRecoveringEl = document.getElementById("summary-recovering");
+    const summaryReselectAlertEl = document.getElementById("summary-reselect-alert");
+    const summaryMaxReselectEl = document.getElementById("summary-max-reselect");
+    const summaryInUseMetaEl = document.getElementById("summary-inuse-meta");
+    const summaryReselectAlertMetaEl = document.getElementById("summary-reselect-alert-meta");
+    const summaryMaxReselectMetaEl = document.getElementById("summary-max-reselect-meta");
+
+    const summaryCardConfiguredEl = document.getElementById("summary-card-configured");
+    const summaryCardInUseEl = document.getElementById("summary-card-inuse");
+    const summaryCardIdleEl = document.getElementById("summary-card-idle");
+    const summaryCardStreamsEl = document.getElementById("summary-card-streams");
+    const summaryCardRecoveringEl = document.getElementById("summary-card-recovering");
+    const summaryCardReselectAlertEl = document.getElementById("summary-card-reselect-alert");
+    const summaryCardMaxReselectEl = document.getElementById("summary-card-max-reselect");
+
+    const summaryConfiguredSeverityEl = document.getElementById("summary-configured-severity");
+    const summaryInUseSeverityEl = document.getElementById("summary-inuse-severity");
+    const summaryIdleSeverityEl = document.getElementById("summary-idle-severity");
+    const summaryStreamsSeverityEl = document.getElementById("summary-streams-severity");
+    const summaryRecoveringSeverityEl = document.getElementById("summary-recovering-severity");
+    const summaryReselectAlertSeverityEl = document.getElementById("summary-reselect-alert-severity");
+    const summaryMaxReselectSeverityEl = document.getElementById("summary-max-reselect-severity");
+
+    const searchFormEl = document.getElementById("search-form");
+    const searchInputEl = document.getElementById("tuner-search-input");
+    const searchResetEl = document.getElementById("search-reset");
+
+    const activeSortKeyEl = document.getElementById("active-sort-key");
+    const activeSortDirEl = document.getElementById("active-sort-dir");
+    const historySortKeyEl = document.getElementById("history-sort-key");
+    const historySortDirEl = document.getElementById("history-sort-dir");
+
+    const uiState = {
+      quickFilter: "all",
+      searchQuery: "",
+      historySearchQuery: "",
+      historyStatusFilter: "all",
+      historyErrorsOnly: false,
+      historyRecoveryOnly: false,
+      selectedTunerKey: "",
+      selectedHistorySessionID: 0,
+      historyDetailTab: "summary",
+      activeSortKey: "tuner",
+      activeSortDir: "asc",
+      historySortKey: "opened",
+      historySortDir: "desc",
+      expandedClientGroups: new Set(),
+    };
+
+    let latestPayload = null;
+    let refreshTimer = null;
+    let refreshRequestSeq = 0;
+    let refreshAppliedSeq = 0;
+    let refreshAppliedGeneratedAtMs = 0;
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.classList.toggle("error", isError);
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 4500);
+    }
+
+    function formatTS(raw) {
+      if (!raw) {
+        return "-";
+      }
+      const date = new Date(raw);
+      if (Number.isNaN(date.getTime())) {
+        return "-";
+      }
+      return date.toLocaleString();
+    }
+
+    function formatBytes(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        return "0 B";
+      }
+      const units = ["B", "KB", "MB", "GB", "TB"];
+      let size = n;
+      let idx = 0;
+      while (size >= 1024 && idx < units.length - 1) {
+        size /= 1024;
+        idx++;
+      }
+      return `${size.toFixed(idx === 0 ? 0 : 2)} ${units[idx]}`;
+    }
+
+    function formatBitrate(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        return "-";
+      }
+      const units = ["bps", "Kbps", "Mbps", "Gbps"];
+      let bitrate = n;
+      let idx = 0;
+      while (bitrate >= 1000 && idx < units.length - 1) {
+        bitrate /= 1000;
+        idx++;
+      }
+      return `${bitrate.toFixed(idx === 0 ? 0 : 2)} ${units[idx]}`;
+    }
+
+    function formatFPS(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        return "-";
+      }
+      return `${n.toFixed(2)} fps`;
+    }
+
+    function formatDurationMs(deltaMs) {
+      if (!Number.isFinite(deltaMs) || deltaMs <= 0) {
+        return "-";
+      }
+      const totalSeconds = Math.floor(deltaMs / 1000);
+      const hours = Math.floor(totalSeconds / 3600);
+      const minutes = Math.floor((totalSeconds % 3600) / 60);
+      const seconds = totalSeconds % 60;
+      if (hours > 0) {
+        return `${hours}h ${minutes}m ${seconds}s`;
+      }
+      if (minutes > 0) {
+        return `${minutes}m ${seconds}s`;
+      }
+      return `${seconds}s`;
+    }
+
+    function escapeHTML(value) {
+      const text = String(value ?? "");
+      return text
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function normalizeText(value) {
+      return String(value ?? "").trim().toLowerCase();
+    }
+
+    function toNumber(value) {
+      const n = Number(value);
+      return Number.isFinite(n) ? n : 0;
+    }
+
+    function getTunerKey(tuner) {
+      return `${toNumber(tuner.tuner_id)}:${normalizeText(tuner.kind) || "unknown"}`;
+    }
+
+    function getClientGroupKey(stream) {
+      return [
+        toNumber(stream.tuner_id),
+        normalizeText(stream.kind) || "unknown",
+        toNumber(stream.channel_id),
+        toNumber(stream.source_id),
+        normalizeText(stream.source_item_key || "-"),
+      ].join(":");
+    }
+
+    function formatCounterMap(mapValue) {
+      if (!mapValue || typeof mapValue !== "object") {
+        return "-";
+      }
+      const entries = Object.entries(mapValue)
+        .map(([sourceID, count]) => [toNumber(sourceID), toNumber(count)])
+        .filter(([, count]) => count > 0)
+        .sort((a, b) => a[0] - b[0]);
+      if (entries.length === 0) {
+        return "-";
+      }
+      return entries.slice(0, 4).map(([sourceID, count]) => `#${sourceID}:${count}`).join(", ");
+    }
+
+    function setKpiSeverity(cardEl, severityEl, severity, label) {
+      if (!cardEl || !severityEl) {
+        return;
+      }
+      const normalized = severity === "danger" ? "danger" : severity === "warn" ? "warn" : "ok";
+      cardEl.classList.remove("severity-ok", "severity-warn", "severity-danger");
+      cardEl.classList.add(`severity-${normalized}`);
+      severityEl.classList.remove("ok", "warn", "danger");
+      severityEl.classList.add(normalized);
+      severityEl.textContent = String(label || "Stable");
+    }
+
+    function tunerStateLabel(state) {
+      switch (normalizeText(state)) {
+        case "active_subscribers":
+          return "Active Subscribers";
+        case "idle_grace_no_subscribers":
+          return "Idle Grace";
+        case "probe":
+          return "Probe";
+        case "allocating_session":
+          return "Allocating";
+        default:
+          return "Unknown";
+      }
+    }
+
+    function tunerStateClass(tuner) {
+      const state = normalizeText(tuner.state);
+      const hasError = normalizeText(tuner.last_error) !== "";
+      if (hasError) {
+        return "danger";
+      }
+      switch (state) {
+        case "active_subscribers":
+          return "ok";
+        case "idle_grace_no_subscribers":
+          return "warn";
+        case "probe":
+        case "allocating_session":
+          return "info";
+        default:
+          return "warn";
+      }
+    }
+
+    function historyStatusClass(entry) {
+      if (entry.active) {
+        return "info";
+      }
+      const status = normalizeText(entry.terminal_status);
+      if (status === "completed") {
+        return "ok";
+      }
+      if (status === "canceled") {
+        return "warn";
+      }
+      if (status !== "") {
+        return "danger";
+      }
+      if (normalizeText(entry.terminal_error) !== "" || normalizeText(entry.last_error) !== "") {
+        return "danger";
+      }
+      return "warn";
+    }
+
+    function historyStatusLabel(entry) {
+      if (entry.active) {
+        return "Active";
+      }
+      const status = normalizeText(entry.terminal_status);
+      if (status !== "") {
+        return status.replaceAll("_", " ");
+      }
+      return "Completed";
+    }
+
+    function isTunerRecovering(tuner) {
+      return toNumber(tuner.recovery_cycle) > 0 || normalizeText(tuner.recovery_reason) !== "";
+    }
+
+    function isTunerErrored(tuner) {
+      return normalizeText(tuner.last_error) !== "";
+    }
+
+    function isTunerIdle(tuner) {
+      return normalizeText(tuner.state) === "idle_grace_no_subscribers" || toNumber((tuner.subscribers || []).length) === 0;
+    }
+
+    function isTunerActive(tuner) {
+      return normalizeText(tuner.state) === "active_subscribers" || toNumber((tuner.subscribers || []).length) > 0;
+    }
+
+    function isHistoryRecovering(entry) {
+      return toNumber(entry.recovery_cycle_count) > 0 || normalizeText(entry.last_recovery_reason) !== "";
+    }
+
+    function isHistoryErrored(entry) {
+      if (normalizeText(entry.terminal_error) !== "" || normalizeText(entry.last_error) !== "") {
+        return true;
+      }
+      const status = normalizeText(entry.terminal_status);
+      return status !== "" && status !== "completed" && status !== "canceled";
+    }
+
+    function isHistoryIdle(entry) {
+      return !entry.active && normalizeText(entry.terminal_status) === "canceled";
+    }
+
+    function isHistoryActive(entry) {
+      return Boolean(entry.active);
+    }
+
+    function quickFilterMatchForTuner(tuner) {
+      switch (uiState.quickFilter) {
+        case "active":
+          return isTunerActive(tuner);
+        case "recovering":
+          return isTunerRecovering(tuner);
+        case "errors":
+          return isTunerErrored(tuner);
+        case "idle":
+          return isTunerIdle(tuner);
+        default:
+          return true;
+      }
+    }
+
+    function quickFilterMatchForHistory(entry) {
+      switch (uiState.quickFilter) {
+        case "active":
+          return isHistoryActive(entry);
+        case "recovering":
+          return isHistoryRecovering(entry);
+        case "errors":
+          return isHistoryErrored(entry);
+        case "idle":
+          return isHistoryIdle(entry);
+        default:
+          return true;
+      }
+    }
+
+    function historyStatusMatch(entry) {
+      const filter = normalizeText(uiState.historyStatusFilter);
+      if (filter === "" || filter === "all") {
+        return true;
+      }
+      if (filter === "active") {
+        return Boolean(entry.active);
+      }
+
+      const status = normalizeText(entry.terminal_status);
+      if (filter === "completed") {
+        return !entry.active && status === "completed";
+      }
+      if (filter === "canceled") {
+        return !entry.active && status === "canceled";
+      }
+      if (filter === "failed") {
+        return isHistoryErrored(entry);
+      }
+      return true;
+    }
+
+    function searchMatch(blob, query) {
+      if (!query) {
+        return true;
+      }
+      return normalizeText(blob).includes(query);
+    }
+
+    function buildTunerSearchBlob(tuner) {
+      const subscribers = Array.isArray(tuner.subscribers) ? tuner.subscribers : [];
+      const subscriberBits = subscribers.map((subscriber) => `${subscriber.client_addr || ""} ${subscriber.subscriber_id || ""}`).join(" ");
+      return [
+        tuner.tuner_id,
+        tuner.kind,
+        tuner.state,
+        tuner.guide_number,
+        tuner.guide_name,
+        tuner.channel_id,
+        tuner.source_id,
+        tuner.source_item_key,
+        tuner.source_stream_url,
+        subscriberBits,
+      ].join(" ");
+    }
+
+    function buildHistorySearchBlob(entry) {
+      const sources = Array.isArray(entry.sources) ? entry.sources : [];
+      const subscribers = Array.isArray(entry.subscribers) ? entry.subscribers : [];
+      const sourceBits = sources.map((source) => `${source.source_id || ""} ${source.item_key || ""} ${source.stream_url || ""}`).join(" ");
+      const subscriberBits = subscribers.map((subscriber) => `${subscriber.client_addr || ""} ${subscriber.subscriber_id || ""}`).join(" ");
+      return [
+        entry.session_id,
+        entry.tuner_id,
+        entry.channel_id,
+        entry.guide_number,
+        entry.guide_name,
+        entry.terminal_status,
+        entry.terminal_error,
+        entry.last_error,
+        entry.last_recovery_reason,
+        sourceBits,
+        subscriberBits,
+      ].join(" ");
+    }
+
+    function buildClientSearchBlob(stream) {
+      return [
+        stream.client_addr,
+        stream.subscriber_id,
+        stream.tuner_id,
+        stream.guide_number,
+        stream.guide_name,
+        stream.source_item_key,
+        stream.source_id,
+        stream.source_stream_url,
+      ].join(" ");
+    }
+
+    function compareValues(a, b, dir = "asc") {
+      if (a === b) {
+        return 0;
+      }
+      const direction = dir === "desc" ? -1 : 1;
+      if (a == null) {
+        return -1 * direction;
+      }
+      if (b == null) {
+        return 1 * direction;
+      }
+      if (typeof a === "number" && typeof b === "number") {
+        return a < b ? -1 * direction : 1 * direction;
+      }
+      const as = String(a).toLowerCase();
+      const bs = String(b).toLowerCase();
+      if (as < bs) {
+        return -1 * direction;
+      }
+      return 1 * direction;
+    }
+
+    function sortTuners(tuners) {
+      const dir = uiState.activeSortDir;
+      const key = uiState.activeSortKey;
+      const clone = tuners.slice();
+      clone.sort((left, right) => {
+        let a = null;
+        let b = null;
+        switch (key) {
+          case "state":
+            a = tunerStateLabel(left.state);
+            b = tunerStateLabel(right.state);
+            break;
+          case "channel":
+            a = `${left.guide_number || ""} ${left.guide_name || ""}`;
+            b = `${right.guide_number || ""} ${right.guide_name || ""}`;
+            break;
+          case "source":
+            a = `${left.source_item_key || ""} ${left.source_id || ""}`;
+            b = `${right.source_item_key || ""} ${right.source_id || ""}`;
+            break;
+          case "subscribers":
+            a = toNumber((left.subscribers || []).length);
+            b = toNumber((right.subscribers || []).length);
+            break;
+          case "last_push":
+            a = new Date(left.last_push_at || left.lease_started_at || 0).getTime();
+            b = new Date(right.last_push_at || right.lease_started_at || 0).getTime();
+            break;
+          case "bytes":
+            a = toNumber(left.bytes_pushed);
+            b = toNumber(right.bytes_pushed);
+            break;
+          case "tuner":
+          default:
+            a = toNumber(left.tuner_id);
+            b = toNumber(right.tuner_id);
+            break;
+        }
+        const sorted = compareValues(a, b, dir);
+        if (sorted !== 0) {
+          return sorted;
+        }
+        return compareValues(getTunerKey(left), getTunerKey(right), "asc");
+      });
+      return clone;
+    }
+
+    function historyDurationMs(entry) {
+      const openedMs = entry.opened_at ? new Date(entry.opened_at).getTime() : 0;
+      const closedMs = entry.closed_at ? new Date(entry.closed_at).getTime() : 0;
+      if (openedMs <= 0) {
+        return 0;
+      }
+      if (closedMs > openedMs) {
+        return closedMs - openedMs;
+      }
+      return Date.now() - openedMs;
+    }
+
+    function sortHistory(entries) {
+      const dir = uiState.historySortDir;
+      const key = uiState.historySortKey;
+      const clone = entries.slice();
+      clone.sort((left, right) => {
+        let a = null;
+        let b = null;
+        switch (key) {
+          case "closed":
+            a = new Date(left.closed_at || 0).getTime();
+            b = new Date(right.closed_at || 0).getTime();
+            break;
+          case "status":
+            a = historyStatusLabel(left);
+            b = historyStatusLabel(right);
+            break;
+          case "recovery":
+            a = toNumber(left.recovery_cycle_count);
+            b = toNumber(right.recovery_cycle_count);
+            break;
+          case "subscribers":
+            a = toNumber(left.total_subscribers);
+            b = toNumber(right.total_subscribers);
+            break;
+          case "duration":
+            a = historyDurationMs(left);
+            b = historyDurationMs(right);
+            break;
+          case "opened":
+          default:
+            a = new Date(left.opened_at || 0).getTime();
+            b = new Date(right.opened_at || 0).getTime();
+            break;
+        }
+        const sorted = compareValues(a, b, dir);
+        if (sorted !== 0) {
+          return sorted;
+        }
+        return compareValues(toNumber(left.session_id), toNumber(right.session_id), "desc");
+      });
+      return clone;
+    }
+
+    function groupClientStreams(clients) {
+      const grouped = new Map();
+      for (const stream of clients) {
+        const groupKey = getClientGroupKey(stream);
+        let group = grouped.get(groupKey);
+        if (!group) {
+          group = {
+            groupKey,
+            tunerID: toNumber(stream.tuner_id),
+            kind: normalizeText(stream.kind) || "unknown",
+            channelID: toNumber(stream.channel_id),
+            guideNumber: String(stream.guide_number || "").trim(),
+            guideName: String(stream.guide_name || "").trim(),
+            sourceID: toNumber(stream.source_id),
+            sourceItemKey: String(stream.source_item_key || "").trim(),
+            sourceStreamURL: String(stream.source_stream_url || "").trim(),
+            subscribers: [],
+          };
+          grouped.set(groupKey, group);
+        }
+        group.subscribers.push(stream);
+      }
+
+      const groups = Array.from(grouped.values());
+      groups.sort((left, right) => {
+        const byTuner = compareValues(left.tunerID, right.tunerID, "asc");
+        if (byTuner !== 0) {
+          return byTuner;
+        }
+        const byGuide = compareValues(left.guideNumber || left.channelID, right.guideNumber || right.channelID, "asc");
+        if (byGuide !== 0) {
+          return byGuide;
+        }
+        return compareValues(left.groupKey, right.groupKey, "asc");
+      });
+
+      for (const group of groups) {
+        group.subscribers.sort((left, right) => {
+          const connectedAtLeft = new Date(left.connected_at || 0).getTime();
+          const connectedAtRight = new Date(right.connected_at || 0).getTime();
+          const sorted = compareValues(connectedAtLeft, connectedAtRight, "asc");
+          if (sorted !== 0) {
+            return sorted;
+          }
+          return compareValues(left.subscriber_id, right.subscriber_id, "asc");
+        });
+      }
+      return groups;
+    }
+
+    function generatedAtMillis(payload) {
+      if (!payload || !payload.generated_at) {
+        return 0;
+      }
+      const generated = new Date(payload.generated_at).getTime();
+      return Number.isFinite(generated) ? generated : 0;
+    }
+
+    async function fetchStatus() {
+      const resp = await fetch("/api/admin/tuners", {
+        headers: { "Accept": "application/json" },
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      return resp.json();
+    }
+
+    async function triggerManualRecovery(channelID, reason = "ui_manual_trigger") {
+      const resp = await fetch("/api/admin/tuners/recovery", {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          channel_id: Number(channelID),
+          reason: String(reason || "ui_manual_trigger"),
+        }),
+      });
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `manual recovery request failed (${resp.status})`);
+      }
+      return resp.json();
+    }
+
+    function updateFilterChipUI() {
+      for (const button of document.querySelectorAll("#quick-filter-chips .chip[data-filter]")) {
+        const active = button.dataset.filter === uiState.quickFilter;
+        button.classList.toggle("active", active);
+        button.setAttribute("aria-pressed", active ? "true" : "false");
+      }
+      activeSortDirEl.textContent = uiState.activeSortDir === "asc" ? "Asc" : "Desc";
+      activeSortDirEl.setAttribute("aria-pressed", uiState.activeSortDir === "desc" ? "true" : "false");
+      historySortDirEl.textContent = uiState.historySortDir === "asc" ? "Asc" : "Desc";
+      historySortDirEl.setAttribute("aria-pressed", uiState.historySortDir === "desc" ? "true" : "false");
+      activeSortKeyEl.value = uiState.activeSortKey;
+      historySortKeyEl.value = uiState.historySortKey;
+      historyStatusFilterEl.value = uiState.historyStatusFilter;
+      historyErrorsOnlyEl.checked = uiState.historyErrorsOnly;
+      historyRecoveryOnlyEl.checked = uiState.historyRecoveryOnly;
+      historySearchInputEl.value = uiState.historySearchQuery;
+      searchInputEl.value = uiState.searchQuery;
+    }
+
+    function reconcileSelections(payload) {
+      const tuners = Array.isArray(payload?.tuners) ? payload.tuners : [];
+      const history = Array.isArray(payload?.session_history) ? payload.session_history : [];
+      const clients = Array.isArray(payload?.client_streams) ? payload.client_streams : [];
+
+      if (uiState.selectedTunerKey && !tuners.some((tuner) => getTunerKey(tuner) === uiState.selectedTunerKey)) {
+        uiState.selectedTunerKey = "";
+      }
+
+      if (uiState.selectedHistorySessionID > 0) {
+        const stillExists = history.some((entry) => toNumber(entry.session_id) === uiState.selectedHistorySessionID);
+        if (!stillExists) {
+          uiState.selectedHistorySessionID = 0;
+        }
+      }
+
+      const groupKeys = new Set(clients.map((stream) => getClientGroupKey(stream)));
+      for (const groupKey of Array.from(uiState.expandedClientGroups)) {
+        if (!groupKeys.has(groupKey)) {
+          uiState.expandedClientGroups.delete(groupKey);
+        }
+      }
+    }
+
+    function buildViewModel(payload) {
+      const query = normalizeText(uiState.searchQuery);
+      const historyQuery = normalizeText(uiState.historySearchQuery);
+      const tuners = Array.isArray(payload?.tuners) ? payload.tuners : [];
+      const history = Array.isArray(payload?.session_history) ? payload.session_history : [];
+      const clients = Array.isArray(payload?.client_streams) ? payload.client_streams : [];
+
+      const filteredTuners = sortTuners(tuners.filter((tuner) => {
+        if (!quickFilterMatchForTuner(tuner)) {
+          return false;
+        }
+        return searchMatch(buildTunerSearchBlob(tuner), query);
+      }));
+
+      const filteredHistory = sortHistory(history.filter((entry) => {
+        if (!quickFilterMatchForHistory(entry)) {
+          return false;
+        }
+        if (!historyStatusMatch(entry)) {
+          return false;
+        }
+        if (uiState.historyErrorsOnly && !isHistoryErrored(entry)) {
+          return false;
+        }
+        if (uiState.historyRecoveryOnly && !isHistoryRecovering(entry)) {
+          return false;
+        }
+        const blob = buildHistorySearchBlob(entry);
+        if (!searchMatch(blob, query)) {
+          return false;
+        }
+        return searchMatch(blob, historyQuery);
+      }));
+
+      const visibleTunerKeys = new Set(filteredTuners.map((tuner) => getTunerKey(tuner)));
+      const filteredClients = clients.filter((client) => {
+        const tunerKey = `${toNumber(client.tuner_id)}:${normalizeText(client.kind) || "unknown"}`;
+        if (!query && uiState.quickFilter === "all") {
+          return true;
+        }
+        if (visibleTunerKeys.has(tunerKey)) {
+          return true;
+        }
+        return searchMatch(buildClientSearchBlob(client), query);
+      });
+      const groupedClients = groupClientStreams(filteredClients);
+
+      const selectedTuner = tuners.find((tuner) => getTunerKey(tuner) === uiState.selectedTunerKey) || null;
+
+      return {
+        query,
+        tuners,
+        history,
+        clients,
+        filteredTuners,
+        filteredHistory,
+        filteredClients,
+        groupedClients,
+        selectedTuner,
+      };
+    }
+
+    function renderSummary(payload) {
+      const tunerCount = toNumber(payload.tuner_count);
+      const inUse = toNumber(payload.in_use_count);
+      const idle = toNumber(payload.idle_count);
+      const streams = Array.isArray(payload.client_streams) ? payload.client_streams.length : 0;
+      const churn = payload?.churn || {};
+      const recovering = toNumber(churn.recovering_session_count);
+      const overThreshold = toNumber(churn.sessions_over_reselect_threshold);
+      const maxReselect = toNumber(churn.max_same_source_reselect_count);
+      const threshold = toNumber(churn.reselect_alert_threshold);
+      const utilizationRatio = tunerCount > 0 ? inUse / tunerCount : 0;
+      const utilizationPercent = Math.round(utilizationRatio * 100);
+
+      summaryConfiguredEl.textContent = String(tunerCount);
+      summaryInUseEl.textContent = String(inUse);
+      summaryIdleEl.textContent = String(idle);
+      summaryStreamsEl.textContent = String(streams);
+      summaryRecoveringEl.textContent = String(recovering);
+      summaryReselectAlertEl.textContent = String(overThreshold);
+      summaryMaxReselectEl.textContent = String(maxReselect);
+
+      summaryInUseMetaEl.textContent = `${utilizationPercent}% tuner utilization in this snapshot.`;
+      if (threshold > 0) {
+        summaryReselectAlertMetaEl.textContent = `Sessions over churn threshold (${threshold}).`;
+      } else {
+        summaryReselectAlertMetaEl.textContent = "Threshold unavailable; sessions flagged by churn metrics.";
+      }
+
+      const hotspotGuide = String(churn.max_reselect_guide_number || "").trim();
+      const hotspotChannel = toNumber(churn.max_reselect_channel_id);
+      if (hotspotGuide) {
+        summaryMaxReselectMetaEl.textContent = `Hotspot: ${hotspotGuide}`;
+      } else if (hotspotChannel > 0) {
+        summaryMaxReselectMetaEl.textContent = `Hotspot channel id: ${hotspotChannel}`;
+      } else {
+        summaryMaxReselectMetaEl.textContent = "No churn hotspot detected";
+      }
+
+      const inUseSeverity = utilizationRatio >= 0.95 ? "danger" : utilizationRatio >= 0.75 ? "warn" : "ok";
+      const idleSeverity = tunerCount > 0 && idle <= 0 ? "danger" : idle <= 1 && tunerCount > 1 ? "warn" : "ok";
+      const streamSeverity = inUse > 0 && streams >= inUse * 4 ? "warn" : "ok";
+      const recoveringSeverity = recovering >= 3 ? "danger" : recovering > 0 ? "warn" : "ok";
+      const alertSeverity = overThreshold > 0 ? "danger" : "ok";
+      let maxReselectSeverity = "ok";
+      if (threshold > 0 && maxReselect >= threshold * 2) {
+        maxReselectSeverity = "danger";
+      } else if ((threshold > 0 && maxReselect >= threshold) || maxReselect >= 3) {
+        maxReselectSeverity = "warn";
+      }
+
+      setKpiSeverity(summaryCardConfiguredEl, summaryConfiguredSeverityEl, "ok", "Stable");
+      setKpiSeverity(summaryCardInUseEl, summaryInUseSeverityEl, inUseSeverity, inUseSeverity === "danger" ? "Critical" : inUseSeverity === "warn" ? "Watch" : "Stable");
+      setKpiSeverity(summaryCardIdleEl, summaryIdleSeverityEl, idleSeverity, idleSeverity === "danger" ? "Critical" : idleSeverity === "warn" ? "Watch" : "Stable");
+      setKpiSeverity(summaryCardStreamsEl, summaryStreamsSeverityEl, streamSeverity, streamSeverity === "warn" ? "Watch" : "Stable");
+      setKpiSeverity(summaryCardRecoveringEl, summaryRecoveringSeverityEl, recoveringSeverity, recoveringSeverity === "danger" ? "Critical" : recoveringSeverity === "warn" ? "Watch" : "Stable");
+      setKpiSeverity(summaryCardReselectAlertEl, summaryReselectAlertSeverityEl, alertSeverity, alertSeverity === "danger" ? "Critical" : "Stable");
+      setKpiSeverity(summaryCardMaxReselectEl, summaryMaxReselectSeverityEl, maxReselectSeverity, maxReselectSeverity === "danger" ? "Critical" : maxReselectSeverity === "warn" ? "Watch" : "Stable");
+    }
+
+    function renderAlerts(payload) {
+      const churn = payload?.churn || {};
+      const recovering = toNumber(churn.recovering_session_count);
+      const overThreshold = toNumber(churn.sessions_over_reselect_threshold);
+      const maxReselect = toNumber(churn.max_same_source_reselect_count);
+      const threshold = toNumber(churn.reselect_alert_threshold);
+      const totalRecoveryCycles = toNumber(churn.total_recovery_cycles);
+      const totalReselects = toNumber(churn.total_same_source_reselect_count);
+
+      const alerts = [];
+      if (recovering > 0) {
+        alerts.push({
+          severity: recovering >= 3 ? "danger" : "warn",
+          title: "Sessions Recovering",
+          detail: `${recovering} session(s) are in recovery flow right now.`,
+        });
+      } else {
+        alerts.push({
+          severity: "ok",
+          title: "Recovery Pressure",
+          detail: "No active recovery cycles in this snapshot.",
+        });
+      }
+
+      if (overThreshold > 0) {
+        alerts.push({
+          severity: "danger",
+          title: "Reselect Churn Alert",
+          detail: `${overThreshold} session(s) are over the reselect threshold (${threshold || "n/a"}).`,
+        });
+      } else {
+        alerts.push({
+          severity: "ok",
+          title: "Reselect Churn",
+          detail: "No sessions exceeded the reselect threshold.",
+        });
+      }
+
+      alerts.push({
+        severity: maxReselect >= threshold && threshold > 0 ? "warn" : "ok",
+        title: "Peak Same-source Reselect",
+        detail: `${maxReselect} peak reselections, ${totalReselects} total.`,
+      });
+
+      alerts.push({
+        severity: totalRecoveryCycles > 0 ? "warn" : "ok",
+        title: "Recovery Cycle Volume",
+        detail: `${totalRecoveryCycles} total recovery cycles observed among active sessions.`,
+      });
+
+      alertsListEl.innerHTML = "";
+      for (const alert of alerts) {
+        const li = document.createElement("li");
+        if (alert.severity === "danger") {
+          li.classList.add("danger");
+        } else if (alert.severity === "warn") {
+          li.classList.add("warn");
+        }
+        const tagClass = alert.severity === "danger" ? "danger" : alert.severity === "warn" ? "warn" : "ok";
+        li.innerHTML = `
+          <div><span class="tag ${tagClass}">${escapeHTML(alert.severity)}</span></div>
+          <div><strong>${escapeHTML(alert.title)}</strong></div>
+          <div class="muted">${escapeHTML(alert.detail)}</div>
+        `;
+        alertsListEl.appendChild(li);
+      }
+    }
+
+    function renderTuners(model) {
+      const tuners = model.filteredTuners;
+      const total = model.tuners.length;
+
+      tunersBodyEl.innerHTML = "";
+      tunersEmptyEl.hidden = tuners.length > 0;
+      activeSummaryNoteEl.textContent = `${tuners.length} visible row(s), ${total} total`;
+      activeFilterNoteEl.textContent = uiState.searchQuery
+        ? `Filter: ${uiState.quickFilter}, Search: "${uiState.searchQuery}"`
+        : `Filter: ${uiState.quickFilter}`;
+
+      if (tuners.length === 0) {
+        tunersEmptyEl.textContent = total > 0
+          ? "No active sessions match the current filter/search settings."
+          : "No tuner sessions are currently in use.";
+      }
+
+      for (const tuner of tuners) {
+        const tr = document.createElement("tr");
+        tr.className = "selectable";
+        const tunerKey = getTunerKey(tuner);
+        tr.dataset.tunerKey = tunerKey;
+        tr.classList.toggle("selected", tunerKey === uiState.selectedTunerKey);
+        tr.tabIndex = 0;
+        tr.setAttribute("aria-selected", tunerKey === uiState.selectedTunerKey ? "true" : "false");
+
+        const channelText = tuner.guide_number
+          ? `${escapeHTML(tuner.guide_number)} ${escapeHTML(tuner.guide_name || "")}`.trim()
+          : `channel:${escapeHTML(tuner.channel_id || "-")}`;
+        const sourceText = tuner.source_item_key
+          ? `<span class="mono">${escapeHTML(tuner.source_item_key)}</span>`
+          : tuner.source_id
+            ? `source:${escapeHTML(tuner.source_id)}`
+            : "-";
+        const subscriberCount = Array.isArray(tuner.subscribers) ? tuner.subscribers.length : 0;
+        const typeClass = normalizeText(tuner.kind) === "client" ? "ok" : "warn";
+        const stateClass = tunerStateClass(tuner);
+        const stateLabel = tunerStateLabel(tuner.state);
+        const throughput = `${escapeHTML(formatBitrate(tuner.current_bitrate_bps))} / ${escapeHTML(formatBitrate(tuner.profile_bitrate_bps))}`;
+
+        const canTriggerRecovery = toNumber(tuner.channel_id) > 0 && normalizeText(tuner.kind) === "client";
+        const recoveryAction = canTriggerRecovery
+          ? `<button type="button" class="warn" data-action="trigger-recovery" data-channel-id="${escapeHTML(tuner.channel_id)}" data-tuner-key="${escapeHTML(tunerKey)}">Trigger Recovery</button>`
+          : `<span class="muted">-</span>`;
+
+        tr.innerHTML = `
+          <td>
+            <div><strong>#${escapeHTML(tuner.tuner_id)}</strong></div>
+            <div class="muted"><span class="tag ${typeClass}">${escapeHTML(tuner.kind || "unknown")}</span></div>
+          </td>
+          <td><span class="tag ${stateClass}">${escapeHTML(stateLabel)}</span></td>
+          <td>${channelText}</td>
+          <td class="source-cell">
+            <div>${sourceText}</div>
+          </td>
+          <td>${throughput}</td>
+          <td>${subscriberCount}</td>
+          <td>${formatTS(tuner.last_push_at || tuner.lease_started_at)}</td>
+          <td>${recoveryAction}</td>
+        `;
+        tunersBodyEl.appendChild(tr);
+      }
+    }
+
+    function renderClients(model) {
+      const groups = model.groupedClients;
+      clientGroupsEl.innerHTML = "";
+      clientsEmptyEl.hidden = groups.length > 0;
+
+      if (groups.length === 0) {
+        clientsEmptyEl.textContent = "No active subscribers match the current filter/search settings.";
+        return;
+      }
+
+      for (const group of groups) {
+        const channelText = group.guideNumber
+          ? `${escapeHTML(group.guideNumber)} ${escapeHTML(group.guideName || "")}`.trim()
+          : `channel:${escapeHTML(group.channelID || "-")}`;
+        const sourceText = group.sourceItemKey
+          ? `<span class="mono">${escapeHTML(group.sourceItemKey)}</span>`
+          : group.sourceID > 0
+            ? `source:${escapeHTML(group.sourceID)}`
+            : "-";
+        const sourceURL = group.sourceStreamURL
+          ? `<div class="muted mono">${escapeHTML(group.sourceStreamURL)}</div>`
+          : "";
+        const details = document.createElement("details");
+        details.className = "client-group";
+        details.dataset.clientGroupKey = group.groupKey;
+        const isExpanded = uiState.expandedClientGroups.has(group.groupKey) || group.subscribers.length <= 3;
+        if (isExpanded) {
+          details.open = true;
+        }
+
+        const subscriberTagClass = group.subscribers.length >= 6
+          ? "danger"
+          : group.subscribers.length >= 3
+            ? "warn"
+            : "ok";
+        const rows = group.subscribers.map((subscriber) => `
+          <tr>
+            <td><span class="mono">${escapeHTML(subscriber.subscriber_id)}</span></td>
+            <td>${escapeHTML(subscriber.client_addr || "unknown")}</td>
+            <td>${formatTS(subscriber.connected_at)}</td>
+            <td>${escapeHTML(formatBitrate(subscriber.current_bitrate_bps))}</td>
+            <td>${escapeHTML(formatBitrate(subscriber.profile_bitrate_bps))}</td>
+          </tr>
+        `).join("");
+
+        details.innerHTML = `
+          <summary>
+            <div class="client-group-head">
+              <div>
+                <div><strong>Tuner #${escapeHTML(group.tunerID)}</strong> <span class="muted">(${escapeHTML(group.kind)})</span></div>
+                <div class="client-group-label">${channelText}</div>
+                <div class="client-group-label">${sourceText}</div>
+              </div>
+              <div class="client-group-count">
+                <span class="tag ${subscriberTagClass}">${group.subscribers.length} subscriber(s)</span>
+              </div>
+            </div>
+          </summary>
+          <div class="client-group-body">
+            ${sourceURL}
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Subscriber</th>
+                    <th>Client</th>
+                    <th>Connected</th>
+                    <th>Current Bitrate</th>
+                    <th>Profile Bitrate</th>
+                  </tr>
+                </thead>
+                <tbody>${rows}</tbody>
+              </table>
+            </div>
+          </div>
+        `;
+        clientGroupsEl.appendChild(details);
+      }
+    }
+
+    function renderHistorySources(sources) {
+      if (!Array.isArray(sources) || sources.length === 0) {
+        return `<div class="empty">No source windows recorded.</div>`;
+      }
+      const rows = sources.map((source) => {
+        const sourceID = toNumber(source.source_id) > 0 ? `source:${escapeHTML(source.source_id)}` : "-";
+        const itemKey = source.item_key ? escapeHTML(source.item_key) : "-";
+        const streamURL = source.stream_url ? `<div class="muted">${escapeHTML(source.stream_url)}</div>` : "";
+        const resolution = source.resolution ? escapeHTML(source.resolution) : "-";
+        const frameRate = escapeHTML(formatFPS(source.frame_rate));
+        const videoCodec = source.video_codec ? escapeHTML(source.video_codec) : "-";
+        const audioCodec = source.audio_codec ? escapeHTML(source.audio_codec) : "-";
+        const profileBitrate = escapeHTML(formatBitrate(source.profile_bitrate_bps));
+        return `
+          <tr>
+            <td>
+              <div>${sourceID}</div>
+              <div class="muted">${itemKey}</div>
+              ${streamURL}
+            </td>
+            <td>${formatTS(source.selected_at)}<br><span class="muted">${formatTS(source.deselected_at)}</span></td>
+            <td>${escapeHTML(source.selection_reason || "-")}</td>
+            <td>${resolution}<br><span class="muted">${frameRate}</span></td>
+            <td>${videoCodec}<br><span class="muted">${audioCodec}</span></td>
+            <td>${profileBitrate}</td>
+          </tr>
+        `;
+      }).join("");
+      return `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Selected / Deselected</th>
+                <th>Selection Reason</th>
+                <th>Resolution / FPS</th>
+                <th>Codecs</th>
+                <th>Profile Bitrate</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function renderHistorySubscribers(subscribers) {
+      if (!Array.isArray(subscribers) || subscribers.length === 0) {
+        return `<div class="empty">No subscriber windows recorded.</div>`;
+      }
+      const rows = subscribers.map((subscriber) => {
+        const closedAt = subscriber.closed_at ? formatTS(subscriber.closed_at) : "-";
+        const closeReason = subscriber.close_reason ? escapeHTML(subscriber.close_reason) : "-";
+        return `
+          <tr>
+            <td>${escapeHTML(subscriber.subscriber_id)}</td>
+            <td>${escapeHTML(subscriber.client_addr || "unknown")}</td>
+            <td>${formatTS(subscriber.connected_at)}</td>
+            <td>${closedAt}</td>
+            <td>${closeReason}</td>
+          </tr>
+        `;
+      }).join("");
+      return `
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Subscriber</th>
+                <th>Client</th>
+                <th>Connected</th>
+                <th>Closed</th>
+                <th>Close Reason</th>
+              </tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+      `;
+    }
+
+    function ensureVisibleHistorySelection(filteredHistory) {
+      if (!Array.isArray(filteredHistory) || filteredHistory.length === 0) {
+        uiState.selectedHistorySessionID = 0;
+        return;
+      }
+      const hasSelection = filteredHistory.some((entry) => toNumber(entry.session_id) === uiState.selectedHistorySessionID);
+      if (!hasSelection) {
+        uiState.selectedHistorySessionID = toNumber(filteredHistory[0].session_id);
+      }
+    }
+
+    function applyHistoryTabState() {
+      const tabs = [historyTabSummaryEl, historyTabSourcesEl, historyTabSubscribersEl, historyTabRecoveryEl];
+      const panelsByTab = {
+        summary: historyTabPanelSummaryEl,
+        sources: historyTabPanelSourcesEl,
+        subscribers: historyTabPanelSubscribersEl,
+        recovery: historyTabPanelRecoveryEl,
+      };
+      if (!panelsByTab[uiState.historyDetailTab]) {
+        uiState.historyDetailTab = "summary";
+      }
+
+      for (const tab of tabs) {
+        const isActive = tab.dataset.tab === uiState.historyDetailTab;
+        tab.setAttribute("aria-selected", isActive ? "true" : "false");
+        tab.tabIndex = isActive ? 0 : -1;
+      }
+
+      Object.entries(panelsByTab).forEach(([name, panel]) => {
+        panel.hidden = name !== uiState.historyDetailTab;
+      });
+    }
+
+    function renderHistoryMaster(model, payload) {
+      const history = model.filteredHistory;
+      const allHistory = model.history;
+      const historyLimit = toNumber(payload.session_history_limit);
+      const truncatedCount = toNumber(payload.session_history_truncated_count);
+
+      ensureVisibleHistorySelection(history);
+      historyListEl.innerHTML = "";
+      historyEmptyEl.hidden = history.length > 0;
+      historyMasterDetailEl.hidden = history.length === 0;
+
+      if (historyLimit > 0 && truncatedCount > 0) {
+        historyTruncatedEl.hidden = false;
+        historyTruncatedEl.textContent = `History is bounded to ${historyLimit} sessions. ${truncatedCount} older entries were truncated.`;
+      } else {
+        historyTruncatedEl.hidden = true;
+        historyTruncatedEl.textContent = "";
+      }
+
+      if (history.length === 0) {
+        historyEmptyEl.textContent = allHistory.length > 0
+          ? "No history entries match the current filter/search settings."
+          : "No shared-session history has been captured yet.";
+        historyListEl.removeAttribute("aria-activedescendant");
+        return;
+      }
+
+      const fragment = document.createDocumentFragment();
+      for (const entry of history) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "history-list-item";
+        const sessionID = toNumber(entry.session_id);
+        button.dataset.historySessionId = String(sessionID);
+        button.id = `history-option-${sessionID}`;
+        button.setAttribute("role", "option");
+
+        const selected = sessionID === uiState.selectedHistorySessionID;
+        button.setAttribute("aria-selected", selected ? "true" : "false");
+        button.tabIndex = selected ? 0 : -1;
+
+        const statusClass = historyStatusClass(entry);
+        const statusLabel = historyStatusLabel(entry);
+        const sessionLabel = toNumber(entry.session_id) > 0 ? `#${escapeHTML(entry.session_id)}` : "-";
+        const tunerLabel = toNumber(entry.tuner_id) >= 0 ? `Tuner #${escapeHTML(entry.tuner_id)}` : "Tuner ?";
+        const channelLabel = entry.guide_number
+          ? `${escapeHTML(entry.guide_number)} ${escapeHTML(entry.guide_name || "")}`.trim()
+          : `channel:${escapeHTML(entry.channel_id || "-")}`;
+        const terminalRaw = String(entry.terminal_error || entry.last_error || "-");
+        const terminal = escapeHTML(terminalRaw);
+        const duration = escapeHTML(formatDurationMs(historyDurationMs(entry)));
+        const recoveryLabel = `${escapeHTML(entry.recovery_cycle_count || 0)} cycle(s), reselect ${escapeHTML(entry.same_source_reselect_count || 0)}`;
+
+        button.innerHTML = `
+          <div class="history-list-head">
+            <div class="history-list-title">${sessionLabel} <span class="muted">(${tunerLabel})</span></div>
+            <span class="tag ${statusClass}">${escapeHTML(statusLabel)}</span>
+          </div>
+          <div class="history-list-meta">
+            <div>${channelLabel}</div>
+            <div>Opened: ${formatTS(entry.opened_at)}</div>
+            <div>Closed: ${formatTS(entry.closed_at)}<span class="muted"> · ${duration}</span></div>
+            <div>Recovery: ${recoveryLabel}</div>
+          </div>
+          <div class="history-list-terminal" title="${terminal}">Terminal: ${terminal}</div>
+        `;
+        fragment.appendChild(button);
+      }
+      historyListEl.appendChild(fragment);
+      historyListEl.setAttribute("aria-activedescendant", `history-option-${uiState.selectedHistorySessionID}`);
+    }
+
+    function renderHistoryDetail(model) {
+      const entry = model.history.find((row) => toNumber(row.session_id) === uiState.selectedHistorySessionID) || null;
+      if (!entry) {
+        historyDetailShellEl.hidden = true;
+        historyDetailEmptyEl.hidden = false;
+        historyDetailEmptyEl.textContent = "Select a history session row to inspect terminal and recovery context.";
+        return;
+      }
+
+      historyDetailShellEl.hidden = false;
+      historyDetailEmptyEl.hidden = true;
+
+      const sources = Array.isArray(entry.sources) ? entry.sources : [];
+      const subscribers = Array.isArray(entry.subscribers) ? entry.subscribers : [];
+      const statusClass = historyStatusClass(entry);
+      const statusLabel = historyStatusLabel(entry);
+      const sessionLabel = toNumber(entry.session_id) > 0 ? `#${escapeHTML(entry.session_id)}` : "-";
+      const channelLabel = entry.guide_number
+        ? `${escapeHTML(entry.guide_number)} ${escapeHTML(entry.guide_name || "")}`.trim()
+        : `channel:${escapeHTML(entry.channel_id || "-")}`;
+      const terminalError = escapeHTML(entry.terminal_error || "-");
+      const lastError = escapeHTML(entry.last_error || "-");
+      const duration = escapeHTML(formatDurationMs(historyDurationMs(entry)));
+
+      historyTabPanelSummaryEl.innerHTML = `
+        <div class="details-grid">
+          <section class="detail-card">
+            <h3>Session Lifecycle</h3>
+            <div class="detail-row"><span class="key">Session</span><span>${sessionLabel}</span></div>
+            <div class="detail-row"><span class="key">Tuner</span><span>#${escapeHTML(entry.tuner_id || "-")}</span></div>
+            <div class="detail-row"><span class="key">Channel</span><span>${channelLabel}</span></div>
+            <div class="detail-row"><span class="key">Status</span><span><span class="tag ${statusClass}">${escapeHTML(statusLabel)}</span></span></div>
+            <div class="detail-row"><span class="key">Opened</span><span>${formatTS(entry.opened_at)}</span></div>
+            <div class="detail-row"><span class="key">Closed</span><span>${formatTS(entry.closed_at)}</span></div>
+            <div class="detail-row"><span class="key">Duration</span><span>${duration}</span></div>
+          </section>
+          <section class="detail-card">
+            <h3>Subscriber Lifecycle</h3>
+            <div class="detail-row"><span class="key">Peak Subscribers</span><span>${escapeHTML(entry.peak_subscribers || 0)}</span></div>
+            <div class="detail-row"><span class="key">Total Subscribers</span><span>${escapeHTML(entry.total_subscribers || 0)}</span></div>
+            <div class="detail-row"><span class="key">Completed Subscribers</span><span>${escapeHTML(entry.completed_subscribers || 0)}</span></div>
+            <div class="detail-row"><span class="key">Open Subscriber Windows</span><span>${subscribers.filter((s) => !s.closed_at).length}</span></div>
+            <div class="detail-row"><span class="key">Source Windows</span><span>${sources.length}</span></div>
+          </section>
+        </div>
+      `;
+
+      historyTabPanelSourcesEl.innerHTML = `
+        <div class="history-subsection">
+          <h4>Source Windows</h4>
+          ${renderHistorySources(sources)}
+        </div>
+      `;
+
+      historyTabPanelSubscribersEl.innerHTML = `
+        <div class="history-subsection">
+          <h4>Subscriber Windows</h4>
+          ${renderHistorySubscribers(subscribers)}
+        </div>
+      `;
+
+      historyTabPanelRecoveryEl.innerHTML = `
+        <div class="details-grid">
+          <section class="detail-card">
+            <h3>Recovery Metrics</h3>
+            <div class="detail-row"><span class="key">Recovery Cycles</span><span>${escapeHTML(entry.recovery_cycle_count || 0)}</span></div>
+            <div class="detail-row"><span class="key">Last Recovery Reason</span><span>${escapeHTML(entry.last_recovery_reason || "-")}</span></div>
+            <div class="detail-row"><span class="key">Source Select Count</span><span>${escapeHTML(entry.source_select_count || 0)}</span></div>
+            <div class="detail-row"><span class="key">Same-source Reselect</span><span>${escapeHTML(entry.same_source_reselect_count || 0)}</span></div>
+            <div class="detail-row"><span class="key">Last Source Selected</span><span>${formatTS(entry.last_source_selected_at)}</span></div>
+            <div class="detail-row"><span class="key">Select Reason</span><span>${escapeHTML(entry.last_source_select_reason || "-")}</span></div>
+          </section>
+          <section class="detail-card">
+            <h3>Terminal Context</h3>
+            <div class="detail-row"><span class="key">Terminal Status</span><span>${escapeHTML(entry.terminal_status || "-")}</span></div>
+            <div class="detail-row"><span class="key">Terminal Error</span><span>${terminalError}</span></div>
+            <div class="detail-row"><span class="key">Last Error</span><span>${lastError}</span></div>
+          </section>
+        </div>
+      `;
+
+      applyHistoryTabState();
+    }
+
+    function renderSelectedSessionDetail(model) {
+      const tuner = model.selectedTuner;
+      if (!tuner) {
+        selectedSessionDetailEl.className = "empty";
+        selectedSessionDetailEl.textContent = "Select an active session row to inspect detail metrics.";
+        return;
+      }
+
+      const subscribers = Array.isArray(tuner.subscribers) ? tuner.subscribers : [];
+      const sourceLabel = tuner.source_item_key
+        ? `<span class="mono">${escapeHTML(tuner.source_item_key)}</span>`
+        : tuner.source_id
+          ? `source:${escapeHTML(tuner.source_id)}`
+          : "-";
+      const sourceURL = tuner.source_stream_url ? `<span class="mono">${escapeHTML(tuner.source_stream_url)}</span>` : "-";
+      const startupProbe = `${toNumber(tuner.source_startup_probe_raw_bytes)} raw / ${toNumber(tuner.source_startup_probe_trimmed_bytes)} trimmed / ${toNumber(tuner.source_startup_probe_dropped_bytes)} dropped`;
+      const startupCutover = toNumber(tuner.source_startup_probe_cutover_offset);
+      const startupInventory = `${toNumber(tuner.source_startup_video_streams)} video, ${toNumber(tuner.source_startup_audio_streams)} audio`;
+      const healthCoalesced = formatCounterMap(tuner.source_health_persist_coalesced_by_source);
+      const healthDropped = formatCounterMap(tuner.source_health_persist_dropped_by_source);
+      const transitionSignals = tuner.recovery_transition_signals_applied ? escapeHTML(tuner.recovery_transition_signals_applied) : "-";
+      const transitionSkips = tuner.recovery_transition_signal_skips ? escapeHTML(tuner.recovery_transition_signal_skips) : "-";
+
+      selectedSessionDetailEl.className = "details-grid";
+      selectedSessionDetailEl.innerHTML = `
+        <section class="detail-card">
+          <h3>Stream Profile</h3>
+          <div class="detail-row"><span class="key">Resolution</span><span>${escapeHTML(tuner.resolution || "-")}</span></div>
+          <div class="detail-row"><span class="key">FPS</span><span>${escapeHTML(formatFPS(tuner.frame_rate))}</span></div>
+          <div class="detail-row"><span class="key">Video Codec</span><span>${escapeHTML(tuner.video_codec || "-")}</span></div>
+          <div class="detail-row"><span class="key">Audio Codec</span><span>${escapeHTML(tuner.audio_codec || "-")}</span></div>
+          <div class="detail-row"><span class="key">Current Bitrate</span><span>${escapeHTML(formatBitrate(tuner.current_bitrate_bps))}</span></div>
+          <div class="detail-row"><span class="key">Profile Bitrate</span><span>${escapeHTML(formatBitrate(tuner.profile_bitrate_bps))}</span></div>
+          <div class="detail-row"><span class="key">Producer</span><span>${escapeHTML(tuner.producer || "-")}</span></div>
+        </section>
+        <section class="detail-card">
+          <h3>Startup / Source</h3>
+          <div class="detail-row"><span class="key">Source</span><span>${sourceLabel}</span></div>
+          <div class="detail-row"><span class="key">Source URL</span><span>${sourceURL}</span></div>
+          <div class="detail-row"><span class="key">Component State</span><span>${escapeHTML(tuner.source_startup_component_state || "-")}</span></div>
+          <div class="detail-row"><span class="key">Startup Inventory</span><span>${escapeHTML(startupInventory)}</span></div>
+          <div class="detail-row"><span class="key">Probe Bytes</span><span>${escapeHTML(startupProbe)}</span></div>
+          <div class="detail-row"><span class="key">Cutover Offset</span><span>${escapeHTML(startupCutover || 0)}</span></div>
+          <div class="detail-row"><span class="key">Random Access</span><span>${tuner.source_startup_random_access_ready ? "ready" : "not ready"}</span></div>
+          <div class="detail-row"><span class="key">Startup Retry</span><span>${escapeHTML(tuner.source_startup_retry_relaxed_probe_reason || "-")}</span></div>
+        </section>
+        <section class="detail-card">
+          <h3>Recovery / Health</h3>
+          <div class="detail-row"><span class="key">Recovery Cycle</span><span>${escapeHTML(tuner.recovery_cycle || 0)}</span></div>
+          <div class="detail-row"><span class="key">Recovery Reason</span><span>${escapeHTML(tuner.recovery_reason || "-")}</span></div>
+          <div class="detail-row"><span class="key">Source Select Count</span><span>${escapeHTML(tuner.source_select_count || 0)}</span></div>
+          <div class="detail-row"><span class="key">Same-source Reselect</span><span>${escapeHTML(tuner.same_source_reselect_count || 0)}</span></div>
+          <div class="detail-row"><span class="key">Subscribers</span><span>${subscribers.length}</span></div>
+          <div class="detail-row"><span class="key">Transition Mode</span><span>${escapeHTML(tuner.recovery_transition_effective_mode || tuner.recovery_transition_mode || "-")}</span></div>
+          <div class="detail-row"><span class="key">Transition Signals</span><span>${transitionSignals}</span></div>
+          <div class="detail-row"><span class="key">Transition Skips</span><span>${transitionSkips}</span></div>
+          <div class="detail-row"><span class="key">Keepalive Mode</span><span>${escapeHTML(tuner.recovery_keepalive_mode || "-")}</span></div>
+        </section>
+        <section class="detail-card">
+          <h3>Persist / Terminal</h3>
+          <div class="detail-row"><span class="key">Coalesced Total</span><span>${escapeHTML(tuner.source_health_persist_coalesced_total || 0)}</span></div>
+          <div class="detail-row"><span class="key">Dropped Total</span><span>${escapeHTML(tuner.source_health_persist_dropped_total || 0)}</span></div>
+          <div class="detail-row"><span class="key">Coalesced by Source</span><span>${escapeHTML(healthCoalesced)}</span></div>
+          <div class="detail-row"><span class="key">Dropped by Source</span><span>${escapeHTML(healthDropped)}</span></div>
+          <div class="detail-row"><span class="key">Last Source Select</span><span>${formatTS(tuner.last_source_selected_at)}</span></div>
+          <div class="detail-row"><span class="key">Select Reason</span><span>${escapeHTML(tuner.last_source_select_reason || "-")}</span></div>
+          <div class="detail-row"><span class="key">Last Push</span><span>${formatTS(tuner.last_push_at)}</span></div>
+          <div class="detail-row"><span class="key">Last Error</span><span>${escapeHTML(tuner.last_error || "-")}</span></div>
+        </section>
+      `;
+    }
+
+    function render(payload) {
+      if (!payload) {
+        return;
+      }
+
+      const model = buildViewModel(payload);
+      renderSummary(payload);
+      renderAlerts(payload);
+      renderTuners(model);
+      renderClients(model);
+      renderHistoryMaster(model, payload);
+      renderHistoryDetail(model);
+      renderSelectedSessionDetail(model);
+
+      lastRefreshEl.textContent = `Last refresh: ${new Date().toLocaleTimeString()}`;
+      updateFilterChipUI();
+    }
+
+    async function refresh() {
+      const requestSeq = ++refreshRequestSeq;
+      try {
+        const payload = await fetchStatus();
+        const generatedAtMs = generatedAtMillis(payload);
+
+        // Prevent older in-flight responses from overwriting newer UI state.
+        if (requestSeq < refreshRequestSeq) {
+          return;
+        }
+        if (requestSeq < refreshAppliedSeq) {
+          return;
+        }
+        if (generatedAtMs > 0 && generatedAtMs < refreshAppliedGeneratedAtMs) {
+          return;
+        }
+
+        latestPayload = payload;
+        reconcileSelections(payload);
+        render(payload);
+
+        refreshAppliedSeq = requestSeq;
+        if (generatedAtMs > 0) {
+          refreshAppliedGeneratedAtMs = generatedAtMs;
+        }
+      } catch (err) {
+        if (requestSeq < refreshRequestSeq) {
+          return;
+        }
+        console.error(err);
+        showStatus(err.message || "failed to load tuner status", true);
+      }
+    }
+
+    function rerenderFromState() {
+      if (!latestPayload) {
+        return;
+      }
+      reconcileSelections(latestPayload);
+      render(latestPayload);
+    }
+
+    function syncAutoRefresh() {
+      if (refreshTimer !== null) {
+        window.clearInterval(refreshTimer);
+        refreshTimer = null;
+      }
+      if (autoRefreshEl.checked) {
+        refreshTimer = window.setInterval(refresh, 3000);
+      }
+    }
+
+    document.getElementById("refresh-btn").addEventListener("click", () => {
+      refresh();
+      showStatus("Tuner status refreshed.");
+    });
+
+    autoRefreshEl.addEventListener("change", syncAutoRefresh);
+
+    document.getElementById("quick-filter-chips").addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-filter]");
+      if (!button) {
+        return;
+      }
+      uiState.quickFilter = normalizeText(button.dataset.filter) || "all";
+      rerenderFromState();
+    });
+
+    searchFormEl.addEventListener("submit", (event) => {
+      event.preventDefault();
+      uiState.searchQuery = String(searchInputEl.value || "").trim();
+      rerenderFromState();
+    });
+
+    searchResetEl.addEventListener("click", () => {
+      searchInputEl.value = "";
+      uiState.searchQuery = "";
+      rerenderFromState();
+    });
+
+    searchInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        searchInputEl.value = "";
+        uiState.searchQuery = "";
+        rerenderFromState();
+      }
+    });
+
+    historyStatusFilterEl.addEventListener("change", () => {
+      uiState.historyStatusFilter = historyStatusFilterEl.value;
+      rerenderFromState();
+    });
+
+    historyErrorsOnlyEl.addEventListener("change", () => {
+      uiState.historyErrorsOnly = historyErrorsOnlyEl.checked;
+      rerenderFromState();
+    });
+
+    historyRecoveryOnlyEl.addEventListener("change", () => {
+      uiState.historyRecoveryOnly = historyRecoveryOnlyEl.checked;
+      rerenderFromState();
+    });
+
+    historySearchInputEl.addEventListener("input", () => {
+      uiState.historySearchQuery = String(historySearchInputEl.value || "").trim();
+      rerenderFromState();
+    });
+
+    historySearchInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") {
+        historySearchInputEl.value = "";
+        uiState.historySearchQuery = "";
+        rerenderFromState();
+      }
+    });
+
+    historySearchResetEl.addEventListener("click", () => {
+      historySearchInputEl.value = "";
+      uiState.historySearchQuery = "";
+      rerenderFromState();
+    });
+
+    activeSortKeyEl.addEventListener("change", () => {
+      uiState.activeSortKey = activeSortKeyEl.value;
+      rerenderFromState();
+    });
+
+    historySortKeyEl.addEventListener("change", () => {
+      uiState.historySortKey = historySortKeyEl.value;
+      rerenderFromState();
+    });
+
+    activeSortDirEl.addEventListener("click", () => {
+      uiState.activeSortDir = uiState.activeSortDir === "asc" ? "desc" : "asc";
+      rerenderFromState();
+    });
+
+    historySortDirEl.addEventListener("click", () => {
+      uiState.historySortDir = uiState.historySortDir === "asc" ? "desc" : "asc";
+      rerenderFromState();
+    });
+
+    tunersBodyEl.addEventListener("click", async (event) => {
+      const button = event.target.closest("button[data-action='trigger-recovery']");
+      if (button) {
+        event.stopPropagation();
+        const selectedTunerKey = String(button.dataset.tunerKey || "");
+        if (selectedTunerKey) {
+          uiState.selectedTunerKey = selectedTunerKey;
+        }
+        const channelID = toNumber(button.dataset.channelId || 0);
+        if (channelID <= 0) {
+          showStatus("Unable to trigger recovery: missing channel id.", true);
+          return;
+        }
+
+        button.disabled = true;
+        const originalLabel = button.textContent;
+        button.textContent = "Requesting...";
+        try {
+          await triggerManualRecovery(channelID);
+          showStatus(`Recovery trigger accepted for channel ${channelID}.`);
+          await refresh();
+        } catch (err) {
+          console.error(err);
+          showStatus(err.message || "failed to trigger recovery", true);
+        } finally {
+          button.disabled = false;
+          button.textContent = originalLabel || "Trigger Recovery";
+        }
+        return;
+      }
+
+      const row = event.target.closest("tr[data-tuner-key]");
+      if (!row) {
+        return;
+      }
+      const tunerKey = String(row.dataset.tunerKey || "");
+      uiState.selectedTunerKey = tunerKey;
+      rerenderFromState();
+    });
+
+    tunersBodyEl.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") {
+        return;
+      }
+      if (event.target.closest("button, input, select, textarea, a")) {
+        return;
+      }
+      const row = event.target.closest("tr[data-tuner-key]");
+      if (!row) {
+        return;
+      }
+      event.preventDefault();
+      uiState.selectedTunerKey = String(row.dataset.tunerKey || "");
+      rerenderFromState();
+    });
+
+    historyListEl.addEventListener("click", (event) => {
+      const item = event.target.closest("button[data-history-session-id]");
+      if (!item) {
+        return;
+      }
+      const sessionID = toNumber(item.dataset.historySessionId || 0);
+      if (sessionID <= 0) {
+        return;
+      }
+      uiState.selectedHistorySessionID = sessionID;
+      rerenderFromState();
+    });
+
+    historyListEl.addEventListener("keydown", (event) => {
+      const key = event.key;
+      if (!["ArrowUp", "ArrowDown", "Home", "End", "Enter", " "].includes(key)) {
+        return;
+      }
+      const items = Array.from(historyListEl.querySelectorAll("button[data-history-session-id]"));
+      if (items.length === 0) {
+        return;
+      }
+      const activeEl = event.target.closest("button[data-history-session-id]");
+      const currentIdx = activeEl ? items.indexOf(activeEl) : -1;
+
+      if (key === "Enter" || key === " ") {
+        if (!activeEl) {
+          return;
+        }
+        event.preventDefault();
+        const sessionID = toNumber(activeEl.dataset.historySessionId || 0);
+        if (sessionID > 0) {
+          uiState.selectedHistorySessionID = sessionID;
+          rerenderFromState();
+        }
+        return;
+      }
+
+      event.preventDefault();
+      let nextIdx = currentIdx >= 0 ? currentIdx : 0;
+      if (key === "ArrowDown") {
+        nextIdx = Math.min(items.length - 1, currentIdx + 1);
+      } else if (key === "ArrowUp") {
+        nextIdx = Math.max(0, currentIdx - 1);
+      } else if (key === "Home") {
+        nextIdx = 0;
+      } else if (key === "End") {
+        nextIdx = items.length - 1;
+      }
+      const target = items[nextIdx];
+      if (!target) {
+        return;
+      }
+      const sessionID = toNumber(target.dataset.historySessionId || 0);
+      if (sessionID <= 0) {
+        return;
+      }
+      uiState.selectedHistorySessionID = sessionID;
+      rerenderFromState();
+      window.requestAnimationFrame(() => {
+        const selected = historyListEl.querySelector(`button[data-history-session-id="${sessionID}"]`);
+        if (selected instanceof HTMLElement) {
+          selected.focus();
+        }
+      });
+    });
+
+    historyTablistEl.addEventListener("click", (event) => {
+      const tab = event.target.closest("button[data-tab]");
+      if (!tab) {
+        return;
+      }
+      uiState.historyDetailTab = tab.dataset.tab || "summary";
+      applyHistoryTabState();
+    });
+
+    historyTablistEl.addEventListener("keydown", (event) => {
+      const tabs = [historyTabSummaryEl, historyTabSourcesEl, historyTabSubscribersEl, historyTabRecoveryEl];
+      const activeIdx = tabs.findIndex((tab) => tab.dataset.tab === uiState.historyDetailTab);
+      if (activeIdx < 0) {
+        return;
+      }
+
+      let nextIdx = -1;
+      if (event.key === "ArrowRight") {
+        nextIdx = (activeIdx + 1) % tabs.length;
+      } else if (event.key === "ArrowLeft") {
+        nextIdx = (activeIdx - 1 + tabs.length) % tabs.length;
+      } else if (event.key === "Home") {
+        nextIdx = 0;
+      } else if (event.key === "End") {
+        nextIdx = tabs.length - 1;
+      }
+      if (nextIdx < 0) {
+        return;
+      }
+      event.preventDefault();
+      const nextTab = tabs[nextIdx];
+      uiState.historyDetailTab = nextTab.dataset.tab || "summary";
+      applyHistoryTabState();
+      nextTab.focus();
+    });
+
+    clientGroupsEl.addEventListener("toggle", (event) => {
+      const details = event.target;
+      if (!(details instanceof HTMLDetailsElement)) {
+        return;
+      }
+      if (!details.matches("details[data-client-group-key]")) {
+        return;
+      }
+      const groupKey = String(details.dataset.clientGroupKey || "");
+      if (!groupKey) {
+        return;
+      }
+      if (details.open) {
+        uiState.expandedClientGroups.add(groupKey);
+      } else {
+        uiState.expandedClientGroups.delete(groupKey);
+      }
+    }, true);
+
+    showStatus("Loading tuner diagnostics...");
+    refresh();
+    syncAutoRefresh();
+  </script>
+</body>
+</html>

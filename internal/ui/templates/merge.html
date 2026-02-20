@@ -1,0 +1,514 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --border: #d6deeb;
+      --text: #152035;
+      --muted: #5a667b;
+      --brand: #0d63e6;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f5f7fc 0%, #eef2f9 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    input[type="number"],
+    input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      color: var(--text);
+      background: #fff;
+      min-width: 120px;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    .status {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+      margin-bottom: 10px;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .group-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .group-header {
+      display: flex;
+      justify-content: space-between;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .group-title {
+      font-weight: 600;
+    }
+
+    .group-meta {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .group-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .item-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+
+    .item-table th,
+    .item-table td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 6px;
+      vertical-align: top;
+    }
+
+    .item-table th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 8px 2px;
+    }
+
+    .groups-toolbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .pagination {
+      display: flex;
+      gap: 8px;
+    }
+
+    button[disabled] {
+      opacity: 0.6;
+      cursor: default;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels">Channels</a>
+      <a href="/ui/merge" class="active">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Duplicate Suggestions</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+        <form id="filter-form" class="toolbar">
+          <label>
+            Minimum items per group
+            <input id="min-input" type="number" min="2" max="100" value="2">
+          </label>
+          <label>
+            Search channel key or tvg-id
+            <input id="search-input" type="text" placeholder="e.g. tvg:cnn.us or cnn.us" autocomplete="off">
+          </label>
+          <button class="primary" type="submit">Refresh</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Groups</h2>
+      <div class="panel-body">
+        <div class="groups-toolbar">
+          <div id="groups-meta" class="group-meta"></div>
+          <div class="pagination">
+            <button id="prev-page-btn" type="button">Previous</button>
+            <button id="next-page-btn" type="button">Next</button>
+          </div>
+        </div>
+        <div id="groups-empty" class="empty" hidden>No duplicate groups found.</div>
+        <div id="group-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      min: 2,
+      searchQuery: "",
+      limit: 100,
+      offset: 0,
+      total: 0,
+      groups: [],
+    };
+
+    const statusEl = document.getElementById("status");
+    const groupsMetaEl = document.getElementById("groups-meta");
+    const groupsEmptyEl = document.getElementById("groups-empty");
+    const groupListEl = document.getElementById("group-list");
+    const prevPageBtn = document.getElementById("prev-page-btn");
+    const nextPageBtn = document.getElementById("next-page-btn");
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.classList.toggle("error", isError);
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 3000);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "request failed", true);
+    }
+
+    async function loadGroups() {
+      const params = new URLSearchParams();
+      params.set("min", String(state.min));
+      params.set("limit", String(state.limit));
+      params.set("offset", String(state.offset));
+      if (state.searchQuery) {
+        params.set("q", state.searchQuery);
+      }
+      const data = await api(`/api/suggestions/duplicates?${params.toString()}`);
+      state.groups = data.groups || [];
+      const parsedTotal = Number(data.total);
+      state.total = Number.isFinite(parsedTotal) && parsedTotal >= 0 ? Math.trunc(parsedTotal) : state.groups.length;
+      const parsedLimit = Number(data.limit);
+      if (Number.isFinite(parsedLimit) && parsedLimit > 0) {
+        state.limit = Math.trunc(parsedLimit);
+      }
+      const parsedOffset = Number(data.offset);
+      state.offset = Number.isFinite(parsedOffset) && parsedOffset >= 0 ? Math.trunc(parsedOffset) : 0;
+      renderGroups();
+    }
+
+    function renderGroups() {
+      groupListEl.innerHTML = "";
+      groupsEmptyEl.hidden = state.groups.length > 0;
+      renderPaginationMeta();
+
+      for (const group of state.groups) {
+        const row = document.createElement("div");
+        row.className = "group-row";
+
+        const header = document.createElement("div");
+        header.className = "group-header";
+
+        const titleWrap = document.createElement("div");
+        const title = document.createElement("div");
+        title.className = "group-title";
+        title.textContent = group.channel_key;
+
+        const meta = document.createElement("div");
+        meta.className = "group-meta";
+        meta.textContent = `${group.count} items`;
+
+        titleWrap.append(title, meta);
+
+        const actions = document.createElement("div");
+        actions.className = "group-actions";
+
+        const createFirstBtn = document.createElement("button");
+        createFirstBtn.className = "secondary";
+        createFirstBtn.textContent = "Create From First";
+        createFirstBtn.addEventListener("click", () => createFromFirst(group));
+
+        const createAllBtn = document.createElement("button");
+        createAllBtn.className = "primary";
+        createAllBtn.textContent = "Create + Add All Sources";
+        createAllBtn.addEventListener("click", () => createAndAttachAll(group));
+
+        actions.append(createFirstBtn, createAllBtn);
+        header.append(titleWrap, actions);
+
+        const table = document.createElement("table");
+        table.className = "item-table";
+
+        const thead = document.createElement("thead");
+        thead.innerHTML = "<tr><th>Name</th><th>Group</th><th>tvg-id</th><th>item_key</th><th></th></tr>";
+        table.appendChild(thead);
+
+        const tbody = document.createElement("tbody");
+        for (const item of (group.items || [])) {
+          const tr = document.createElement("tr");
+
+          const tdName = document.createElement("td");
+          tdName.textContent = item.name || "(unnamed)";
+
+          const tdGroup = document.createElement("td");
+          tdGroup.textContent = item.group_name || "Ungrouped";
+
+          const tdKey = document.createElement("td");
+          tdKey.textContent = item.item_key;
+
+          const tdTVGID = document.createElement("td");
+          tdTVGID.textContent = item.tvg_id || "";
+
+          const tdAction = document.createElement("td");
+          const btn = document.createElement("button");
+          btn.textContent = "Create Channel";
+          btn.addEventListener("click", () => createChannel(group, item));
+          tdAction.appendChild(btn);
+
+          tr.append(tdName, tdGroup, tdTVGID, tdKey, tdAction);
+          tbody.appendChild(tr);
+        }
+
+        table.appendChild(tbody);
+        row.append(header, table);
+        groupListEl.appendChild(row);
+      }
+    }
+
+    function renderPaginationMeta() {
+      if (state.total <= 0) {
+        groupsMetaEl.textContent = "0 duplicate groups";
+      } else {
+        const start = state.offset + 1;
+        const end = Math.min(state.offset + state.groups.length, state.total);
+        groupsMetaEl.textContent = `${start}-${end} of ${state.total} duplicate groups`;
+      }
+      prevPageBtn.disabled = state.offset <= 0;
+      nextPageBtn.disabled = state.offset + state.limit >= state.total;
+    }
+
+    async function createChannel(group, item) {
+      const guideName = window.prompt("Guide name", item.name || "");
+      if (guideName === null) {
+        return;
+      }
+
+      const channel = await api("/api/channels", {
+        method: "POST",
+        body: JSON.stringify({
+          item_key: item.item_key,
+          guide_name: guideName.trim(),
+          channel_key: group.channel_key,
+        }),
+      });
+
+      showStatus(`Created channel ${channel.guide_number} ${channel.guide_name}`);
+    }
+
+    async function createFromFirst(group) {
+      if (!group.items || !group.items.length) {
+        return;
+      }
+      await createChannel(group, group.items[0]);
+    }
+
+    async function createAndAttachAll(group) {
+      if (!group.items || !group.items.length) {
+        return;
+      }
+
+      const base = group.items[0];
+      const created = await api("/api/channels", {
+        method: "POST",
+        body: JSON.stringify({
+          item_key: base.item_key,
+          guide_name: (base.name || "").trim(),
+          channel_key: group.channel_key,
+        }),
+      });
+
+      for (let i = 1; i < group.items.length; i++) {
+        await api(`/api/channels/${created.channel_id}/sources`, {
+          method: "POST",
+          body: JSON.stringify({
+            item_key: group.items[i].item_key,
+            allow_cross_channel: true,
+          }),
+        });
+      }
+
+      showStatus(`Created channel ${created.guide_number} with ${group.items.length} sources`);
+    }
+
+    document.getElementById("filter-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      const parsed = Number(document.getElementById("min-input").value || 2);
+      state.min = Number.isFinite(parsed) ? Math.max(2, Math.min(100, Math.trunc(parsed))) : 2;
+      state.searchQuery = (document.getElementById("search-input").value || "").trim();
+      state.offset = 0;
+      loadGroups().catch(handleError);
+    });
+
+    prevPageBtn.addEventListener("click", () => {
+      if (state.offset <= 0) {
+        return;
+      }
+      state.offset = Math.max(0, state.offset - state.limit);
+      loadGroups().catch(handleError);
+    });
+
+    nextPageBtn.addEventListener("click", () => {
+      if (state.offset + state.limit >= state.total) {
+        return;
+      }
+      state.offset += state.limit;
+      loadGroups().catch(handleError);
+    });
+
+    loadGroups().catch(handleError);
+  </script>
+</body>
+</html>

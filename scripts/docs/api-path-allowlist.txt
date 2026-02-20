@@ -1,0 +1,15 @@
+# Allowlisted API paths — paths documented in docs but not directly registered
+# in admin_routes.go (e.g., external provider endpoints, HDHomeRun device
+# emulation paths, or paths registered elsewhere).
+#
+# One path per line. Lines starting with # are comments.
+
+# Inline references in docs that use query-string examples (path only, no query).
+/api/items
+/api/admin/tuners
+/api/channels
+/api/dynamic-channels
+/api/admin/dvr
+/api/admin/dvr/lineups
+/api/channels/dvr
+/api/admin/jobs

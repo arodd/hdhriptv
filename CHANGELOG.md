@@ -1,0 +1,214 @@
+- 2026-02-20 [docs] Added an OPERATIONS stream Prometheus metrics reference and documented source read-pause `reason` label semantics in streaming docs.
+- 2026-02-20 [bug] Added `reason`-labeled source read-pause Prometheus telemetry (`recovered`, `pump_exit`, `ctx_cancel`) and replaced run-cycle pause-state test sleeps with polling-based assertions.
+- 2026-02-20 [docs] Added nil-guard and write-pressure helper branch regression coverage in shared-session streaming tests, plus `stream_slow_skip_max_lag_chunks` runbook terminology clarification.
+- 2026-02-20 [docs] Clarified initial startup-sync OPERATIONS logging semantics for phase-completion attempts and retry-warning `backoff` fields.
+- 2026-02-20 [bug] Added startup-sync phase duration on readiness failures and debug readiness-probe retry logs to improve startup delay diagnostics.
+- 2026-02-20 [bug] Exported bounded-close subsystem counters to Prometheus and added regression coverage for slate-close telemetry fields plus late-abandon completion timing.
+- 2026-02-20 [bug] Hardened synthetic slow-subscriber lag integration coverage with polling-based write-pressure assertions and wider CI timing windows.
+- 2026-02-20 [bug] Coalesced concurrent UPnP `GetSystemUpdateID` refreshes to prevent lineup read fan-out and added CLI/env tuning for update-ID cache TTL.
+- 2026-02-20 [docs] Added regression coverage for dynamic guide-name refresh store-error propagation, documented post-sync guide-name refresh behavior in OPERATIONS, and annotated global-slog ffmpeg tests as non-parallel.
+- 2026-02-20 [bug] Extended `closeWithTimeout` worker underflow warnings with timeout/late-completion counters, added happy-path finish-worker lifecycle coverage, and documented operator response guidance.
+- 2026-02-20 [bug] Expanded startup readiness/transient retry hardening with direct canceled/connection-refused readiness tests, IPv6 loopback probe coverage, and Jellyfin transient classification for `network is unreachable`/`broken pipe`.
+- 2026-02-20 [bug] Added UPnP ContentDirectory update-ID TTL caching with regression coverage, expanded dynamic guide-name refresh edge-case tests, and documented/covered synthetic slow-subscriber lag tuning behavior.
+- 2026-02-20 [docs] Added regression coverage for non-2xx slow-close attempt-context cancellation plus guide-name refresh wiring/error paths in channels and reconcile services.
+- 2026-02-20 [docs] Added concurrent `SessionManager.CloseWithContext` timeout race coverage and updated OPERATIONS docs to reflect `session-history-limit` CLI/env configurability.
+- 2026-02-20 [bug] Added direct suppression-branch coverage for `closeWithTimeout`, table-driven suppression-reason tests, and underflow warning telemetry when worker-slot release accounting drifts.
+- 2026-02-20 [bug] Added slate AV close warning fields for late-abandon/release-underflow/suppression breakdown telemetry, documented new bounded-close counters and 2-minute abandon behavior, and added regression coverage for no-abandon late completion waits.
+- 2026-02-20 [docs] Documented startup initial-sync readiness gating, bounded Jellyfin retry policy, and `initial_sync_phase` log events in README and OPERATIONS.
+- 2026-02-20 [bug] Added startup initial-sync retry negative-path regression coverage and removed unused probe-close test-reset helper.
+- 2026-02-20 [docs] Added startup playlist-sync readiness regression coverage for `waitForHTTPReadiness`/`readinessProbeURL` and expanded Jellyfin transient-error classification tests.
+- 2026-02-20 [docs] Added slow-skip lag helper/coalescing regression coverage and documented slow-skip Prometheus plus tuner-status telemetry/action guidance.
+- 2026-02-20 [docs] Added shared-session write-pressure helper regression coverage for deadline classification, elapsed-time guards, and writeChunk branch behavior.
+- 2026-02-20 [bug] Finalized source read-pause telemetry on session cancel and added run-cycle state-machine regression coverage for pause recovery, pump exit, zero-subscriber reset, and zero-last-byte detection.
+- 2026-02-19 [bug] Added configurable ffmpeg-copy timestamp regeneration (`--ffmpeg-copy-regenerate-timestamps`, default enabled) and wired it through stream/prober startup paths with regression coverage.
+- 2026-02-19 [bug] Added Prometheus source-ingress pause telemetry (`stream_source_read_pause_events_total`, `stream_source_read_pause_seconds`) to expose short upstream starvation windows that can drain client cache.
+- 2026-02-19 [bug] Added Prometheus write-pressure observability for shared-session subscribers (`stream_subscriber_write_deadline_timeouts_total`, `stream_subscriber_write_short_writes_total`, `stream_subscriber_write_blocked_seconds`) plus regression coverage.
+- 2026-02-19 [bug] Added shared-session subscriber write-pressure telemetry (deadline timeout hits, short writes, blocked-write duration) and exposed it in tuner/session-history status snapshots with regression coverage.
+- 2026-02-19 [bug] Added shared-session slow-skip lag telemetry (coalesced skip logs, per-session counters, Prometheus metrics, and tuner/session-history status exposure) plus regression coverage for skip/disconnect paths.
+- 2026-02-19 [bug] Moved startup initial playlist sync to run only after HTTP listener health readiness and added bounded startup-only retries for transient Jellyfin lineup reload failures.
+- 2026-02-19 [docs] Hardened probe-close telemetry tests with delta-based counter isolation and added handler snapshot integration coverage for enqueue overflow/post-close fallback paths.
+- 2026-02-19 [bug] Hardened `closeWithTimeout` with worker-slot release underflow tracking, bounded late-completion abandonment for stuck `Close()` paths, and race-safe suppression-reason logging plus 64th-event cadence regression coverage.
+- 2026-02-19 [feature] Added CLI/env configuration for shared-session timeline retention and source-health drain timeout (`session-history-limit`, `session-source-history-limit`, `session-subscriber-history-limit`, `source-health-drain-timeout`).
+- 2026-02-19 [bug] Reused a single `SessionManager.CloseWithContext` wait channel across repeated calls to prevent timeout-retry goroutine accumulation, and hardened related stream lifecycle tests.
+- 2026-02-19 [bug] Removed dead `closeWithTimeoutRetryQueueBudget` constant usage and aligned deferred-close queue overflow assertions with runtime `closeWithTimeoutRetryQueueCap`.
+- 2026-02-19 [docs] Documented preview cancel flush wait behavior, `probe_close` tuner telemetry semantics, internal `ProberConfig.ProbeCloseQueueDepth` usage, and `CLOSE_WITH_TIMEOUT_WORKER_BUDGET` in config docs.
+- 2026-02-19 [docs] Hardened deferred-close retry ticker regression coverage to avoid fragile internal-state manipulation and documented the 250ms retry poll backstop in STREAMING.md.
+- 2026-02-19 [bug] Fixed non-2xx direct-startup request context cleanup by canceling child attempt contexts after bounded response-body close, with regression coverage for cancellation convergence.
+- 2026-02-19 [bug] UPnP ContentDirectory `GetSystemUpdateID`/`Browse` now emits lineup-derived update IDs so control points can invalidate stale channel metadata after lineup name/order changes.
+- 2026-02-19 [bug] Playlist reconcile now performs a post-sync refresh of dynamic generated channel guide names from active catalog items to prevent stale lineup names after catalog updates.
+- 2026-02-19 [docs] Documented shared-session timeline-limit fallback (`configured -> session_history_limit -> default -> clamped`) and source-health drain-timeout zero-value semantics.
+- 2026-02-19 [bug] Wired shared-session history/drain settings through `stream.Handler` config, hardened coalesced source-health drop cleanup, and added close/drain lifecycle regression coverage.
+- 2026-02-19 [docs] Documented shared-session snapshot defensive truncation semantics and added regression coverage for truncation idempotency plus active-subscriber history edge cases.
+- 2026-02-19 [docs] Expanded shared-session history timeline regression coverage for limit normalization, non-tail active-source truncation/reindexing, and active-subscriber effective-limit expansion behavior.
+- 2026-02-19 [bug] Added a 30s hard late-completion release window for `closeWithTimeout` worker slots so permanently stuck closes no longer exhaust global close-worker capacity.
+- 2026-02-19 [bug] Hardened non-2xx startup cleanup tests to verify bounded-close drain behavior, added close-timeout reset-state regression coverage, and tightened probe-phase churn telemetry assertions.
+- 2026-02-19 [bug] Added `closeWithTimeout` suppression warning telemetry plus `CLOSE_WITH_TIMEOUT_WORKER_BUDGET` override support, and replaced preview zero-progress `time.After` retries with reusable exponential backoff timers.
+- 2026-02-19 [bug] Hardened `readBodyPreviewBounded` cancel-path behavior to preserve buffered preview bytes and added regression coverage for caller-owned close cleanup, truncation, and partial-read retry progress.
+- 2026-02-19 [bug] Ensured `/api/admin/tuners` always includes `drain_wait` telemetry (including zero-value snapshots) and added parent-level JSON regression coverage.
+- 2026-02-19 [bug] Added periodic deferred-close retry polling, queued slate AV bounded-close retries on worker-budget suppression, and regression coverage for retry overflow/dedup counters.
+- 2026-02-19 [docs] Clarified shutdown runbook step 5 to document `CloseWithContext` deadline-bounded stream convergence and warning-on-timeout behavior.
+- 2026-02-19 [feature] Added configurable background-prober close queue depth (`ProberConfig.ProbeCloseQueueDepth`) plus tuner-status `probe_close` telemetry counters.
+- 2026-02-19 [bug] Added lifecycle regressions for disabled-prober `Close()` and `Run()` cancellation-then-close sequencing, plus fallback close counter assertions for queue-full/post-close inline paths.
+- 2026-02-19 [docs] Added focused regression coverage for shared-session stale-entry cleanup on finish lifecycle and exact retry-drain close-worker `Started` counter accounting.
+- 2026-02-19 [docs] Deduplicated `formatSearchWarningSummary` UI logic by extracting a shared template snippet used by catalog and dynamic-rule pages.
+- 2026-02-19 [bug] Added explicit regression coverage for background-prober close-queue overflow inline-close fallback and tightened admin channel-disable recovery input-error branch assertions.
+- 2026-02-19 [docs] Documented shared-session drain timeout tuning (`--session-drain-timeout` / `SESSION_DRAIN_TIMEOUT`) in README and streaming runbook guidance.
+- 2026-02-19 [bug] Reduced bounded close timeout allocation churn by pooling close-worker timers in `closeWithTimeout`.
+- 2026-02-19 [bug] Added configurable shared-session drain timeout wiring (`SESSION_DRAIN_TIMEOUT`) and applied it to startup-abort and recovery close paths.
+- 2026-02-19 [docs] Added concurrent duplicate `closeWithTimeout` race coverage and reconciled stale `1f0a21b` guardrail review items against current timeout-path regressions.
+- 2026-02-19 [bug] Emitted `/api/items` `search_warning` metadata only for non-empty search queries and added graceful-degradation coverage for warning lookup failures.
+- 2026-02-19 [bug] Aligned catalog-search limit validation semantics so `catalog-search-max-* = 0` now cleanly falls back to defaults instead of being rejected in config parsing.
+- 2026-02-19 [docs] Clarified changelog curation policy to keep historical entries immutable and record any classification corrections as new lines.
+- 2026-02-19 [bug] Added zero-value `SessionManager` drain-wait regression coverage to ensure nil `drainCh` initialization and unblock behavior remain correct.
+- 2026-02-19 [docs] Clarified `WaitForDrain` aggregate telemetry semantics in `docs/STREAMING.md` to state `wait_duration_us`/`wait_duration_ms` are process-lifetime accumulators.
+- 2026-02-19 [bug] Hardened tuner-status drain telemetry consistency by isolating drain-stat tests and always emitting `drain_wait.wait_duration_us` in JSON (including zero values).
+- 2026-02-19 [docs] Documented slate AV close-warning coalescing behavior (`close_non_timeout_logs_coalesced`) and added `close_retried` runbook guidance in `docs/STREAMING.md`.
+- 2026-02-19 [bug] Added direct slate AV close-worker suppression coverage and tightened close happy-path regressions with explicit no-warning assertions.
+- 2026-02-19 [docs] Expanded `WaitForDrain` docs with nil receiver/context semantics, explicit cancellation return behavior, and drain alerting guidance.
+- 2026-02-19 [bug] Made `WaitForDrain` lifecycle regressions deterministic by replacing timing-based blocked assertions with channel-synchronized blocked-state hooks and removing misleading parallel test markings.
+- 2026-02-19 [docs] Documented background prober shutdown ordering and `Close()` drain semantics in `docs/OPERATIONS.md` and `docs/STREAMING.md`.
+- 2026-02-19 [bug] Hardened background prober shutdown so `Close()` waits for queued probe session teardown and post-close/full-queue dispatch falls back to inline close instead of dropping sessions.
+- 2026-02-19 [docs] Updated `WaitForDrain` observability docs to describe `manager_id`, `drain_result`, and microsecond drain timing fields.
+- 2026-02-19 [bug] Added per-manager `WaitForDrain` log attribution and microsecond drain wait telemetry precision, replacing ambiguous per-event drain fields.
+- 2026-02-19 [docs] Documented `WaitForDrain` event fields and `/api/admin/tuners` `drain_wait` aggregate telemetry in `docs/STREAMING.md`.
+- 2026-02-19 [feature] Exposed process-lifetime `WaitForDrain` counters in `/api/admin/tuners` snapshot payloads (`drain_wait.ok`, `drain_wait.error`, `drain_wait.wait_duration_ms`).
+- 2026-02-19 [bug] Isolated `WaitForDrain` telemetry tests from global counter bleed and added nil-manager/nil-logger drain-result regression coverage.
+- 2026-02-19 [bug] Added rate-limited coalescing for repeated non-timeout slate AV close-error warnings and surfaced `close_non_timeout_logs_coalesced` diagnostics.
+- 2026-02-19 [docs] Added operator runbook guidance for interpreting bounded close-worker telemetry saturation signals in `docs/STREAMING.md`.
+- 2026-02-19 [bug] Hardened slate AV bounded-close logging by capturing telemetry before worker release, unifying timeout/non-timeout error logs, and adding delayed close-error and timeout-path regression assertions.
+- 2026-02-19 [docs] Expanded `WaitForDrain` lifecycle docs and regression coverage for creating reservations, nil manager/nil context handling, cancellation, and post-drain reactivation races.
+- 2026-02-19 [bug] Added slate AV close happy-path regression coverage and tightened close-error identity assertions to catch accidental wrapping.
+- 2026-02-19 [docs] Documented `closeWithTimeout` worker-budget and telemetry semantics in `docs/STREAMING.md`, including slate AV timeout/non-timeout diagnostic log signals.
+- 2026-02-19 [feature] Added slate AV close-error warning telemetry fields and standardized close-timeout stat assertions/reset discipline across sibling tests.
+- 2026-02-19 [feature] Added `WaitForDrain` drain-result counters (`stream_drain_ok`/`stream_drain_error`), `drain_wait_duration_ms` logging, and synchronization-test assertions for timeout and success paths.
+- 2026-02-19 [docs] Added deterministic `SessionManager.WaitForDrain` regression coverage for late waiters, drain-signal reuse, repeated drain sync idempotence, and concurrent waiter broadcast unblocking.
+- 2026-02-19 [bug] Added isolated close-error regression coverage for bounded shared-session slate AV recovery reader shutdown to complement existing nil-reader and timeout-path tests.
+- 2026-02-19 [bug] Added background prober close-worker shutdown controls with deterministic cleanup tests, tightened blocked-close goroutine growth bounds, and expanded recent-source-health filter/clear regression coverage.
+- 2026-02-19 [bug] Added `SessionManager.WaitForDrain` lifecycle synchronization and dedicated retry-drain close-worker cleanup regressions to make shared-session teardown assertions deterministic and bounded.
+- 2026-02-19 [bug] Tightened shared-session lifecycle guardrail regressions with production-derived goroutine ceilings, poll-based drain convergence checks, and stronger close-timeout test-state reset semantics.
+- 2026-02-19 [bug] Realigned shared-session lifecycle guardrail regressions with bounded close-worker semantics and restored full/race `internal/stream` validation to green.
+- 2026-02-19 [docs] Documented configurable catalog token-search limit flags and `search_warning` response semantics for `/api/items`, dynamic rules, and dynamic channel blocks in README/architecture docs.
+- 2026-02-19 [bug] Finalized admin source/channel mutation recovery convergence validation and corrected catalog regex benchmark/test expectations for full-pattern regex-mode behavior.
+- 2026-02-19 [bug] Unified close-worker start accounting across helper/retry/slate-AV paths, removed `HasActiveOrPendingSession` query-side map mutation, and made history overlap dedup prefer active session state.
+- 2026-02-19 [bug] Hardened `closeWithTimeout` budget-exhaustion behavior with bounded deferred-close retries and suppression telemetry so overflowed close attempts are retried instead of silently dropped.
+- 2026-02-19 [bug] Hardened direct non-2xx startup preview reads to respect `io.Reader` zero-progress semantics, remove helper-owned double-close behavior, and reduce preview buffer over-allocation; added isolated edge-case regressions.
+- 2026-02-19 [bug] Hardened direct-startup churn regressions by aligning late-response/non-2xx assertions with bounded close-worker semantics and adding probe-phase timeout churn coverage.
+- 2026-02-19 [docs] Documented startup phase timing logs (`msg="startup phase complete"` with `phase`/`duration`) and the `ttf-dejavu` Sans font dependency for `slate_av` recovery filler deployments.
+- 2026-02-19 [bug] Added dedicated `closeSlateAVRecoveryReaderWithTimeout` edge-case regressions for nil-reader, non-positive timeout fallback, and blocked-close timeout lifecycle behavior.
+- 2026-02-19 [docs] Documented per-session shared-session history retention/truncation fields for `/api/admin/tuners` across README, architecture, and operations docs.
+- 2026-02-19 [bug] Bounded active shared-session source/subscriber history timelines with deterministic eviction, per-session truncation metadata, and regression/benchmark coverage to cap churn-driven snapshot growth.
+- 2026-02-19 [bug] Bounded shared-session shutdown source-health drain with timeout-aware drop accounting, added context-aware stream close APIs, and wired main shutdown to pass deadline budget into stream session convergence.
+- 2026-02-19 [docs] Added shared-session slate_av close-timeout B3 evidence helper script (`project/scripts/shared-session-slate-av-close-timeout-b3-evidence.sh`) and linked it from the issue tracker plan.
+- 2026-02-19 [bug] Bounded shared-session `slate_av` close-timeout cleanup with in-flight suppression/timeout telemetry and added deterministic regression coverage for bounded goroutine growth under repeated blocked close attempts.
+- 2026-02-19 [feature] Added truncation warning visibility in `/ui/channels` dynamic-block rows and create/update status messaging for configurable catalog token-search limits.
+- 2026-02-19 [bug] Added regression coverage for shutdown-path source-health persistence backlog coupling in shared-session finish behavior (`TestSharedSessionFinishBlocksOnSourceHealthPersistenceBacklog`).
+- 2026-02-19 [bug] Hardened shared-session profile-probe persistence shutdown ordering by tracking in-flight profile-probe persistence workers and waiting on completion/cancellation before session close returns.
+- 2026-02-19 [bug] Added closeWithTimeout telemetry counters for started/suppressed/timeout/late-completion events to support bounded close-worker suppression and lifecycle observability during timeout-bound close churn.
+- 2026-02-19 [bug] Added bounded close-worker lifecycle guardrails for shared close-timeout paths across helper/pump/shared-session flows and added deterministic churn regressions asserting bounded in-flight goroutine growth.
+- 2026-02-19 [bug] Hardened background prober session close dispatch with bounded in-flight workers and added B3 evidence collection scaffolding.
+- 2026-02-19 [docs] Added direct-startup late-response B3 evidence scaffolding (`project/scripts/direct-startup-late-response-b3-evidence.sh`) and linked it from the issue planner for reproducible targeted/full/race validation capture.
+- 2026-02-19 [bug] Added direct-startup late-response timeout regression coverage for blocking `resp.Body.Close()` abort paths with repeated startup churn, asserting bounded goroutine growth before/after stalled-close release.
+- 2026-02-19 [bug] Hardened direct-startup late-response abort cleanup so stale late-result response bodies are closed via bounded background shutdown while preserving startup timeout/cancel responsiveness.
+- 2026-02-19 [bug] Added deterministic non-2xx direct-startup regression coverage for repeated stalled-preview churn, asserting bounded goroutine growth under blocked response-body cleanup.
+- 2026-02-19 [bug] Hardened direct-startup non-2xx response preview handling so preview reads are bounded by startup budget and cleanup waits are bounded to avoid detached preview-worker accumulation paths.
+- 2026-02-19 [feature] Added `search_warning` truncation metadata to `/api/items`, channel dynamic-rule create/update, and `/api/dynamic-channels` create/get/list/update responses when catalog token queries exceed configured limits.
+- 2026-02-19 [feature] Made catalog token-search term/disjunct/rune limits configurable at startup via environment and flags, and passed them into SQLite catalog-search execution.
+- 2026-02-19 [bug] Added admin route regression coverage for active source disable/delete control-plane convergence and inactive-source non-trigger behavior.
+- 2026-02-19 [bug] Decoupled shared-session startup-failure terminal readiness and ring closure from source-health persistence drain, and added deterministic regression coverage for bounded failure latency under stalled persistence.
+- 2026-02-19 [docs] Added shared-session lifecycle Phase B0 baseline evidence workflow and reusable collection script (`project/scripts/session-lifecycle-baseline.sh` + `project/docs/SESSION-LIFECYCLE-BASELINE.md`).
+- 2026-02-19 [bug] Deduplicated shared-session history snapshot output by `SessionID` to avoid teardown overlap duplicate rows from closed-history and active-session merges.
+- 2026-02-19 [bug] Added admin channel-update regression coverage for non-lifecycle updates and non-fatal session-recovery input errors while disabling channels.
+- 2026-02-19 [bug] Wired admin channel disable/delete mutations to request bounded shared-session recovery for active channels while preserving non-session and already-pending semantics.
+- 2026-02-19 [bug] Wired admin source disable/delete mutations to trigger bounded shared-session recovery for active channels with non-fatal no-session/pending handling.
+- 2026-02-19 [bug] Prevented source-health clear operations from being overwritten by stale in-flight stream persistence state through stream runtime clear callbacks and persistence cut-off checks.
+- 2026-02-19 [bug] Hardened `HasActiveOrPendingSession` to treat closed/non-admissible mapped sessions as inactive, prune stale map entries, and keep create-pending sessions considered active.
+- 2026-02-19 [docs] Added shared-session lifecycle consolidation Phase B1 evidence ordering by boundary and dependency (control-plane, readiness/termination, shutdown/workers, and state-observability) in coordination planning artifacts.
+- 2026-02-18 [bug] Added runtime `ttf-dejavu` font support for `slate_av` recovery filler and surfaced slate ffmpeg process-exit stderr in keepalive fallback diagnostics.
+- 2026-02-18 [bug] Hardened shared-session blocked-write guards so unsupported or failed response write-deadline setup now fails fast instead of silently bypassing subscriber slow-write teardown bounds.
+- 2026-02-18 [bug] Hardened recovery alternate startup penalty accounting so idle-guard canceled startup attempts no longer apply stale short-lived penalties after subscriber reattach.
+- 2026-02-18 [bug] Hardened shared-session idle cancellation so stale post-validation timeout/preempt paths no longer cancel reattached subscribers.
+- 2026-02-18 [bug] Hardened shared-session recovery keepalive transition semantics so terminal recovery failures no longer emit false `keepalive_to_live` boundaries before session close.
+- 2026-02-18 [bug] Hardened shared-session recovery source gating so `restart_same` and failover fallback no longer retry disabled stale current sources when they are absent from enabled candidates.
+- 2026-02-18 [bug] Hardened tuner idle-preempt callback ownership with lease-token gating so stale shared-session callback clear/register operations on reused slots no longer trigger false no-tuner outcomes.
+- 2026-02-18 [bug] Hardened shared-session manual recovery lifecycle semantics so TriggerRecovery rejects before-ready/non-actionable sessions, coalesces in-flight requests deterministically, preserves accepted triggers across transient zero-subscriber windows, and keeps manual-trigger classification stable across cancel/EOF overlap.
+- 2026-02-18 [bug] Hardened shared-session TriggerRecovery control-plane ownership revalidation so create-pending windows return in-progress conflicts and stale not-found/pending/success outcomes reroute to the active replacement session.
+- 2026-02-18 [bug] Hardened shared-session canceled-context admission so canceled callers no longer reuse/attach successfully on ready sessions, with cancellation-preferred ready-wait semantics and deterministic regressions.
+- 2026-02-18 [bug] Prevented shared-session reuse of canceled-but-not-closed runtimes by adding admission gating in session reuse and subscriber attach paths, with new deterministic regressions for stale canceled session replacement.
+- 2026-02-18 [bug] Hardened source-profile persistence convergence: stale probe writes no longer clobber newer profile metadata (monotonic guard), transient persist failures are retried with bounded backoff, recovery startup infers component state from persisted profile hints, and audio-only probe payloads return partial profiles instead of hard errors.
+- 2026-02-18 [bug] Converged stream blocking-close and startup-abort lifecycle handling with bounded teardown across direct/ffmpeg/prober/pump/shared-session paths, including once-only direct response-body close protection and new cross-path regressions.
+- 2026-02-17 [bug] Hardened source-health persistence ordering convergence: stale success/failure writes no longer clobber newer state, zero-row failure updates return ErrSourceNotFound, transient persistence failures are retried with bounded backoff, post-cancel source-health events are dropped instead of stranding overlays, and background prober skips stale success persistence after probe timeout.
+- 2026-02-17 [bug] Fixed recovery cycle false-stall detection caused by stale LastPublishAt from prior source cycle; runCycle now uses cycle-local publish baselines so new sources get a fair first-publish window before stall checks activate.
+- 2026-02-17 [bug] Fixed tuner acquire error-classification so caller cancellation/deadline is no longer misclassified as capacity exhaustion across probe, preempt-scan, preempt-callback, and preempt-wait paths, and freed-slot races after failed preempt callbacks no longer emit false no-tuner rejections.
+- 2026-02-17 [docs] Addressed docs review follow-ups by documenting `dynamic_channel_item` source associations in `docs/CHANNELS.md` and correcting docs path references in changelog notes.
+- 2026-02-17 [docs] Audited all `docs/*` sections for code parity and corrected architecture/API routes, data-model semantics, streaming/recovery behavior, DVR provider scope, and UI behavior notes.
+- 2026-02-17 [docs] Updated STREAMING.md (profile probing, FFmpegProducer lifecycle, 429 scope derivation), AUTOMATION.md (summary format, skip reason buckets, ScoreHint field), DVR-INTEGRATION.md (IncludeDynamic, lineup caching), DATA-MODEL.md (regex engine internals, keyset pagination rationale, favorites API mapping).
+- 2026-02-17 [docs] Added docs/OPERATIONS.md covering logging architecture, stream profile probing, URL sanitization, tuner status diagnostics, and graceful shutdown lifecycle.
+- 2026-02-17 [docs] Added docs/CHANNELS.md covering channels service layer, dynamic source sync, block guide allocation, group normalization, sentinel errors, and legacy favorites subsystem.
+- 2026-02-17 [docs] Added CATALOG-PIPELINE.md covering M3U parsing, dual-key identity, playlist management, streaming refresh, and source reconciliation subsystems.
+- 2026-02-17 [bug] Added HAR-aligned lineup guide redownload (`PUT /dvr/lineups/{lineupID}`) as a third post-playlist-sync DVR reload step after lineup reload and station-guide/logo refresh.
+- 2026-02-17 [docs] Refreshed architectural documentation accuracy: corrected recovery transition semantics, FK enforcement status, API paths, startup inventory acceptance, and added docs drift CI checks.
+- 2026-02-17 [bug] Hardened shutdown lifecycle so runner, admin sync workers, and stream sessions drain all in-flight work (including async DB persistence) before store.Close(), with force-close fallback when graceful HTTP shutdown times out.
+- 2026-02-16 [feature] Added multi-provider DVR activation with per-provider base URL config so playlist-sync lineup reload can target Channels and Jellyfin together (or a selected subset) with partial-skip status reporting.
+- 2026-02-16 [feature] Added Jellyfin DVR provider support with write-only API token config, `/ui/dvr` Jellyfin credentials panel, HAR-aligned lineup refresh calls, and playlist-sync reload skip metadata for incomplete Jellyfin config.
+- 2026-02-16 [bug] Added post-playlist-sync DVR lineup reload orchestration and guide-station refresh calls so Channels DVR logo/guide metadata refreshes after sync and lineup reload operations.
+- 2026-02-15 [bug] Switched container packaging to consume CI-built `dist/` binaries per target architecture, removing in-Docker compilation from the Dockerfile.
+- 2026-02-15 [bug] Reverted dynamic-rule reconcile to legacy default, added opt-in paged mode toggle, and enforced 1000-match guardrails with truncation warnings.
+- 2026-02-15 [bug] Added bounded paged dynamic-rule reconcile sync for one-off rules using temp-table staging, while preserving shared-rule cached lookup behavior and validating no regressions in dynamic block slot/identity stability.
+- 2026-02-15 [bug] Reduced dynamic reconcile memory pressure by eliminating per-channel dynamic match list cloning and caching large filter results only for shared rules, with dynamic-block stability regression verification.
+- 2026-02-15 [bug] Added streaming playlist refresh ingestion with single-transaction rollback semantics to reduce sync-time memory pressure, plus regression/benchmark coverage for lifecycle parity and allocation reduction.
+- 2026-02-15 [bug] Completed targeted/full/race validation for dynamic block slot-retention and source-identity hardening, including regressions for survivor guide stability, cursor-wrap allocation, and name-churn identity retention.
+- 2026-02-15 [bug] Hardened dynamic block generated-source identity matching so name-only source churn keeps stable guide numbers while duplicate-URL matches fall back to collision-safe item identity.
+- 2026-02-15 [bug] Hardened dynamic channel block sync to preserve survivor virtual numbers with cursor+wrap slot allocation, and reset post-reorder allocation cursor for deterministic new-source placement.
+- 2026-02-15 [bug] Added opt-in SQLite IOERR trace-ring diagnostics with rate-limited pre-failure DB operation dumps, benchmarked low-overhead append path, and updated incident runbook toggles.
+- 2026-02-15 [bug] Added one-shot SQLite IOERR diagnostic bundle logging with run-scoped guards, fallback backoff, runtime pragma/db-file snapshots, and optional WAL checkpoint probing.
+- 2026-02-15 [bug] Hardened playlist/job/channel-source SQLite write diagnostics with phase/progress/run-correlation context and expanded extended-code/db-stats coverage.
+- 2026-02-15 [feature] Refined regex-mode catalog and dynamic search semantics to evaluate one full regex pattern against full item names, with updated API/UI/docs guidance.
+- 2026-02-15 [feature] Added regex-mode catalog/dynamic query execution (`q_regex`/`search_regex`) with UI toggles, bounded regex validation, and full targeted/full/race coverage.
+- 2026-02-15 [feature] Finalized OR-query API/UI/docs contract and added backward-compatible `q_regex` plus dynamic-rule/block `search_regex` persistence with compatibility tests.
+- 2026-02-15 [feature] Extended OR-capable catalog filtering coverage to dynamic reconcile/block materialization paths with deterministic ordering and query-plan/performance guardrails.
+- 2026-02-15 [feature] Added OR-capable catalog/dynamic search parsing and SQL matching with bounded disjunct/term growth while preserving legacy include/exclude behavior.
+- 2026-02-15 [bug] Switched runtime container base to Alpine Linux and installed FFmpeg from Alpine `community`.
+- 2026-02-15 [bug] Added slow-client lag disconnect diagnostics with ring sequence and buffer context fields in stream warning logs.
+- 2026-02-15 [feature] Added `make release-local` to mirror GitLab CI binary build plus multi-arch buildx image publish flow from local environments.
+- 2026-02-15 [bug] Added FFmpeg startup compatibility fallback for unsupported `-readrate_initial_burst` and updated the container runtime base to `debian:trixie-slim` for newer bundled FFmpeg support.
+- 2026-02-15 [bug] Improved SSDP compatibility handling by accepting common `M-SEARCH ST` variants and treating multicast `NOTIFY` announcements as expected non-failure traffic.
+- 2026-02-15 [feature] Polished `/ui/tuners` history diagnostics card density and tab/list visual rhythm for faster scanability while preserving keyboard-first triage behavior.
+- 2026-02-15 [feature] Rebuilt `/ui/tuners` shared-session history into a filterable master-detail console with keyboard-friendly tabbed diagnostics for summary, sources, subscribers, and recovery triage.
+- 2026-02-15 [feature] Enhanced `/ui/tuners` with severity-scored KPI cards, richer active-session diagnostics detail, and grouped/collapsible client-stream triage views.
+- 2026-02-15 [feature] Redesigned `/ui/tuners` into a command-bar diagnostics layout with refresh-stable selection/filter/search/sort state, compact active-session rows, and alert-focused churn visibility cards.
+- 2026-02-14 [bug] Updated GitLab CI container publish to use dynamic `CI_REGISTRY`/`CI_REGISTRY_IMAGE` variables instead of hardcoded registry paths.
+- 2026-02-14 [feature] Updated container image port metadata and added GitLab CI jobs to build binaries and publish a multi-arch (`amd64`/`arm64`) image to `registry-gitlab.internal.arodd.com:8443/arodd/hdhriptv:latest`.
+- 2026-02-14 [docs] Documented `/api/admin/tuners` shared-session history payload fields and `/ui/tuners` history panel retention/truncation behavior.
+- 2026-02-14 [feature] Added bounded shared-session history to `/api/admin/tuners` and delivered a new `/ui/tuners` history panel with expandable source/subscriber timelines.
+- 2026-02-14 [docs] Updated startup troubleshooting guidance to document strict rejection of explicit `video_only`/`audio_only` startup inventory and relaxed-retry failure behavior.
+- 2026-02-14 [bug] Removed relaxed-retry fallback to component-incomplete startup sessions and now fail startup when retries still return explicit single-component inventory.
+- 2026-02-14 [docs] Clarified README startup troubleshooting guidance to reflect strict audio+video startup component requirements.
+- 2026-02-14 [bug] Restored strict startup compatibility to require both video and audio components, reverting recent audio-only recovery fallback/gating paths.
+- 2026-02-14 [bug] Hardened ffplay recovery harness lifecycle cleanup to prevent orphaned runtime processes and repeated-run port collisions.
+- 2026-02-14 [bug] Hardened scoped provider-overlimit cooldown eviction so active/recent `429` scopes remain enforced under high-cardinality churn.
+- 2026-02-13 [bug] Raised default startup tuning to `STARTUP_TIMEOUT=6s`, `FFMPEG_STARTUP_PROBESIZE_BYTES=1000000`, and `FFMPEG_STARTUP_ANALYZEDURATION=1.5s` while keeping runtime minimum floors unchanged.
+- 2026-02-13 [feature] Renamed module and project paths to `hdhriptv` and aligned runtime defaults for low-latency failover behavior.
+- 2026-02-13 [feature] Expanded UPnP/SSDP interoperability with HTTP/1.0 and ATSC probe compatibility plus ContentDirectory/ConnectionManager SOAP support.
+- 2026-02-13 [feature] Completed multi-group dynamic channel workflows across API and UI, including `group_names` compatibility, seedless dynamic create, and channel source observability.
+- 2026-02-13 [bug] Hardened startup/recovery flow with attempt-scoped deadlines, follower cancellation retry, relaxed-retry fallback, transient alternate penalties, and probe-churn throttling.
+- 2026-02-12 [feature] Added UPnP SSDP responder and device-description XML endpoints with expanded compatibility validation coverage.
+- 2026-02-12 [feature] Added exclusion-token search filtering and bounded `/api/groups` pagination/autocomplete behavior.
+- 2026-02-12 [bug] Reduced shared-session recovery churn with idle/cancellation guards, startup deadline enforcement after cooldown waits, and restart-like fallback support.
+- 2026-02-12 [bug] Hardened admin mutation safety with request-detached DVR/automation update flows, superseded-sync preemption, and DVR `base_url` log redaction.
+- 2026-02-11 [feature] Delivered dynamic channel block APIs/UI with autocomplete, paged query endpoints, immediate sync orchestration, and direct detail endpoints.
+- 2026-02-11 [bug] Scoped tune-backoff and overlimit cooldown state to startup leaders/channels to prevent cross-channel starvation and unbounded retention.
+- 2026-02-11 [bug] Hardened pagination/query bounds and reduced hot-path query/allocation overhead across catalog, duplicates, jobs, playlist refresh, and auto-prioritize loading.
+- 2026-02-10 [feature] Added ffplay-based recovery continuity harnessing and tuner-triggered recovery controls for transition diagnostics.
+- 2026-02-10 [bug] Stabilized recovery transition startup behavior with random-access cutover signaling fixes, slate filler startup fixes, and bounded probe/startup handling.
+- 2026-02-10 [bug] Hardened request lifecycle and rollback behavior across scheduler/jobs/dynamic sync/DVR PUT paths; fixed deadlocks, races, and cancellation leaks.
+- 2026-02-10 [docs] Expanded admin/API documentation for pagination, query normalization, sync semantics, rollback safeguards, and source-health/duplicate contracts.
+- 2026-02-09 [feature] Added dynamic query source reconciliation and UI flows, plus source-health caching and global DVR mapping visibility controls.
+- 2026-02-09 [bug] Fixed scheduler/runner ordering, shared-session handoff/teardown races, direct startup timeout enforcement, and proxy-aware rate-limit identity handling.
+- 2026-02-09 [docs] Added architecture documentation and expanded operations runbooks.
+- 2026-02-08 [feature] Shipped DVR lineup sync and reverse-sync workflows (backend, mapping UI, and scheduled jobs), plus catalog fuzzy search and channel UI usability improvements.
+- 2026-02-07 [feature] Added persisted auto-prioritize probe profiles/bitrate metadata, configurable file logging, and priority-worker tuning controls.
+- 2026-02-07 [bug] Improved failover source selection/backoff behavior and strengthened recovery test reliability.
+- 2026-02-06 [feature] Implemented failover foundations with channel/source admin APIs, shared channel sessions, stall recovery, and automation/playlist scheduling controls.
+- 2026-02-06 [feature] Added tuner-aware auto-prioritize jobs, analyzer metrics caching, and shared-session telemetry foundations.
+- 2026-02-06 [bug] Hardened overlimit retry gating, failover settle behavior, reconnect controls, and device identity/stat-cache management.
+- 2026-02-05 [feature] Delivered initial scaffold: playlist ingestion, SQLite catalog persistence, favorites/admin UI+API, HDHR HTTP emulation, streaming, UDP discovery, Avahi integration, and packaging hardening.

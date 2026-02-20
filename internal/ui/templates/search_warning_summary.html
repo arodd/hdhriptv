@@ -1,0 +1,31 @@
+{{define "search-warning-summary-function"}}
+function formatSearchWarningSummary(searchWarning, subject = "Query search") {
+  if (!searchWarning || !Boolean(searchWarning.truncated)) {
+    return "";
+  }
+
+  const termsApplied = Number(searchWarning.terms_applied);
+  const termsDropped = Number(searchWarning.terms_dropped);
+  const disjunctsApplied = Number(searchWarning.disjuncts_applied);
+  const disjunctsDropped = Number(searchWarning.disjuncts_dropped);
+  const termRuneTruncations = Number(searchWarning.term_rune_truncations);
+  const mode = String(searchWarning.mode || "token");
+
+  const details = [];
+  if (Number.isFinite(termsApplied) && Number.isFinite(termsDropped)) {
+    details.push(`terms ${termsApplied} + ${termsDropped} dropped`);
+  }
+  if (Number.isFinite(disjunctsApplied) && Number.isFinite(disjunctsDropped)) {
+    details.push(`OR groups ${disjunctsApplied} + ${disjunctsDropped} dropped`);
+  }
+  if (Number.isFinite(termRuneTruncations) && termRuneTruncations > 0) {
+    details.push(`term rune truncations ${termRuneTruncations}`);
+  }
+
+  if (details.length === 0) {
+    return `${subject} was truncated by ${mode} limits.`;
+  }
+
+  return `${subject} was truncated in ${mode} mode: ${details.join("; ")}.`;
+}
+{{end}}

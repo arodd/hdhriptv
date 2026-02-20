@@ -1,0 +1,1488 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --border: #d6deeb;
+      --text: #152035;
+      --muted: #5a667b;
+      --brand: #0d63e6;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f5f7fc 0%, #eef2f9 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      color: var(--text);
+      background: #fff;
+      min-width: 220px;
+      flex: 1;
+    }
+
+    .mapping-grid input[type="text"] {
+      min-width: 0;
+      width: 100%;
+      flex: unset;
+    }
+
+    button,
+    .action-link {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary,
+    .action-link.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    button.danger {
+      border-color: #efc8c4;
+      background: #fff5f4;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .status {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+      margin-bottom: 10px;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .channel-row,
+    .dynamic-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      gap: 10px;
+      background: #fff;
+    }
+
+    .channel-title {
+      font-weight: 600;
+    }
+
+    .channel-meta {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .search-warning {
+      color: #8b4a12;
+      background: #fff8e1;
+      border: 1px solid #ffe08a;
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.82rem;
+    }
+
+    .dynamic-highlight {
+      border: 1px dashed #9fb8e6;
+      border-radius: 8px;
+      background: #f6f9ff;
+      padding: 8px;
+      color: #274a82;
+      font-size: 0.84rem;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .mapping {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fafcff;
+      display: grid;
+      gap: 8px;
+    }
+
+    .mapping-title {
+      font-size: 0.86rem;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .mapping-grid {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(3, minmax(120px, 1fr));
+    }
+
+    .mapping-field {
+      display: grid;
+      gap: 4px;
+    }
+
+    .mapping-field label {
+      font-size: 0.78rem;
+      color: var(--muted);
+    }
+
+    .mapping-meta {
+      color: var(--muted);
+      font-size: 0.8rem;
+      min-height: 1em;
+    }
+
+    .mapping-collapsed-hint {
+      border: 1px dashed #c8d7f1;
+      border-radius: 8px;
+      padding: 7px 9px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      background: #f6f9ff;
+    }
+
+    .group-picker {
+      width: 100%;
+      border: 1px solid #dce5f5;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .group-picker-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .selected-groups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 26px;
+    }
+
+    .group-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #aac5f0;
+      background: #e9f2ff;
+      color: #1f4e92;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.82rem;
+    }
+
+    .group-chip button {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 0.85rem;
+      line-height: 1;
+      color: #1f4e92;
+      cursor: pointer;
+    }
+
+    .group-picker-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .group-picker-controls input[type="text"] {
+      min-width: 200px;
+      flex: 1;
+    }
+
+    #channel-list.dvr-mappings-hidden .mapping {
+      display: none;
+    }
+
+    #channel-list:not(.dvr-mappings-hidden) .mapping-collapsed-hint {
+      display: none;
+    }
+
+    #dvr-toggle-mappings-btn[aria-pressed="true"] {
+      border-color: #99b9ee;
+      background: #e9f0ff;
+      color: #1d4f94;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 8px 2px;
+    }
+
+    @media (max-width: 820px) {
+      .mapping-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels" class="active">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Traditional Channels (100-9999)</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+        <form id="create-form" class="toolbar">
+          <input id="item-key" type="text" placeholder="Catalog item_key (required)">
+          <input id="guide-name" type="text" placeholder="Guide name override (optional)">
+          <button class="primary" type="submit">Create</button>
+          <button id="refresh-btn" type="button">Refresh</button>
+        </form>
+        <div class="toolbar">
+          <button id="dvr-discover-btn" class="secondary" type="button">Discover DVR Lineups</button>
+          <input id="dvr-default-lineup" type="text" list="lineup-options" placeholder="Default DVR lineup ID">
+          <button id="dvr-save-default-btn" type="button">Save Default Lineup</button>
+          <button id="dvr-dry-run-btn" type="button">Sync Lineup (Dry Run)</button>
+          <button id="dvr-sync-btn" class="secondary" type="button">Sync Lineup Now</button>
+          <button id="dvr-reverse-sync-btn" type="button">Pull Lineup Associations from DVR</button>
+          <button id="dvr-toggle-mappings-btn" type="button" aria-pressed="false">Show DVR Mappings</button>
+          <span id="dvr-mapping-visibility-note" class="channel-meta">DVR mappings hidden by default.</span>
+          <span id="dvr-state" class="channel-meta"></span>
+        </div>
+        <div class="dynamic-highlight">DVR mapping controls intentionally apply to traditional channels only. Dynamic generated channels are excluded from default DVR mapping workflows.</div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Published Traditional Channels</h2>
+      <div class="panel-body">
+        <div id="channels-empty" class="empty" hidden>No traditional channels published yet.</div>
+        <div id="channel-list"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Dynamic Channel Blocks (10000+)</h2>
+      <div class="panel-body">
+        <form id="dynamic-query-create-form" class="toolbar">
+          <input id="dynamic-name" type="text" placeholder="Block name (optional)">
+
+          <div class="group-picker">
+            <div class="group-picker-label">Catalog Groups (Multi-select)</div>
+            <div id="dynamic-group-chips" class="selected-groups"></div>
+            <div class="group-picker-controls">
+              <input id="dynamic-group-input" type="text" list="dynamic-group-options" placeholder="Add catalog group filter (blank = all groups)">
+              <button id="dynamic-group-add" type="button">Add Group</button>
+              <button id="dynamic-group-clear" type="button">All Groups</button>
+            </div>
+          </div>
+
+          <input id="dynamic-search" type="text" placeholder="Catalog search query (token mode: |/OR and -term/!term; regex mode: full pattern)">
+          <label class="channel-meta">
+            <input id="dynamic-search-regex" type="checkbox">
+            Regex mode
+          </label>
+          <label class="channel-meta">
+            <input id="dynamic-enabled" type="checkbox" checked>
+            Enabled
+          </label>
+          <button class="primary" type="submit">Create Dynamic Block</button>
+          <button id="dynamic-refresh-btn" type="button">Refresh Blocks</button>
+        </form>
+        <div id="dynamic-queries-empty" class="empty" hidden>No dynamic channel blocks configured.</div>
+        <div id="dynamic-query-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <datalist id="lineup-options"></datalist>
+  <datalist id="dynamic-group-options"></datalist>
+
+  <script>
+    const dvrMappingVisibilityStorageKey = "ui.channels.showDVRMappings";
+
+    function readDVRMappingsVisibilityPreference() {
+      try {
+        return window.localStorage.getItem(dvrMappingVisibilityStorageKey) === "true";
+      } catch (err) {
+        console.warn("unable to read DVR mapping visibility preference", err);
+        return false;
+      }
+    }
+
+    const state = {
+      traditionalChannels: [],
+      dynamicQueries: [],
+      catalogGroups: [],
+      dynamicCreateGroups: [],
+      dvrMappings: {},
+      defaultLineupID: "",
+      lineups: [],
+      dvrAvailable: true,
+      reorderBusy: false,
+      showDVRMappings: readDVRMappingsVisibilityPreference(),
+    };
+    const channelPageLimit = 200;
+
+    const statusEl = document.getElementById("status");
+    const channelListEl = document.getElementById("channel-list");
+    const channelsEmptyEl = document.getElementById("channels-empty");
+    const dynamicListEl = document.getElementById("dynamic-query-list");
+    const dynamicEmptyEl = document.getElementById("dynamic-queries-empty");
+    const dvrStateEl = document.getElementById("dvr-state");
+    const lineupOptionsEl = document.getElementById("lineup-options");
+    const dynamicGroupOptionsEl = document.getElementById("dynamic-group-options");
+    const dynamicGroupChipsEl = document.getElementById("dynamic-group-chips");
+    const dynamicGroupInputEl = document.getElementById("dynamic-group-input");
+    const dynamicSearchRegexEl = document.getElementById("dynamic-search-regex");
+    const defaultLineupEl = document.getElementById("dvr-default-lineup");
+    const dvrToggleMappingsBtn = document.getElementById("dvr-toggle-mappings-btn");
+    const dvrMappingVisibilityNoteEl = document.getElementById("dvr-mapping-visibility-note");
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.classList.toggle("error", isError);
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 3500);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "request failed", true);
+    }
+
+    {{template "search-warning-summary-function"}}
+
+    function persistDVRMappingVisibilityPreference() {
+      try {
+        window.localStorage.setItem(dvrMappingVisibilityStorageKey, state.showDVRMappings ? "true" : "false");
+      } catch (err) {
+        console.warn("unable to persist DVR mapping visibility preference", err);
+      }
+    }
+
+    function updateDVRMappingVisibilityControls() {
+      dvrToggleMappingsBtn.textContent = state.showDVRMappings ? "Hide DVR Mappings" : "Show DVR Mappings";
+      dvrToggleMappingsBtn.setAttribute("aria-pressed", state.showDVRMappings ? "true" : "false");
+      dvrToggleMappingsBtn.disabled = !state.dvrAvailable;
+      if (!state.dvrAvailable) {
+        dvrMappingVisibilityNoteEl.textContent = "DVR mappings unavailable in this runtime.";
+        return;
+      }
+      dvrMappingVisibilityNoteEl.textContent = state.showDVRMappings
+        ? "DVR mappings visible for traditional channels."
+        : "DVR mappings hidden by default.";
+    }
+
+    function applyDVRMappingVisibility() {
+      channelListEl.classList.toggle("dvr-mappings-hidden", !state.showDVRMappings);
+      updateDVRMappingVisibilityControls();
+    }
+
+    function setShowDVRMappings(next) {
+      state.showDVRMappings = Boolean(next);
+      persistDVRMappingVisibilityPreference();
+      applyDVRMappingVisibility();
+    }
+
+    function updateDVRStateSummary() {
+      if (!state.dvrAvailable) {
+        dvrStateEl.textContent = "DVR mapping APIs unavailable in this build/runtime.";
+        return;
+      }
+      const lineupCount = state.lineups.length;
+      const defaultText = state.defaultLineupID ? `default ${state.defaultLineupID}` : "no default lineup";
+      dvrStateEl.textContent = `DVR ready: ${defaultText}, ${lineupCount} discovered lineup${lineupCount === 1 ? "" : "s"}.`;
+    }
+
+    function renderLineupOptions() {
+      lineupOptionsEl.innerHTML = "";
+      for (const lineup of state.lineups) {
+        const option = document.createElement("option");
+        option.value = lineup.id || "";
+        lineupOptionsEl.appendChild(option);
+      }
+    }
+
+    function normalizeGroupName(raw) {
+      if (raw && typeof raw === "object") {
+        if (typeof raw.name === "string") {
+          return raw.name.trim();
+        }
+        if (typeof raw.Name === "string") {
+          return raw.Name.trim();
+        }
+      }
+      return "";
+    }
+
+    function normalizeGroupNameValue(raw) {
+      return String(raw || "").trim();
+    }
+
+    function normalizeGroupNameList(raw) {
+      const deduped = new Map();
+      for (const value of raw || []) {
+        const trimmed = normalizeGroupNameValue(value);
+        if (!trimmed) {
+          continue;
+        }
+        const key = trimmed.toLowerCase();
+        if (deduped.has(key)) {
+          continue;
+        }
+        deduped.set(key, trimmed);
+      }
+      return Array.from(deduped.entries())
+        .sort((a, b) => {
+          if (a[0] === b[0]) {
+            return a[1].localeCompare(b[1]);
+          }
+          return a[0].localeCompare(b[0]);
+        })
+        .map((entry) => entry[1]);
+    }
+
+    function groupAlias(groupNames) {
+      return groupNames.length > 0 ? groupNames[0] : "";
+    }
+
+    function normalizeDynamicQueryGroups(query) {
+      const rawList = Array.isArray(query?.group_names) ? query.group_names : [];
+      const rawLegacy = normalizeGroupNameValue(query?.group_name || "");
+      return normalizeGroupNameList(rawList.length > 0 ? rawList : [rawLegacy]);
+    }
+
+    function asNonNegativeInt(raw) {
+      const value = Number(raw);
+      if (!Number.isFinite(value) || value < 0) {
+        return 0;
+      }
+      return Math.floor(value);
+    }
+
+    function formatChannelSourceSummary(ch) {
+      const total = asNonNegativeInt(ch?.source_total);
+      const enabled = Math.min(asNonNegativeInt(ch?.source_enabled), total);
+      const dynamicManaged = Math.min(asNonNegativeInt(ch?.source_dynamic), total);
+      const manualManaged = Math.min(asNonNegativeInt(ch?.source_manual), total);
+      return `sources ${enabled}/${total} enabled | dynamic-managed ${dynamicManaged} | manual-managed ${manualManaged}`;
+    }
+
+    function formatChannelDynamicRuleStatus(ch) {
+      if (ch?.dynamic_rule?.enabled) {
+        return "dynamic query enabled";
+      }
+      return "dynamic query disabled";
+    }
+
+    function renderDynamicGroupOptions() {
+      dynamicGroupOptionsEl.innerHTML = "";
+      const merged = normalizeGroupNameList(state.catalogGroups.concat(state.dynamicCreateGroups));
+      for (const groupName of merged) {
+        const option = document.createElement("option");
+        option.value = groupName;
+        dynamicGroupOptionsEl.appendChild(option);
+      }
+    }
+
+    function renderDynamicCreateGroupChips() {
+      dynamicGroupChipsEl.innerHTML = "";
+      if (state.dynamicCreateGroups.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "empty";
+        hint.textContent = "All groups selected.";
+        dynamicGroupChipsEl.appendChild(hint);
+        return;
+      }
+
+      for (const groupName of state.dynamicCreateGroups) {
+        const chip = document.createElement("div");
+        chip.className = "group-chip";
+
+        const label = document.createElement("span");
+        label.textContent = groupName;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "x";
+        removeBtn.setAttribute("aria-label", `Remove ${groupName}`);
+        removeBtn.addEventListener("click", () => {
+          state.dynamicCreateGroups = state.dynamicCreateGroups.filter((name) => name !== groupName);
+          renderDynamicCreateGroupChips();
+          renderDynamicGroupOptions();
+        });
+
+        chip.append(label, removeBtn);
+        dynamicGroupChipsEl.appendChild(chip);
+      }
+    }
+
+    function addDynamicCreateGroupFromInput() {
+      const next = normalizeGroupNameValue(dynamicGroupInputEl.value);
+      dynamicGroupInputEl.value = "";
+      if (!next) {
+        return;
+      }
+      if (state.dynamicCreateGroups.includes(next)) {
+        return;
+      }
+      state.dynamicCreateGroups = normalizeGroupNameList(state.dynamicCreateGroups.concat(next));
+      renderDynamicCreateGroupChips();
+      renderDynamicGroupOptions();
+    }
+
+    function clearDynamicCreateGroups() {
+      state.dynamicCreateGroups = [];
+      renderDynamicCreateGroupChips();
+      renderDynamicGroupOptions();
+    }
+
+    async function loadCatalogGroups() {
+      try {
+        const groups = await loadPagedCollection("/api/groups?include_counts=0", "groups");
+        state.catalogGroups = groups.map(normalizeGroupName).filter((name) => name.length > 0);
+      } catch (err) {
+        console.warn("unable to load catalog groups for dynamic block autocomplete", err);
+        state.catalogGroups = [];
+      }
+      renderDynamicGroupOptions();
+      renderDynamicCreateGroupChips();
+    }
+
+    async function refreshDVRLineupsIfNeeded() {
+      if (!state.dvrAvailable || state.lineups.length > 0) {
+        return;
+      }
+      try {
+        const payload = await api("/api/admin/dvr/lineups?refresh=1");
+        state.lineups = payload.lineups || [];
+      } catch (err) {
+        console.warn("initial lineup discovery failed", err);
+      }
+    }
+
+    async function loadDVRState() {
+      try {
+        const payload = await api("/api/admin/dvr");
+        const instance = payload.instance || {};
+        state.defaultLineupID = instance.default_lineup_id || "";
+        state.lineups = payload.cached_lineups || [];
+        state.dvrAvailable = true;
+        await refreshDVRLineupsIfNeeded();
+      } catch (err) {
+        state.dvrAvailable = false;
+        state.defaultLineupID = "";
+        state.lineups = [];
+      }
+
+      defaultLineupEl.value = state.defaultLineupID;
+      renderLineupOptions();
+      updateDVRStateSummary();
+      applyDVRMappingVisibility();
+    }
+
+    async function loadPagedCollection(path, key, pageLimit = channelPageLimit) {
+      const items = [];
+      let offset = 0;
+      let total = -1;
+
+      while (true) {
+        const params = new URLSearchParams({
+          limit: String(pageLimit),
+          offset: String(offset),
+        });
+        const separator = path.includes("?") ? "&" : "?";
+        const data = await api(`${path}${separator}${params.toString()}`);
+        const page = Array.isArray(data?.[key]) ? data[key] : [];
+        const reportedTotal = Number(data?.total);
+        if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
+          total = reportedTotal;
+        }
+
+        items.push(...page);
+        if (page.length === 0) {
+          break;
+        }
+
+        const reportedLimit = Number(data?.limit);
+        const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
+        if (step <= 0) {
+          break;
+        }
+        offset += step;
+
+        if (total >= 0 && offset >= total) {
+          break;
+        }
+      }
+
+      return items;
+    }
+
+    async function loadTraditionalChannels() {
+      state.traditionalChannels = await loadPagedCollection("/api/channels", "channels");
+      await loadDVRMappings();
+      renderTraditionalChannels();
+    }
+
+    async function loadDynamicQueries() {
+      state.dynamicQueries = await loadPagedCollection("/api/dynamic-channels", "queries");
+      renderDynamicQueries();
+    }
+
+    async function loadDVRMappings() {
+      state.dvrMappings = {};
+      if (!state.dvrAvailable || state.traditionalChannels.length === 0) {
+        return;
+      }
+
+      const mappings = await loadPagedCollection(
+        "/api/channels/dvr?enabled_only=0&include_dynamic=0",
+        "mappings",
+      );
+      for (const mapping of mappings) {
+        const channelID = Number(mapping.channel_id || 0);
+        if (channelID > 0) {
+          state.dvrMappings[channelID] = mapping;
+        }
+      }
+    }
+
+    function renderTraditionalChannels() {
+      channelListEl.innerHTML = "";
+      channelsEmptyEl.hidden = state.traditionalChannels.length > 0;
+
+      for (let i = 0; i < state.traditionalChannels.length; i++) {
+        const ch = state.traditionalChannels[i];
+        const mapping = state.dvrMappings[ch.channel_id] || {};
+
+        const row = document.createElement("div");
+        row.className = "channel-row";
+
+        const title = document.createElement("div");
+        title.className = "channel-title";
+        title.textContent = `${ch.guide_number} ${ch.guide_name}`;
+
+        const meta = document.createElement("div");
+        meta.className = "channel-meta";
+        meta.textContent = `${ch.channel_key || "(manual key)"} | position ${i + 1}/${state.traditionalChannels.length} | order ${ch.order_index} | ${ch.enabled ? "enabled" : "disabled"} | ${formatChannelDynamicRuleStatus(ch)} | ${formatChannelSourceSummary(ch)}`;
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+        const reorderLocked = state.reorderBusy;
+
+        const detailLink = document.createElement("a");
+        detailLink.className = "action-link secondary";
+        detailLink.href = `/ui/channels/${ch.channel_id}`;
+        detailLink.textContent = "Details";
+
+        const upBtn = document.createElement("button");
+        upBtn.textContent = "Move Up";
+        upBtn.disabled = reorderLocked || i === 0;
+        upBtn.addEventListener("click", () => reorderChannel(i, -1).catch(handleError));
+
+        const downBtn = document.createElement("button");
+        downBtn.textContent = "Move Down";
+        downBtn.disabled = reorderLocked || i === state.traditionalChannels.length - 1;
+        downBtn.addEventListener("click", () => reorderChannel(i, +1).catch(handleError));
+
+        const topBtn = document.createElement("button");
+        topBtn.textContent = "Top";
+        topBtn.disabled = reorderLocked || i === 0;
+        topBtn.addEventListener("click", () => reorderChannelToIndex(i, 0).catch(handleError));
+
+        const bottomBtn = document.createElement("button");
+        bottomBtn.textContent = "Bottom";
+        bottomBtn.disabled = reorderLocked || i === state.traditionalChannels.length - 1;
+        bottomBtn.addEventListener("click", () => reorderChannelToIndex(i, state.traditionalChannels.length - 1).catch(handleError));
+
+        const moveToBtn = document.createElement("button");
+        moveToBtn.className = "secondary";
+        moveToBtn.textContent = "Move To...";
+        moveToBtn.disabled = reorderLocked || state.traditionalChannels.length <= 1;
+        moveToBtn.addEventListener("click", () => promptMoveChannelPosition(i, ch).catch(handleError));
+
+        const renameBtn = document.createElement("button");
+        renameBtn.className = "secondary";
+        renameBtn.textContent = "Rename";
+        renameBtn.addEventListener("click", () => renameChannel(ch).catch(handleError));
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.textContent = ch.enabled ? "Disable" : "Enable";
+        toggleBtn.addEventListener("click", () => setChannelEnabled(ch, !ch.enabled).catch(handleError));
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "danger";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.addEventListener("click", () => deleteChannel(ch).catch(handleError));
+
+        actions.append(detailLink, topBtn, upBtn, downBtn, bottomBtn, moveToBtn, renameBtn, toggleBtn, deleteBtn);
+
+        row.append(title, meta, actions);
+
+        if (state.dvrAvailable) {
+          const mappingHiddenHint = document.createElement("div");
+          mappingHiddenHint.className = "mapping-collapsed-hint";
+          mappingHiddenHint.textContent = "DVR mapping hidden for this channel. Click Show DVR Mappings to edit.";
+          row.appendChild(mappingHiddenHint);
+          row.appendChild(renderMappingSection(ch, mapping));
+        } else {
+          const unavailable = document.createElement("div");
+          unavailable.className = "mapping-meta";
+          unavailable.textContent = "DVR mapping editor unavailable (DVR service not configured).";
+          row.appendChild(unavailable);
+        }
+
+        channelListEl.appendChild(row);
+      }
+
+      applyDVRMappingVisibility();
+    }
+
+    function renderDynamicQueries() {
+      dynamicListEl.innerHTML = "";
+      dynamicEmptyEl.hidden = state.dynamicQueries.length > 0;
+
+      for (const query of state.dynamicQueries) {
+        const row = document.createElement("div");
+        row.className = "dynamic-row";
+
+        const displayName = String(query.name || "").trim() || `Block ${query.order_index}`;
+        const title = document.createElement("div");
+        title.className = "channel-title";
+        title.textContent = `${displayName} (${query.block_start}-${query.block_end})`;
+
+        const meta = document.createElement("div");
+        meta.className = "channel-meta";
+        const warningSummary = formatSearchWarningSummary(query.search_warning);
+        const truncation = Number(query.truncated_by || 0) > 0
+          ? ` | truncated by ${query.truncated_by}`
+          : "";
+        const queryGroups = normalizeDynamicQueryGroups(query);
+        const groupSummary = queryGroups.length > 0 ? queryGroups.join(", ") : "(any)";
+        meta.textContent = `order ${query.order_index} | ${query.enabled ? "enabled" : "disabled"} | mode ${query.search_regex ? "regex" : "token"} | groups ${groupSummary} | query ${query.search_query || "(any)"} | generated ${query.generated_count || 0}${truncation}`;
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+
+        const detailLink = document.createElement("a");
+        detailLink.className = "action-link secondary";
+        detailLink.href = `/ui/dynamic-channels/${query.query_id}`;
+        detailLink.textContent = "Block Details";
+
+        const quickEditBtn = document.createElement("button");
+        quickEditBtn.textContent = "Quick Edit";
+        quickEditBtn.addEventListener("click", () => quickEditDynamicQuery(query).catch(handleError));
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.className = "secondary";
+        toggleBtn.textContent = query.enabled ? "Disable" : "Enable";
+        toggleBtn.addEventListener("click", () => updateDynamicQuery(query.query_id, { enabled: !query.enabled }).catch(handleError));
+
+        const deleteBtn = document.createElement("button");
+        deleteBtn.className = "danger";
+        deleteBtn.textContent = "Delete";
+        deleteBtn.addEventListener("click", () => deleteDynamicQuery(query).catch(handleError));
+
+        const warning = document.createElement("div");
+        if (warningSummary) {
+          warning.className = "search-warning";
+          warning.textContent = warningSummary;
+        }
+
+        actions.append(detailLink, quickEditBtn, toggleBtn, deleteBtn);
+        row.append(title, meta);
+        if (warningSummary) {
+          row.append(warning);
+        }
+        row.append(actions);
+        dynamicListEl.appendChild(row);
+      }
+    }
+
+    function renderMappingSection(channel, mapping) {
+      const wrap = document.createElement("div");
+      wrap.className = "mapping";
+
+      const heading = document.createElement("div");
+      heading.className = "mapping-title";
+      heading.textContent = "DVR Mapping";
+
+      const grid = document.createElement("div");
+      grid.className = "mapping-grid";
+
+      const lineupField = document.createElement("div");
+      lineupField.className = "mapping-field";
+      const lineupLabel = document.createElement("label");
+      lineupLabel.textContent = "DVR Lineup ID";
+      const lineupInput = document.createElement("input");
+      lineupInput.type = "text";
+      lineupInput.setAttribute("list", "lineup-options");
+      lineupInput.placeholder = "Default lineup will be used if blank";
+      lineupInput.value = mapping.dvr_lineup_id || state.defaultLineupID || "";
+      lineupField.append(lineupLabel, lineupInput);
+
+      const lineupChannelField = document.createElement("div");
+      lineupChannelField.className = "mapping-field";
+      const lineupChannelLabel = document.createElement("label");
+      lineupChannelLabel.textContent = "Lineup Channel Number";
+      const lineupChannelInput = document.createElement("input");
+      lineupChannelInput.type = "text";
+      lineupChannelInput.placeholder = "1740, 3.1, ...";
+      lineupChannelInput.value = mapping.dvr_lineup_channel || "";
+      lineupChannelField.append(lineupChannelLabel, lineupChannelInput);
+
+      const stationRefField = document.createElement("div");
+      stationRefField.className = "mapping-field";
+      const stationRefLabel = document.createElement("label");
+      stationRefLabel.textContent = "Station Ref (optional)";
+      const stationRefInput = document.createElement("input");
+      stationRefInput.type = "text";
+      stationRefInput.placeholder = "e.g. 21236";
+      stationRefInput.value = mapping.dvr_station_ref || "";
+      stationRefField.append(stationRefLabel, stationRefInput);
+
+      const hintField = document.createElement("div");
+      hintField.className = "mapping-field";
+      const hintLabel = document.createElement("label");
+      hintLabel.textContent = "Callsign Hint (optional)";
+      const hintInput = document.createElement("input");
+      hintInput.type = "text";
+      hintInput.placeholder = "Optional disambiguation";
+      hintInput.value = mapping.dvr_callsign_hint || "";
+      hintField.append(hintLabel, hintInput);
+
+      grid.append(lineupField, lineupChannelField, stationRefField, hintField);
+
+      const actionRow = document.createElement("div");
+      actionRow.className = "row-actions";
+
+      const saveBtn = document.createElement("button");
+      saveBtn.className = "secondary";
+      saveBtn.textContent = "Save DVR Mapping";
+      saveBtn.addEventListener("click", async () => {
+        try {
+          saveBtn.disabled = true;
+          await saveDVRMapping(channel, {
+            dvr_lineup_id: lineupInput.value.trim(),
+            dvr_lineup_channel: lineupChannelInput.value.trim(),
+            dvr_callsign_hint: hintInput.value.trim(),
+            dvr_station_ref: stationRefInput.value.trim(),
+          });
+          showStatus(`Saved DVR mapping for ${channel.guide_number} ${channel.guide_name}`);
+        } catch (err) {
+          handleError(err);
+        } finally {
+          saveBtn.disabled = false;
+        }
+      });
+
+      const clearBtn = document.createElement("button");
+      clearBtn.textContent = "Clear Mapping";
+      clearBtn.addEventListener("click", async () => {
+        try {
+          clearBtn.disabled = true;
+          lineupInput.value = "";
+          lineupChannelInput.value = "";
+          stationRefInput.value = "";
+          hintInput.value = "";
+          await saveDVRMapping(channel, {
+            dvr_lineup_id: "",
+            dvr_lineup_channel: "",
+            dvr_callsign_hint: "",
+            dvr_station_ref: "",
+          });
+          showStatus(`Cleared DVR mapping for ${channel.guide_number} ${channel.guide_name}`);
+        } catch (err) {
+          handleError(err);
+        } finally {
+          clearBtn.disabled = false;
+        }
+      });
+
+      const reverseSyncBtn = document.createElement("button");
+      reverseSyncBtn.textContent = "Pull from DVR";
+      reverseSyncBtn.addEventListener("click", async () => {
+        try {
+          reverseSyncBtn.disabled = true;
+          const lineupID = lineupInput.value.trim() || state.defaultLineupID || "";
+          await reverseSyncChannel(channel, lineupID);
+          showStatus(`Pulled DVR mapping for ${channel.guide_number} ${channel.guide_name}`);
+        } catch (err) {
+          handleError(err);
+        } finally {
+          reverseSyncBtn.disabled = false;
+        }
+      });
+
+      actionRow.append(saveBtn, clearBtn, reverseSyncBtn);
+
+      const stationMeta = document.createElement("div");
+      stationMeta.className = "mapping-meta";
+      const stationRef = (mapping.dvr_station_ref || "").trim();
+      stationMeta.textContent = stationRef
+        ? `Cached station ref: ${stationRef}`
+        : "Cached station ref: (none)";
+
+      wrap.append(heading, grid, actionRow, stationMeta);
+      return wrap;
+    }
+
+    async function saveDVRMapping(channel, payload) {
+      const mapping = await api(`/api/channels/${channel.channel_id}/dvr`, {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+      state.dvrMappings[channel.channel_id] = mapping;
+      renderTraditionalChannels();
+    }
+
+    async function createChannel(event) {
+      event.preventDefault();
+
+      const itemKey = document.getElementById("item-key").value.trim();
+      const guideName = document.getElementById("guide-name").value.trim();
+
+      if (!itemKey) {
+        showStatus("item_key is required", true);
+        return;
+      }
+
+      await api("/api/channels", {
+        method: "POST",
+        body: JSON.stringify({
+          item_key: itemKey,
+          guide_name: guideName,
+        }),
+      });
+
+      document.getElementById("item-key").value = "";
+      document.getElementById("guide-name").value = "";
+      await loadTraditionalChannels();
+      showStatus("Channel created");
+    }
+
+    async function createDynamicQuery(event) {
+      event.preventDefault();
+
+      const name = document.getElementById("dynamic-name").value.trim();
+      const groupNames = normalizeGroupNameList(state.dynamicCreateGroups);
+      const searchQuery = document.getElementById("dynamic-search").value.trim();
+      const searchRegex = Boolean(dynamicSearchRegexEl.checked);
+      const enabled = Boolean(document.getElementById("dynamic-enabled").checked);
+
+      const created = await api("/api/dynamic-channels", {
+        method: "POST",
+        body: JSON.stringify({
+          name,
+          group_name: groupAlias(groupNames),
+          group_names: groupNames,
+          search_query: searchQuery,
+          search_regex: searchRegex,
+          enabled,
+        }),
+      });
+      const warning = formatSearchWarningSummary(created?.search_warning);
+
+      document.getElementById("dynamic-name").value = "";
+      state.dynamicCreateGroups = [];
+      renderDynamicCreateGroupChips();
+      renderDynamicGroupOptions();
+      document.getElementById("dynamic-search").value = "";
+      dynamicSearchRegexEl.checked = false;
+      document.getElementById("dynamic-enabled").checked = true;
+
+      await loadDynamicQueries();
+      showStatus(`Dynamic channel block created${warning ? `: ${warning}` : ""}`);
+    }
+
+    async function updateDynamicQuery(queryID, patch) {
+      const updated = await api(`/api/dynamic-channels/${queryID}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+      const warning = formatSearchWarningSummary(updated?.search_warning);
+      await loadDynamicQueries();
+      await loadTraditionalChannels();
+      showStatus(`Dynamic channel block updated${warning ? `: ${warning}` : ""}`);
+    }
+
+    function parseBooleanInput(value, fieldName) {
+      const normalized = String(value || "").trim().toLowerCase();
+      if (["1", "true", "yes", "on"].includes(normalized)) {
+        return true;
+      }
+      if (["0", "false", "no", "off"].includes(normalized)) {
+        return false;
+      }
+      throw new Error(`${fieldName} must be true or false`);
+    }
+
+    async function quickEditDynamicQuery(query) {
+      const nextName = window.prompt("Dynamic block name", query.name || "");
+      if (nextName === null) {
+        return;
+      }
+      const existingGroups = normalizeDynamicQueryGroups(query);
+      const nextGroupsRaw = window.prompt("Catalog groups CSV (blank = any)", existingGroups.join(", "));
+      if (nextGroupsRaw === null) {
+        return;
+      }
+      const nextSearch = window.prompt("Catalog search query (blank = any; token mode uses |/OR and -term/!term, regex mode uses one full pattern)", query.search_query || "");
+      if (nextSearch === null) {
+        return;
+      }
+      const enabledRaw = window.prompt("Enabled? (true/false)", query.enabled ? "true" : "false");
+      if (enabledRaw === null) {
+        return;
+      }
+      const regexRaw = window.prompt("Regex mode? (true/false)", query.search_regex ? "true" : "false");
+      if (regexRaw === null) {
+        return;
+      }
+
+      const enabled = parseBooleanInput(enabledRaw, "enabled");
+      const searchRegex = parseBooleanInput(regexRaw, "search_regex");
+      const nextGroups = normalizeGroupNameList(String(nextGroupsRaw || "").split(","));
+      await updateDynamicQuery(query.query_id, {
+        name: String(nextName).trim(),
+        group_name: groupAlias(nextGroups),
+        group_names: nextGroups,
+        search_query: String(nextSearch).trim(),
+        search_regex: searchRegex,
+        enabled,
+      });
+    }
+
+    async function deleteDynamicQuery(query) {
+      const label = String(query.name || "").trim() || `Block ${query.order_index}`;
+      const confirmed = window.confirm(`Delete dynamic block ${label} (${query.block_start}-${query.block_end})?`);
+      if (!confirmed) {
+        return;
+      }
+      await api(`/api/dynamic-channels/${query.query_id}`, { method: "DELETE" });
+      await loadDynamicQueries();
+      await loadTraditionalChannels();
+      showStatus("Dynamic channel block deleted");
+    }
+
+    async function reorderChannel(index, delta) {
+      await reorderChannelToIndex(index, index + delta);
+    }
+
+    async function reorderChannelToIndex(index, target) {
+      if (state.reorderBusy) {
+        return;
+      }
+
+      const next = [...state.traditionalChannels];
+      if (target < 0 || target >= next.length) {
+        return;
+      }
+      if (index < 0 || index >= next.length || index === target) {
+        return;
+      }
+
+      const moved = next[index];
+      next.splice(index, 1);
+      next.splice(target, 0, moved);
+
+      state.reorderBusy = true;
+      renderTraditionalChannels();
+      try {
+        await api("/api/channels/reorder", {
+          method: "PATCH",
+          body: JSON.stringify({ channel_ids: next.map((c) => c.channel_id) }),
+        });
+        state.traditionalChannels = next;
+        showStatus("Channels reordered");
+      } finally {
+        state.reorderBusy = false;
+        renderTraditionalChannels();
+      }
+    }
+
+    async function promptMoveChannelPosition(index, channel) {
+      const total = state.traditionalChannels.length;
+      if (total <= 1) {
+        return;
+      }
+
+      const input = window.prompt(
+        `Move ${channel.guide_number} ${channel.guide_name} to which position? Enter 1-${total}.`,
+        String(index + 1),
+      );
+      if (input === null) {
+        return;
+      }
+
+      const trimmed = input.trim();
+      if (!/^\d+$/.test(trimmed)) {
+        showStatus("Position must be a whole number", true);
+        return;
+      }
+
+      const target = Number.parseInt(trimmed, 10) - 1;
+      if (target < 0 || target >= total) {
+        showStatus(`Position must be between 1 and ${total}`, true);
+        return;
+      }
+
+      await reorderChannelToIndex(index, target);
+    }
+
+    async function renameChannel(ch) {
+      const nextName = window.prompt("New guide name", ch.guide_name || "");
+      if (nextName === null) {
+        return;
+      }
+
+      const trimmed = nextName.trim();
+      if (!trimmed) {
+        showStatus("Guide name must not be empty", true);
+        return;
+      }
+
+      await api(`/api/channels/${ch.channel_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ guide_name: trimmed }),
+      });
+
+      await loadTraditionalChannels();
+      showStatus("Channel renamed");
+    }
+
+    async function setChannelEnabled(ch, enabled) {
+      await api(`/api/channels/${ch.channel_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      });
+
+      await loadTraditionalChannels();
+      showStatus(enabled ? "Channel enabled" : "Channel disabled");
+    }
+
+    async function deleteChannel(ch) {
+      const confirmed = window.confirm(`Delete ${ch.guide_number} ${ch.guide_name}?`);
+      if (!confirmed) {
+        return;
+      }
+
+      await api(`/api/channels/${ch.channel_id}`, { method: "DELETE" });
+      await loadTraditionalChannels();
+      showStatus("Channel deleted");
+    }
+
+    async function discoverDVRLineups() {
+      if (!state.dvrAvailable) {
+        throw new Error("DVR API is unavailable");
+      }
+      const payload = await api("/api/admin/dvr/lineups?refresh=1");
+      state.lineups = payload.lineups || [];
+      if (!state.defaultLineupID && state.lineups.length === 1) {
+        defaultLineupEl.value = state.lineups[0].id || "";
+      }
+      renderLineupOptions();
+      updateDVRStateSummary();
+      showStatus(`Discovered ${state.lineups.length} DVR lineup(s)`);
+    }
+
+    async function saveDefaultLineup() {
+      if (!state.dvrAvailable) {
+        throw new Error("DVR API is unavailable");
+      }
+      const lineupID = defaultLineupEl.value.trim();
+      const updated = await api("/api/admin/dvr", {
+        method: "PUT",
+        body: JSON.stringify({ default_lineup_id: lineupID }),
+      });
+      const instance = updated.instance || {};
+      state.defaultLineupID = instance.default_lineup_id || "";
+      defaultLineupEl.value = state.defaultLineupID;
+      updateDVRStateSummary();
+      showStatus(state.defaultLineupID ? `Default lineup saved: ${state.defaultLineupID}` : "Default lineup cleared");
+    }
+
+    async function runDVRSync(dryRun) {
+      if (!state.dvrAvailable) {
+        throw new Error("DVR API is unavailable");
+      }
+      const result = await api("/api/admin/dvr/sync", {
+        method: "POST",
+        body: JSON.stringify({ dry_run: dryRun }),
+      });
+      const msg = dryRun
+        ? `Dry-run: ${result.updated_count || 0} update(s), ${result.cleared_count || 0} clear(s)`
+        : `Sync complete: ${result.updated_count || 0} update(s), ${result.cleared_count || 0} clear(s)`;
+      showStatus(msg);
+      await loadDVRState();
+      await loadDVRMappings();
+      renderTraditionalChannels();
+    }
+
+    async function runDVRReverseSync() {
+      if (!state.dvrAvailable) {
+        throw new Error("DVR API is unavailable");
+      }
+      const lineupID = (defaultLineupEl.value.trim() || state.defaultLineupID || "").trim();
+      const result = await api("/api/admin/dvr/reverse-sync", {
+        method: "POST",
+        body: JSON.stringify({ lineup_id: lineupID }),
+      });
+      showStatus(
+        `Pulled associations: imported ${result.imported_count || 0}, unchanged ${result.unchanged_count || 0}`,
+      );
+      await loadDVRState();
+      await loadDVRMappings();
+      renderTraditionalChannels();
+    }
+
+    async function reverseSyncChannel(channel, lineupID) {
+      if (!state.dvrAvailable) {
+        throw new Error("DVR API is unavailable");
+      }
+      await api(`/api/channels/${channel.channel_id}/dvr/reverse-sync`, {
+        method: "POST",
+        body: JSON.stringify({ lineup_id: lineupID || "" }),
+      });
+      const mapping = await api(`/api/channels/${channel.channel_id}/dvr`);
+      state.dvrMappings[channel.channel_id] = mapping;
+      renderTraditionalChannels();
+    }
+
+    function withBusy(button, work) {
+      const prior = button.textContent;
+      button.disabled = true;
+      button.textContent = "Working...";
+      return Promise.resolve()
+        .then(work)
+        .finally(() => {
+          button.disabled = false;
+          button.textContent = prior;
+        });
+    }
+
+    async function loadAll() {
+      await loadDVRState();
+      await Promise.all([
+        loadTraditionalChannels(),
+        loadDynamicQueries(),
+        loadCatalogGroups(),
+      ]);
+    }
+
+    document.getElementById("create-form").addEventListener("submit", (event) => {
+      createChannel(event).catch(handleError);
+    });
+
+    document.getElementById("dynamic-query-create-form").addEventListener("submit", (event) => {
+      createDynamicQuery(event).catch(handleError);
+    });
+
+    document.getElementById("dynamic-group-add").addEventListener("click", () => {
+      addDynamicCreateGroupFromInput();
+    });
+
+    dynamicGroupInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === ",") {
+        event.preventDefault();
+        addDynamicCreateGroupFromInput();
+      }
+    });
+
+    document.getElementById("dynamic-group-clear").addEventListener("click", () => {
+      clearDynamicCreateGroups();
+    });
+
+    document.getElementById("refresh-btn").addEventListener("click", () => {
+      loadTraditionalChannels().then(() => showStatus("Channel list refreshed")).catch(handleError);
+    });
+
+    document.getElementById("dynamic-refresh-btn").addEventListener("click", () => {
+      loadDynamicQueries().then(() => showStatus("Dynamic blocks refreshed")).catch(handleError);
+    });
+
+    document.getElementById("dvr-discover-btn").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, discoverDVRLineups).catch(handleError);
+    });
+
+    document.getElementById("dvr-save-default-btn").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, saveDefaultLineup).catch(handleError);
+    });
+
+    document.getElementById("dvr-dry-run-btn").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, () => runDVRSync(true)).catch(handleError);
+    });
+
+    document.getElementById("dvr-sync-btn").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, () => runDVRSync(false)).catch(handleError);
+    });
+
+    document.getElementById("dvr-reverse-sync-btn").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, runDVRReverseSync).catch(handleError);
+    });
+
+    dvrToggleMappingsBtn.addEventListener("click", () => {
+      setShowDVRMappings(!state.showDVRMappings);
+    });
+
+    applyDVRMappingVisibility();
+
+    loadAll().catch(handleError);
+  </script>
+</body>
+</html>

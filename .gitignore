@@ -1,0 +1,30 @@
+# Binaries
+bin/
+dist/
+/hdhriptv
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build outputs
+*.test
+*.out
+coverage.txt
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+
+# Local runtime files
+*.db
+*.db-journal
+*.log
+
+# OS files
+.DS_Store
+
+#TS sample for testing
+sample_1280x720_surfing_with_audio.ts

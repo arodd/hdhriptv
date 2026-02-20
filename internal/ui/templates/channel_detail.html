@@ -1,0 +1,994 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --border: #d6deeb;
+      --text: #152035;
+      --muted: #5a667b;
+      --brand: #0d63e6;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f5f7fc 0%, #eef2f9 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      color: var(--text);
+      background: #fff;
+      min-width: 220px;
+      flex: 1;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      font-size: 0.9rem;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    button.danger {
+      border-color: #efc8c4;
+      background: #fff5f4;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .status {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+      margin-bottom: 10px;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+    }
+
+    .source-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .source-title {
+      font-weight: 600;
+    }
+
+    .source-meta {
+      color: var(--muted);
+      font-size: 0.84rem;
+      word-break: break-all;
+    }
+
+    .source-url {
+      color: #1d2f4d;
+      font-size: 0.86rem;
+      padding: 6px 8px;
+      border-radius: 6px;
+      border: 1px solid #dce5f5;
+      background: #f7faff;
+      word-break: break-all;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 8px 2px;
+    }
+
+    .rule-editor {
+      width: 100%;
+      border: 1px solid #dce5f5;
+      border-radius: 10px;
+      padding: 10px;
+      display: grid;
+      gap: 8px;
+      background: #f8fbff;
+    }
+
+    .rule-editor input[type="text"] {
+      min-width: 0;
+      width: 100%;
+    }
+
+    .group-picker {
+      border: 1px solid #dce5f5;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .group-picker-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .selected-groups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 26px;
+    }
+
+    .group-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #aac5f0;
+      background: #e9f2ff;
+      color: #1f4e92;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.82rem;
+    }
+
+    .group-chip button {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 0.85rem;
+      line-height: 1;
+      color: #1f4e92;
+      cursor: pointer;
+    }
+
+    .group-picker-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .group-picker-controls input[type="text"] {
+      min-width: 200px;
+      flex: 1;
+    }
+
+    .rule-hint {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .search-warning {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+      font-size: 0.84rem;
+    }
+
+    .mode-toggle {
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels" class="active">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Channel Details</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+        <div id="channel-meta" class="meta"></div>
+
+        <form id="channel-form" class="toolbar">
+          <input id="guide-name" type="text" placeholder="Guide name">
+          <label>
+            <input id="channel-enabled" type="checkbox">
+            Enabled
+          </label>
+          <div class="rule-editor">
+            <label>
+              <input id="dynamic-enabled" type="checkbox">
+              Dynamic source rule enabled
+            </label>
+
+            <div class="group-picker">
+              <div class="group-picker-label">Dynamic Catalog Groups (Multi-select)</div>
+              <div id="dynamic-group-chips" class="selected-groups"></div>
+              <div class="group-picker-controls">
+                <input id="dynamic-group-input" type="text" list="dynamic-group-options" placeholder="Add catalog group filter (blank = all groups)">
+                <button id="dynamic-group-add" type="button">Add Group</button>
+                <button id="dynamic-group-clear" type="button">All Groups</button>
+              </div>
+            </div>
+
+            <input id="dynamic-query" type="text" placeholder="Catalog search query (token mode: |/OR and -term/!term; regex mode: full pattern)">
+            <label class="mode-toggle">
+              <input id="dynamic-search-regex" type="checkbox">
+              Regex mode
+            </label>
+            <div id="dynamic-rule-hint" class="rule-hint"></div>
+            <div id="dynamic-rule-warning" class="search-warning" hidden></div>
+          </div>
+          <button class="primary" type="submit">Save Channel</button>
+          <button id="clear-channel-health-btn" class="secondary" type="button">Clear Health + Cooldowns</button>
+          <button id="reload-btn" type="button">Reload</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Add Source</h2>
+      <div class="panel-body">
+        <form id="source-add-form" class="toolbar">
+          <input id="source-item-key" type="text" placeholder="Catalog item_key">
+          <label>
+            <input id="source-allow-cross" type="checkbox">
+            Allow cross-channel attach
+          </label>
+          <button class="primary" type="submit">Add Source</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Sources</h2>
+      <div class="panel-body">
+        <div id="sources-empty" class="empty" hidden>No sources attached.</div>
+        <div id="source-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <datalist id="dynamic-group-options"></datalist>
+
+  <script>
+    const channelID = Number({{.ChannelID}});
+
+    const state = {
+      channel: null,
+      sources: [],
+      catalogGroups: [],
+      dynamicGroupNames: [],
+      dynamicSearchRegex: false,
+    };
+    const channelPageLimit = 200;
+    const sourcePageLimit = 200;
+
+    const statusEl = document.getElementById("status");
+    const channelMetaEl = document.getElementById("channel-meta");
+    const sourceListEl = document.getElementById("source-list");
+    const sourcesEmptyEl = document.getElementById("sources-empty");
+    const guideNameEl = document.getElementById("guide-name");
+    const channelEnabledEl = document.getElementById("channel-enabled");
+    const dynamicEnabledEl = document.getElementById("dynamic-enabled");
+    const dynamicQueryEl = document.getElementById("dynamic-query");
+    const dynamicSearchRegexEl = document.getElementById("dynamic-search-regex");
+    const dynamicRuleHintEl = document.getElementById("dynamic-rule-hint");
+    const dynamicRuleWarningEl = document.getElementById("dynamic-rule-warning");
+    const dynamicGroupInputEl = document.getElementById("dynamic-group-input");
+    const dynamicGroupChipsEl = document.getElementById("dynamic-group-chips");
+    const dynamicGroupOptionsEl = document.getElementById("dynamic-group-options");
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.classList.toggle("error", isError);
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 3000);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "request failed", true);
+    }
+
+    {{template "search-warning-summary-function"}}
+
+    function renderSearchWarning(searchWarning) {
+      const message = formatSearchWarningSummary(searchWarning, "Dynamic rule");
+      if (!message) {
+        dynamicRuleWarningEl.hidden = true;
+        dynamicRuleWarningEl.textContent = "";
+        return;
+      }
+      dynamicRuleWarningEl.hidden = false;
+      dynamicRuleWarningEl.textContent = message;
+    }
+
+    function normalizeGroupNameValue(raw) {
+      return String(raw || "").trim();
+    }
+
+    function normalizeGroupNameList(raw) {
+      const deduped = new Map();
+      for (const value of raw || []) {
+        const trimmed = normalizeGroupNameValue(value);
+        if (!trimmed) {
+          continue;
+        }
+        const key = trimmed.toLowerCase();
+        if (deduped.has(key)) {
+          continue;
+        }
+        deduped.set(key, trimmed);
+      }
+      return Array.from(deduped.entries())
+        .sort((a, b) => {
+          if (a[0] === b[0]) {
+            return a[1].localeCompare(b[1]);
+          }
+          return a[0].localeCompare(b[0]);
+        })
+        .map((entry) => entry[1]);
+    }
+
+    function groupAlias(groupNames) {
+      return groupNames.length > 0 ? groupNames[0] : "";
+    }
+
+    function normalizeDynamicRule(raw) {
+      const rule = raw && typeof raw === "object" ? raw : {};
+      const fromList = Array.isArray(rule.group_names) ? rule.group_names : [];
+      const fromLegacy = normalizeGroupNameValue(rule.group_name || "");
+      const groupNames = normalizeGroupNameList(fromList.length > 0 ? fromList : [fromLegacy]);
+      return {
+        enabled: Boolean(rule.enabled),
+        group_name: groupAlias(groupNames),
+        group_names: groupNames,
+        search_query: String(rule.search_query || "").trim(),
+        search_regex: Boolean(rule.search_regex),
+      };
+    }
+
+    function dynamicRuleFromForm() {
+      const groupNames = normalizeGroupNameList(state.dynamicGroupNames);
+      return {
+        enabled: Boolean(dynamicEnabledEl.checked),
+        group_name: groupAlias(groupNames),
+        group_names: groupNames,
+        search_query: dynamicQueryEl.value.trim(),
+        search_regex: Boolean(dynamicSearchRegexEl.checked),
+      };
+    }
+
+    async function loadPagedCollection(path, key, pageLimit) {
+      const items = [];
+      let offset = 0;
+      let total = -1;
+
+      while (true) {
+        const params = new URLSearchParams({
+          limit: String(pageLimit),
+          offset: String(offset),
+        });
+        const separator = path.includes("?") ? "&" : "?";
+        const data = await api(`${path}${separator}${params.toString()}`);
+        const page = Array.isArray(data?.[key]) ? data[key] : [];
+        const reportedTotal = Number(data?.total);
+        if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
+          total = reportedTotal;
+        }
+
+        items.push(...page);
+        if (page.length === 0) {
+          break;
+        }
+
+        const reportedLimit = Number(data?.limit);
+        const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
+        if (step <= 0) {
+          break;
+        }
+        offset += step;
+
+        if (total >= 0 && offset >= total) {
+          break;
+        }
+      }
+
+      return items;
+    }
+
+    function normalizeGroupName(raw) {
+      if (raw && typeof raw === "object") {
+        if (typeof raw.name === "string") {
+          return raw.name.trim();
+        }
+        if (typeof raw.Name === "string") {
+          return raw.Name.trim();
+        }
+      }
+      return "";
+    }
+
+    function renderDynamicGroupOptions() {
+      dynamicGroupOptionsEl.innerHTML = "";
+      const merged = normalizeGroupNameList(state.catalogGroups.concat(state.dynamicGroupNames));
+      for (const groupName of merged) {
+        const option = document.createElement("option");
+        option.value = groupName;
+        dynamicGroupOptionsEl.appendChild(option);
+      }
+    }
+
+    async function loadCatalogGroups() {
+      try {
+        const groups = await loadPagedCollection("/api/groups?include_counts=0", "groups", 200);
+        state.catalogGroups = groups.map(normalizeGroupName).filter((name) => name.length > 0);
+      } catch (err) {
+        console.warn("unable to load catalog groups for dynamic rule autocomplete", err);
+        state.catalogGroups = [];
+      }
+      renderDynamicGroupOptions();
+    }
+
+    function renderDynamicGroupChips() {
+      dynamicGroupChipsEl.innerHTML = "";
+      if (state.dynamicGroupNames.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "empty";
+        hint.textContent = "All groups selected.";
+        dynamicGroupChipsEl.appendChild(hint);
+        return;
+      }
+
+      for (const groupName of state.dynamicGroupNames) {
+        const chip = document.createElement("div");
+        chip.className = "group-chip";
+
+        const label = document.createElement("span");
+        label.textContent = groupName;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "x";
+        removeBtn.setAttribute("aria-label", `Remove ${groupName}`);
+        removeBtn.addEventListener("click", () => {
+          state.dynamicGroupNames = state.dynamicGroupNames.filter((name) => name !== groupName);
+          renderDynamicGroupChips();
+          renderDynamicGroupOptions();
+          renderDynamicRuleHint(dynamicRuleFromForm());
+        });
+
+        chip.append(label, removeBtn);
+        dynamicGroupChipsEl.appendChild(chip);
+      }
+    }
+
+    function addDynamicGroupFromInput() {
+      const next = normalizeGroupNameValue(dynamicGroupInputEl.value);
+      dynamicGroupInputEl.value = "";
+      if (!next) {
+        return;
+      }
+      if (state.dynamicGroupNames.includes(next)) {
+        return;
+      }
+      state.dynamicGroupNames = normalizeGroupNameList(state.dynamicGroupNames.concat(next));
+      renderDynamicGroupChips();
+      renderDynamicGroupOptions();
+      renderDynamicRuleHint(dynamicRuleFromForm());
+    }
+
+    function clearDynamicGroups() {
+      state.dynamicGroupNames = [];
+      renderDynamicGroupChips();
+      renderDynamicGroupOptions();
+      renderDynamicRuleHint(dynamicRuleFromForm());
+    }
+
+    function renderDynamicRuleHint(rule) {
+      const dynamicRule = normalizeDynamicRule(rule);
+      if (!dynamicRule.enabled) {
+        dynamicRuleHintEl.textContent = "Dynamic mode disabled. Source updates only come from manual edits or static channel-key reconcile.";
+        return;
+      }
+      const groupSummary = dynamicRule.group_names.length > 0
+        ? dynamicRule.group_names.join(", ")
+        : "all groups";
+      if (dynamicRule.search_regex) {
+        dynamicRuleHintEl.textContent = `Dynamic mode enabled. Playlist sync follows groups [${groupSummary}] and regex pattern "${dynamicRule.search_query}" against full item names.`;
+        return;
+      }
+      dynamicRuleHintEl.textContent = `Dynamic mode enabled. Playlist sync follows groups [${groupSummary}] and search "${dynamicRule.search_query}" using token mode (supports |/OR disjuncts plus -term/!term exclusions; no OR keeps legacy AND behavior).`;
+    }
+
+    function renderDynamicRuleWarning(rule, searchWarning) {
+      renderDynamicRuleHint(rule);
+      renderSearchWarning(searchWarning);
+    }
+
+    async function loadChannel() {
+      const channels = await loadPagedCollection("/api/channels", "channels", channelPageLimit);
+      state.channel = channels.find((ch) => Number(ch.channel_id) === channelID) || null;
+      if (!state.channel) {
+        throw new Error(`channel ${channelID} not found`);
+      }
+
+      const dynamicRule = normalizeDynamicRule(state.channel.dynamic_rule);
+      const groupSummary = dynamicRule.group_names.length > 0
+        ? dynamicRule.group_names.join(",")
+        : "all";
+      const mode = dynamicRule.enabled
+        ? `dynamic (${groupSummary} | ${dynamicRule.search_query || "-"})`
+        : `static (${state.channel.channel_key || "manual"})`;
+      channelMetaEl.textContent = `ID ${state.channel.channel_id} | ${state.channel.guide_number} ${state.channel.guide_name} | mode=${mode}`;
+      guideNameEl.value = state.channel.guide_name || "";
+      channelEnabledEl.checked = Boolean(state.channel.enabled);
+      dynamicEnabledEl.checked = dynamicRule.enabled;
+      state.dynamicSearchRegex = Boolean(dynamicRule.search_regex);
+      state.dynamicGroupNames = normalizeGroupNameList(dynamicRule.group_names);
+      renderDynamicGroupChips();
+      renderDynamicGroupOptions();
+      dynamicQueryEl.value = dynamicRule.search_query;
+      dynamicSearchRegexEl.checked = state.dynamicSearchRegex;
+      renderDynamicRuleWarning(dynamicRule, state.channel.search_warning);
+    }
+
+    async function loadSources() {
+      state.sources = await loadPagedCollection(`/api/channels/${channelID}/sources`, "sources", sourcePageLimit);
+      renderSources();
+    }
+
+    function formatUnix(ts) {
+      const value = Number(ts || 0);
+      if (!Number.isFinite(value) || value <= 0) {
+        return "-";
+      }
+      return new Date(value * 1000).toLocaleString();
+    }
+
+    function formatFPS(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        return "-";
+      }
+      return `${n.toFixed(2)} fps`;
+    }
+
+    function formatBitrate(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n <= 0) {
+        return "-";
+      }
+      const units = ["bps", "Kbps", "Mbps", "Gbps"];
+      let bitrate = n;
+      let idx = 0;
+      while (bitrate >= 1000 && idx < units.length - 1) {
+        bitrate /= 1000;
+        idx++;
+      }
+      return `${bitrate.toFixed(idx === 0 ? 0 : 2)} ${units[idx]}`;
+    }
+
+    function renderSources() {
+      sourceListEl.innerHTML = "";
+      sourcesEmptyEl.hidden = state.sources.length > 0;
+
+      for (let i = 0; i < state.sources.length; i++) {
+        const src = state.sources[i];
+        const tvgName = String(src.tvg_name || "").trim() || "-";
+        const profileResolution = Number(src.profile_width) > 0 && Number(src.profile_height) > 0
+          ? `${src.profile_width}x${src.profile_height}`
+          : "-";
+        const profileFPS = formatFPS(src.profile_fps);
+        const profileVideo = String(src.profile_video_codec || "").trim() || "-";
+        const profileAudio = String(src.profile_audio_codec || "").trim() || "-";
+        const profileBitrate = formatBitrate(src.profile_bitrate_bps);
+
+        const row = document.createElement("div");
+        row.className = "source-row";
+
+        const title = document.createElement("div");
+        title.className = "source-title";
+        title.textContent = `Source #${src.source_id} | P${src.priority_index} | ${src.item_key}`;
+
+        const meta = document.createElement("div");
+        meta.className = "source-meta";
+        meta.textContent = [
+          `tvg_name=${tvgName}`,
+          `association=${src.association_type}`,
+          src.enabled ? "enabled" : "disabled",
+          `ok=${src.success_count}`,
+          `fail=${src.fail_count}`,
+          `last_ok=${formatUnix(src.last_ok_at)}`,
+          `last_fail=${formatUnix(src.last_fail_at)}`,
+          `cooldown_until=${formatUnix(src.cooldown_until)}`,
+          `last_probe=${formatUnix(src.last_probe_at)}`,
+          `profile_res=${profileResolution}`,
+          `profile_fps=${profileFPS}`,
+          `profile_video=${profileVideo}`,
+          `profile_audio=${profileAudio}`,
+          `profile_bitrate=${profileBitrate}`,
+        ].join(" | ");
+
+        const sourceURL = String(src.stream_url || "").trim() || "-";
+        const urlLine = document.createElement("div");
+        urlLine.className = "source-url";
+        urlLine.textContent = `URL: ${sourceURL}`;
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+
+        const upBtn = document.createElement("button");
+        upBtn.textContent = "Move Up";
+        upBtn.disabled = i === 0;
+        upBtn.addEventListener("click", () => reorderSource(i, -1));
+
+        const downBtn = document.createElement("button");
+        downBtn.textContent = "Move Down";
+        downBtn.disabled = i === state.sources.length - 1;
+        downBtn.addEventListener("click", () => reorderSource(i, +1));
+
+        const toggleBtn = document.createElement("button");
+        toggleBtn.className = "secondary";
+        toggleBtn.textContent = src.enabled ? "Disable" : "Enable";
+        toggleBtn.addEventListener("click", () => setSourceEnabled(src, !src.enabled));
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "danger";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => removeSource(src));
+
+        actions.append(upBtn, downBtn, toggleBtn, removeBtn);
+        row.append(title, meta, urlLine, actions);
+        sourceListEl.appendChild(row);
+      }
+    }
+
+    async function loadAll() {
+      await Promise.all([loadCatalogGroups(), loadChannel()]);
+      await loadSources();
+    }
+
+    async function saveChannel(event) {
+      event.preventDefault();
+
+      const guideName = guideNameEl.value.trim();
+      const enabled = Boolean(channelEnabledEl.checked);
+      const dynamicRule = dynamicRuleFromForm();
+
+      if (!guideName) {
+        showStatus("Guide name must not be empty", true);
+        return;
+      }
+      if (dynamicRule.enabled && !dynamicRule.search_query) {
+        showStatus("Dynamic rule requires search query when enabled (groups are optional)", true);
+        return;
+      }
+
+      const updated = await api(`/api/channels/${channelID}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          guide_name: guideName,
+          enabled,
+          dynamic_rule: dynamicRule,
+        }),
+      });
+
+      await loadChannel();
+      renderDynamicRuleWarning(normalizeDynamicRule(updated?.channel?.dynamic_rule), updated?.search_warning);
+      const warning = formatSearchWarningSummary(updated?.search_warning, "Dynamic rule");
+      showStatus(`Channel updated${warning ? ` (${warning})` : ""}`);
+    }
+
+    async function addSource(event) {
+      event.preventDefault();
+
+      const itemKey = document.getElementById("source-item-key").value.trim();
+      const allowCross = Boolean(document.getElementById("source-allow-cross").checked);
+
+      if (!itemKey) {
+        showStatus("item_key is required", true);
+        return;
+      }
+
+      try {
+        await api(`/api/channels/${channelID}/sources`, {
+          method: "POST",
+          body: JSON.stringify({
+            item_key: itemKey,
+            allow_cross_channel: allowCross,
+          }),
+        });
+      } catch (err) {
+        if (!allowCross && String(err.message || "").toLowerCase().includes("metadata does not match")) {
+          const confirmed = window.confirm(
+            "Source metadata does not match this channel. Attach manually anyway?"
+          );
+          if (!confirmed) {
+            return;
+          }
+          await api(`/api/channels/${channelID}/sources`, {
+            method: "POST",
+            body: JSON.stringify({
+              item_key: itemKey,
+              allow_cross_channel: true,
+            }),
+          });
+        } else {
+          throw err;
+        }
+      }
+
+      document.getElementById("source-item-key").value = "";
+      document.getElementById("source-allow-cross").checked = false;
+      await loadSources();
+      showStatus("Source attached");
+    }
+
+    async function reorderSource(index, delta) {
+      const next = [...state.sources];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) {
+        return;
+      }
+
+      const tmp = next[index];
+      next[index] = next[target];
+      next[target] = tmp;
+
+      await api(`/api/channels/${channelID}/sources/reorder`, {
+        method: "PATCH",
+        body: JSON.stringify({ source_ids: next.map((s) => s.source_id) }),
+      });
+
+      await loadSources();
+      showStatus("Sources reordered");
+    }
+
+    async function setSourceEnabled(src, enabled) {
+      await api(`/api/channels/${channelID}/sources/${src.source_id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ enabled }),
+      });
+
+      await loadSources();
+      showStatus(enabled ? "Source enabled" : "Source disabled");
+    }
+
+    async function removeSource(src) {
+      const confirmed = window.confirm(`Remove source ${src.item_key}?`);
+      if (!confirmed) {
+        return;
+      }
+
+      await api(`/api/channels/${channelID}/sources/${src.source_id}`, {
+        method: "DELETE",
+      });
+
+      await loadSources();
+      showStatus("Source removed");
+    }
+
+    async function clearChannelHealth() {
+      const confirmed = window.confirm(
+        "Clear health stats and cooldown windows for all sources on this channel?"
+      );
+      if (!confirmed) {
+        return;
+      }
+
+      const data = await api(`/api/channels/${channelID}/sources/health/clear`, {
+        method: "POST",
+      });
+      const cleared = Number(data?.cleared || 0);
+      const noun = cleared === 1 ? "source" : "sources";
+
+      await loadSources();
+      showStatus(`Cleared health stats and cooldown windows for ${cleared} ${noun}`);
+    }
+
+    document.getElementById("channel-form").addEventListener("submit", (event) => {
+      saveChannel(event).catch(handleError);
+    });
+
+    document.getElementById("source-add-form").addEventListener("submit", (event) => {
+      addSource(event).catch(handleError);
+    });
+
+    document.getElementById("reload-btn").addEventListener("click", () => {
+      loadAll().then(() => showStatus("Channel reloaded")).catch(handleError);
+    });
+
+    document.getElementById("clear-channel-health-btn").addEventListener("click", () => {
+      clearChannelHealth().catch(handleError);
+    });
+
+    dynamicEnabledEl.addEventListener("change", () => {
+      renderDynamicRuleHint(dynamicRuleFromForm());
+    });
+
+    dynamicQueryEl.addEventListener("input", () => {
+      renderDynamicRuleHint(dynamicRuleFromForm());
+    });
+
+    dynamicSearchRegexEl.addEventListener("change", () => {
+      state.dynamicSearchRegex = Boolean(dynamicSearchRegexEl.checked);
+      renderDynamicRuleHint(dynamicRuleFromForm());
+    });
+
+    document.getElementById("dynamic-group-add").addEventListener("click", () => {
+      addDynamicGroupFromInput();
+    });
+
+    dynamicGroupInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === ",") {
+        event.preventDefault();
+        addDynamicGroupFromInput();
+      }
+    });
+
+    document.getElementById("dynamic-group-clear").addEventListener("click", () => {
+      clearDynamicGroups();
+    });
+
+    loadAll().catch(handleError);
+  </script>
+</body>
+</html>

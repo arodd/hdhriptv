@@ -1,0 +1,1052 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --border: #d6deeb;
+      --text: #152035;
+      --muted: #5a667b;
+      --brand: #0d63e6;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f5f7fc 0%, #eef2f9 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr;
+      gap: 16px;
+      padding: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+      align-items: center;
+    }
+
+    input[type="search"],
+    select,
+    input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      color: var(--text);
+      background: #fff;
+    }
+
+    input[type="search"] {
+      flex: 1;
+      min-width: 220px;
+    }
+
+    select {
+      min-width: 220px;
+      max-width: 380px;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    button.danger {
+      border-color: #efc8c4;
+      background: #fff5f4;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    ul {
+      margin: 0;
+      padding: 0;
+      list-style: none;
+    }
+
+    .group-item {
+      width: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      text-align: left;
+      margin-bottom: 8px;
+    }
+
+    .group-item.active {
+      border-color: var(--brand);
+      background: var(--brand-soft);
+      color: #174a93;
+      font-weight: 600;
+    }
+
+    .group-picker {
+      width: 100%;
+      border: 1px solid #dce5f5;
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .group-picker-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .selected-groups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 26px;
+    }
+
+    .group-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #aac5f0;
+      background: #e9f2ff;
+      color: #1f4e92;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.82rem;
+    }
+
+    .group-chip button {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 0.85rem;
+      line-height: 1;
+      color: #1f4e92;
+      cursor: pointer;
+    }
+
+    .group-picker-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .catalog-source-target {
+      margin: 8px 0 12px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .catalog-source-target-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .catalog-source-target .empty {
+      margin: 0;
+      padding: 0 2px;
+    }
+
+    .group-picker-controls input[type="text"] {
+      min-width: 200px;
+      flex: 1;
+    }
+
+    .item-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .item-title {
+      font-weight: 600;
+    }
+
+    .item-meta {
+      color: var(--muted);
+      font-size: 0.84rem;
+      word-break: break-all;
+    }
+
+    .mode-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--muted);
+      font-size: 0.84rem;
+    }
+
+    .item-url {
+      color: #1d2f4d;
+      font-size: 0.84rem;
+      border: 1px solid #dce5f5;
+      border-radius: 7px;
+      background: #f7faff;
+      padding: 7px 8px;
+      word-break: break-all;
+    }
+
+    .item-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .item-feedback {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.84rem;
+    }
+
+    .item-feedback.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .status {
+      margin-bottom: 10px;
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .search-warning {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+      font-size: 0.84rem;
+      margin-bottom: 10px;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 8px 2px;
+    }
+
+    .pagination {
+      margin-top: 8px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pagination-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    @media (max-width: 980px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog" class="active">Catalog</a>
+      <a href="/ui/channels">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main class="layout">
+    <section class="panel">
+      <h2>Groups</h2>
+      <div class="panel-body">
+        <button id="group-all" type="button" class="group-item active">
+          <span>All groups</span>
+          <span id="group-all-count"></span>
+        </button>
+        <ul id="group-list"></ul>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Catalog</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+        <div id="search-warning" class="search-warning" hidden></div>
+
+        <form id="search-form" class="toolbar">
+          <input id="search" type="search" placeholder="Search playlist items (token: fox | nbc -spanish, regex: fox\\s+9\\s+kmsp)">
+          <label class="mode-toggle">
+            <input id="search-regex" type="checkbox">
+            Regex mode
+          </label>
+          <button class="primary" type="submit">Search</button>
+          <button id="search-reset" type="button">Reset</button>
+          <button id="reload-channels" type="button">Refresh Channel List</button>
+        </form>
+
+        <div class="group-picker">
+          <div class="group-picker-label">Catalog Group Filters (Multi-select)</div>
+          <div id="selected-groups" class="selected-groups"></div>
+          <div class="group-picker-controls">
+            <input id="group-chip-input" type="text" list="group-options" placeholder="Add group filter (blank = all groups)">
+            <button id="group-chip-add" type="button">Add Group</button>
+            <button id="group-chip-clear" type="button">All Groups</button>
+          </div>
+        </div>
+
+        <form id="catalog-action-form" class="toolbar">
+          <button id="dynamic-create-btn" class="secondary" type="button">Create Dynamic Channel From Filters</button>
+        </form>
+
+        <datalist id="group-options"></datalist>
+
+        <div class="empty">Search supports OR disjuncts with <code>|</code> or <code>OR</code> plus exclusion tokens (<code>-term</code>, <code>!term</code>). No OR separator keeps legacy AND behavior.</div>
+        <div class="empty">Regex mode is opt-in. When enabled, the full query is treated as one case-insensitive regex pattern against item names (token operators are not applied).</div>
+        <div class="empty">No selected groups means all groups are included.</div>
+
+        <div class="catalog-source-target">
+          <div class="catalog-source-target-label">Source Add Target Channel</div>
+          <select id="target-channel-select">
+            <option value="">No target channel selected</option>
+          </select>
+          <div id="catalog-mode-note" class="empty"></div>
+        </div>
+
+        <div id="items-empty" class="empty" hidden>No catalog items match this filter.</div>
+        <div id="item-list"></div>
+
+        <div id="pagination" class="pagination" hidden>
+          <div id="pagination-summary" class="empty"></div>
+          <div class="pagination-actions">
+            <button id="pagination-prev" type="button">Previous</button>
+            <button id="pagination-next" type="button">Next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      groupNames: [],
+      q: "",
+      qRegex: false,
+      limit: 100,
+      offset: 0,
+      total: 0,
+      channels: [],
+      targetChannelID: 0,
+      items: [],
+      catalogGroups: [],
+    };
+    const channelPageLimit = 200;
+
+    const statusEl = document.getElementById("status");
+    const searchWarningEl = document.getElementById("search-warning");
+    const groupListEl = document.getElementById("group-list");
+    const itemListEl = document.getElementById("item-list");
+    const itemsEmptyEl = document.getElementById("items-empty");
+    const groupAllBtn = document.getElementById("group-all");
+    const groupAllCountEl = document.getElementById("group-all-count");
+    const paginationEl = document.getElementById("pagination");
+    const paginationSummaryEl = document.getElementById("pagination-summary");
+    const paginationPrevBtn = document.getElementById("pagination-prev");
+    const paginationNextBtn = document.getElementById("pagination-next");
+    const selectedGroupsEl = document.getElementById("selected-groups");
+    const groupChipInputEl = document.getElementById("group-chip-input");
+    const groupOptionsEl = document.getElementById("group-options");
+    const targetChannelSelectEl = document.getElementById("target-channel-select");
+    const catalogModeNoteEl = document.getElementById("catalog-mode-note");
+    const searchRegexEl = document.getElementById("search-regex");
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.classList.toggle("error", isError);
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 3000);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "request failed", true);
+    }
+
+    {{template "search-warning-summary-function"}}
+
+    function renderSearchWarning(searchWarning) {
+      const message = formatSearchWarningSummary(searchWarning, "Catalog search");
+      if (!message) {
+        searchWarningEl.hidden = true;
+        searchWarningEl.textContent = "";
+        return;
+      }
+      searchWarningEl.hidden = false;
+      searchWarningEl.textContent = message;
+    }
+
+    function normalizeGroup(raw) {
+      const name = typeof raw.name === "string"
+        ? raw.name
+        : (typeof raw.Name === "string" ? raw.Name : "");
+      const numericCount = Number(raw.count ?? raw.Count ?? 0);
+      const count = Number.isFinite(numericCount) && numericCount > 0 ? numericCount : 0;
+      return { name, count };
+    }
+
+    function normalizeGroupNameValue(raw) {
+      return String(raw || "").trim();
+    }
+
+    function normalizeGroupNameList(raw) {
+      const deduped = new Map();
+      for (const value of raw || []) {
+        const trimmed = normalizeGroupNameValue(value);
+        if (!trimmed) {
+          continue;
+        }
+        const key = trimmed.toLowerCase();
+        if (deduped.has(key)) {
+          continue;
+        }
+        deduped.set(key, trimmed);
+      }
+      return Array.from(deduped.entries())
+        .sort((a, b) => {
+          if (a[0] === b[0]) {
+            return a[1].localeCompare(b[1]);
+          }
+          return a[0].localeCompare(b[0]);
+        })
+        .map((entry) => entry[1]);
+    }
+
+    function toggleGroupButtons() {
+      groupAllBtn.classList.toggle("active", state.groupNames.length === 0);
+      for (const btn of groupListEl.querySelectorAll("button.group-item")) {
+        const groupName = String(btn.dataset.groupName || "");
+        btn.classList.toggle("active", state.groupNames.includes(groupName));
+      }
+    }
+
+    function renderSelectedGroups() {
+      selectedGroupsEl.innerHTML = "";
+      if (state.groupNames.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "empty";
+        hint.textContent = "All groups selected.";
+        selectedGroupsEl.appendChild(hint);
+        return;
+      }
+
+      for (const groupName of state.groupNames) {
+        const chip = document.createElement("div");
+        chip.className = "group-chip";
+
+        const label = document.createElement("span");
+        label.textContent = groupName;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "x";
+        removeBtn.setAttribute("aria-label", `Remove ${groupName}`);
+        removeBtn.addEventListener("click", () => {
+          state.groupNames = state.groupNames.filter((name) => name !== groupName);
+          state.offset = 0;
+          renderSelectedGroups();
+          toggleGroupButtons();
+          loadItems().catch(handleError);
+        });
+
+        chip.append(label, removeBtn);
+        selectedGroupsEl.appendChild(chip);
+      }
+    }
+
+    function renderGroupOptions() {
+      groupOptionsEl.innerHTML = "";
+      const merged = normalizeGroupNameList(state.catalogGroups.concat(state.groupNames));
+      for (const groupName of merged) {
+        const option = document.createElement("option");
+        option.value = groupName;
+        groupOptionsEl.appendChild(option);
+      }
+    }
+
+    function renderGroups(groups) {
+      groupListEl.innerHTML = "";
+      state.catalogGroups = [];
+      let total = 0;
+
+      for (const g of (groups || []).map(normalizeGroup)) {
+        total += g.count;
+        state.catalogGroups.push(g.name);
+
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "group-item" + (state.groupNames.includes(g.name) ? " active" : "");
+        btn.dataset.groupName = g.name;
+
+        const label = document.createElement("span");
+        label.textContent = g.name || "Ungrouped";
+
+        const count = document.createElement("span");
+        count.textContent = String(g.count);
+
+        btn.append(label, count);
+        btn.addEventListener("click", () => {
+          toggleCatalogGroup(g.name);
+        });
+
+        li.appendChild(btn);
+        groupListEl.appendChild(li);
+      }
+
+      groupAllCountEl.textContent = total > 0 ? `(${total})` : "";
+      renderGroupOptions();
+      renderSelectedGroups();
+      toggleGroupButtons();
+    }
+
+    function toggleCatalogGroup(groupName) {
+      const normalized = normalizeGroupNameValue(groupName);
+      if (!normalized) {
+        return;
+      }
+      const exists = state.groupNames.includes(normalized);
+      if (exists) {
+        state.groupNames = state.groupNames.filter((name) => name !== normalized);
+      } else {
+        state.groupNames = normalizeGroupNameList(state.groupNames.concat(normalized));
+      }
+      state.offset = 0;
+      renderSelectedGroups();
+      toggleGroupButtons();
+      loadItems().catch(handleError);
+    }
+
+    function clearCatalogGroups() {
+      state.groupNames = [];
+      state.offset = 0;
+      renderSelectedGroups();
+      toggleGroupButtons();
+      loadItems().catch(handleError);
+    }
+
+    function channelLabel(channelID) {
+      const id = Number(channelID || 0);
+      const channel = state.channels.find((ch) => Number(ch.channel_id) === id);
+      if (!channel) {
+        return `channel ${id}`;
+      }
+      return `${channel.guide_number} ${channel.guide_name}`;
+    }
+
+    function renderTargetChannelSelect() {
+      const priorSelection = Number(state.targetChannelID || 0);
+      targetChannelSelectEl.innerHTML = "";
+
+      const noneOption = document.createElement("option");
+      noneOption.value = "";
+      noneOption.textContent = "No target channel selected";
+      targetChannelSelectEl.appendChild(noneOption);
+
+      for (const channel of state.channels) {
+        const option = document.createElement("option");
+        option.value = String(channel.channel_id);
+        option.textContent = `${channel.guide_number} ${channel.guide_name}`;
+        targetChannelSelectEl.appendChild(option);
+      }
+
+      const selectedStillExists = state.channels.some((ch) => Number(ch.channel_id) === priorSelection);
+      state.targetChannelID = selectedStillExists ? priorSelection : 0;
+      targetChannelSelectEl.value = state.targetChannelID > 0 ? String(state.targetChannelID) : "";
+      targetChannelSelectEl.disabled = state.channels.length === 0;
+      updateCatalogModeNote();
+    }
+
+    function updateCatalogModeNote() {
+      if (state.targetChannelID > 0) {
+        catalogModeNoteEl.textContent = `Rapid source-add mode: Add Source sends rows to ${channelLabel(state.targetChannelID)}.`;
+      } else {
+        catalogModeNoteEl.textContent = "Channel-create mode: rows show Create Channel actions.";
+      }
+    }
+
+    function renderItems(items) {
+      state.items = Array.isArray(items) ? items : [];
+      itemListEl.innerHTML = "";
+      itemsEmptyEl.hidden = state.items.length > 0;
+
+      for (const item of state.items) {
+        const row = document.createElement("div");
+        row.className = "item-row";
+
+        const title = document.createElement("div");
+        title.className = "item-title";
+        title.textContent = item.name;
+
+        const meta = document.createElement("div");
+        meta.className = "item-meta";
+        meta.textContent = `${item.group || "Ungrouped"} | ${item.channel_key || "(no channel key)"} | ${item.item_key}`;
+
+        const urlLine = document.createElement("div");
+        urlLine.className = "item-url";
+        urlLine.textContent = `URL: ${String(item.stream_url || "").trim() || "-"}`;
+
+        const actions = document.createElement("div");
+        actions.className = "item-actions";
+
+        const feedback = document.createElement("div");
+        feedback.className = "item-feedback";
+        feedback.hidden = true;
+
+        if (state.targetChannelID > 0) {
+          const addSourceBtn = document.createElement("button");
+          addSourceBtn.className = "secondary";
+          addSourceBtn.textContent = "Add Source";
+          addSourceBtn.addEventListener("click", () => addSourceToChannel(item, state.targetChannelID, feedback));
+          actions.append(addSourceBtn);
+        } else {
+          const createBtn = document.createElement("button");
+          createBtn.className = "secondary";
+          createBtn.textContent = "Create Channel";
+          createBtn.addEventListener("click", () => {
+            createChannelFromItem(item).catch(handleError);
+          });
+          actions.append(createBtn);
+        }
+
+        row.append(title, meta, urlLine, actions, feedback);
+        itemListEl.appendChild(row);
+      }
+    }
+
+    function showItemFeedback(el, message, isError = false) {
+      if (!el) {
+        return;
+      }
+      el.hidden = false;
+      el.classList.toggle("error", isError);
+      el.textContent = message;
+      window.clearTimeout(el._timer);
+      el._timer = window.setTimeout(() => {
+        el.hidden = true;
+      }, 3000);
+    }
+
+    function renderPagination() {
+      if (state.total <= state.limit) {
+        paginationEl.hidden = true;
+        return;
+      }
+
+      const start = state.total > 0 ? state.offset + 1 : 0;
+      const end = Math.min(state.offset + state.limit, state.total);
+      const hasPrev = state.offset > 0;
+      const hasNext = state.offset + state.limit < state.total;
+
+      paginationSummaryEl.textContent = `Showing ${start}-${end} of ${state.total}`;
+      paginationPrevBtn.disabled = !hasPrev;
+      paginationNextBtn.disabled = !hasNext;
+      paginationEl.hidden = false;
+    }
+
+    async function loadGroups() {
+      const groups = await loadPagedCollection("/api/groups", "groups");
+      renderGroups(groups);
+    }
+
+    async function loadPagedCollection(path, key, pageLimit = channelPageLimit) {
+      const items = [];
+      let offset = 0;
+      let total = -1;
+
+      while (true) {
+        const params = new URLSearchParams({
+          limit: String(pageLimit),
+          offset: String(offset),
+        });
+        const separator = path.includes("?") ? "&" : "?";
+        const data = await api(`${path}${separator}${params.toString()}`);
+        const page = Array.isArray(data?.[key]) ? data[key] : [];
+        const reportedTotal = Number(data?.total);
+        if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
+          total = reportedTotal;
+        }
+
+        items.push(...page);
+        if (page.length === 0) {
+          break;
+        }
+
+        const reportedLimit = Number(data?.limit);
+        const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
+        if (step <= 0) {
+          break;
+        }
+        offset += step;
+
+        if (total >= 0 && offset >= total) {
+          break;
+        }
+      }
+
+      return items;
+    }
+
+    async function loadChannels() {
+      state.channels = await loadPagedCollection("/api/channels", "channels");
+      renderTargetChannelSelect();
+    }
+
+    async function loadItems() {
+      const params = new URLSearchParams();
+      for (const groupName of state.groupNames) {
+        params.append("group", groupName);
+      }
+      if (state.q) {
+        params.set("q", state.q);
+      }
+      if (state.qRegex) {
+        params.set("q_regex", "1");
+      }
+      params.set("limit", String(state.limit));
+      params.set("offset", String(state.offset));
+
+      const data = await api(`/api/items?${params.toString()}`);
+      state.total = Number(data.total || 0);
+      state.limit = Number(data.limit || state.limit);
+      state.offset = Number(data.offset || 0);
+      state.qRegex = Boolean(data.q_regex);
+      renderSearchWarning(data.search_warning);
+      searchRegexEl.checked = state.qRegex;
+
+      renderItems(data.items || []);
+      renderPagination();
+    }
+
+    async function loadAll() {
+      await Promise.all([loadGroups(), loadChannels()]);
+      await loadItems();
+    }
+
+    function dynamicRuleFromCurrentFilter() {
+      const searchQuery = String(state.q || "").trim();
+      if (!searchQuery) {
+        return null;
+      }
+      const groupNames = normalizeGroupNameList(state.groupNames);
+      return {
+        enabled: true,
+        group_name: groupNames.length > 0 ? groupNames[0] : "",
+        group_names: groupNames,
+        search_query: searchQuery,
+        search_regex: Boolean(state.qRegex),
+      };
+    }
+
+    async function createChannelFromItem(item) {
+      const guideName = window.prompt("Guide name override (optional)", item.name || "");
+      if (guideName === null) {
+        return;
+      }
+
+      await api("/api/channels", {
+        method: "POST",
+        body: JSON.stringify({
+          item_key: item.item_key,
+          guide_name: guideName.trim(),
+          channel_key: item.channel_key || "",
+        }),
+      });
+
+      await Promise.all([loadChannels(), loadItems()]);
+      showStatus("Channel created");
+    }
+
+    async function createDynamicChannelFromFilters() {
+      const dynamicRule = dynamicRuleFromCurrentFilter();
+      if (!dynamicRule) {
+        showStatus("Create Dynamic Channel requires a non-empty search filter", true);
+        return;
+      }
+
+      const defaultName = state.q || "Dynamic Channel";
+      const guideName = window.prompt("Guide name override (optional)", defaultName);
+      if (guideName === null) {
+        return;
+      }
+
+      await api("/api/channels", {
+        method: "POST",
+        body: JSON.stringify({
+          guide_name: guideName.trim(),
+          dynamic_rule: dynamicRule,
+        }),
+      });
+
+      await Promise.all([loadChannels(), loadItems()]);
+      const groupSummary = dynamicRule.group_names.length > 0
+        ? dynamicRule.group_names.join(", ")
+        : "(all groups)";
+      const mode = dynamicRule.search_regex ? "regex" : "token";
+      showStatus(`Dynamic channel created from groups ${groupSummary} and search "${dynamicRule.search_query}" (${mode} mode)`);
+    }
+
+    async function addSourceToChannel(item, channelID, feedbackEl) {
+      const targetID = Number(channelID || 0);
+      if (!Number.isFinite(targetID) || targetID <= 0) {
+        showItemFeedback(feedbackEl, "Select a target channel first", true);
+        return;
+      }
+
+      try {
+        await api(`/api/channels/${targetID}/sources`, {
+          method: "POST",
+          body: JSON.stringify({
+            item_key: item.item_key,
+            allow_cross_channel: true,
+          }),
+        });
+        showItemFeedback(feedbackEl, `Source attached to ${channelLabel(targetID)}`);
+      } catch (err) {
+        showItemFeedback(feedbackEl, err.message || "request failed", true);
+      }
+    }
+
+    function addGroupFromInput() {
+      const input = normalizeGroupNameValue(groupChipInputEl.value);
+      if (!input) {
+        return;
+      }
+      groupChipInputEl.value = "";
+      if (state.groupNames.includes(input)) {
+        return;
+      }
+      state.groupNames = normalizeGroupNameList(state.groupNames.concat(input));
+      state.offset = 0;
+      renderSelectedGroups();
+      toggleGroupButtons();
+      loadItems().catch(handleError);
+    }
+
+    groupAllBtn.addEventListener("click", () => {
+      clearCatalogGroups();
+    });
+
+    document.getElementById("search-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.q = document.getElementById("search").value.trim();
+      state.qRegex = Boolean(searchRegexEl.checked);
+      state.offset = 0;
+      loadItems().catch(handleError);
+    });
+
+    document.getElementById("search-reset").addEventListener("click", () => {
+      document.getElementById("search").value = "";
+      searchRegexEl.checked = false;
+      state.q = "";
+      state.qRegex = false;
+      state.offset = 0;
+      loadItems().catch(handleError);
+    });
+
+    document.getElementById("reload-channels").addEventListener("click", async () => {
+      try {
+        await loadChannels();
+        renderItems(state.items);
+        showStatus("Channel list refreshed");
+      } catch (err) {
+        handleError(err);
+      }
+    });
+
+    document.getElementById("group-chip-add").addEventListener("click", () => {
+      addGroupFromInput();
+    });
+
+    groupChipInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === ",") {
+        event.preventDefault();
+        addGroupFromInput();
+      }
+    });
+
+    document.getElementById("group-chip-clear").addEventListener("click", () => {
+      clearCatalogGroups();
+    });
+
+    targetChannelSelectEl.addEventListener("change", () => {
+      state.targetChannelID = Number(targetChannelSelectEl.value || 0);
+      updateCatalogModeNote();
+      renderItems(state.items);
+    });
+
+    document.getElementById("dynamic-create-btn").addEventListener("click", () => {
+      createDynamicChannelFromFilters().catch(handleError);
+    });
+
+    paginationPrevBtn.addEventListener("click", () => {
+      if (state.offset <= 0) {
+        return;
+      }
+      state.offset = Math.max(0, state.offset - state.limit);
+      loadItems().catch(handleError);
+    });
+
+    paginationNextBtn.addEventListener("click", () => {
+      if (state.offset + state.limit >= state.total) {
+        return;
+      }
+      state.offset += state.limit;
+      loadItems().catch(handleError);
+    });
+
+    loadAll().catch(handleError);
+  </script>
+</body>
+</html>

@@ -1,0 +1,871 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f3f6fb;
+      --panel: #ffffff;
+      --border: #d4deee;
+      --text: #172136;
+      --muted: #59677e;
+      --brand: #0c61de;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+      --ok: #116149;
+      --ok-soft: #e7f7ef;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background:
+        radial-gradient(circle at 92% -24%, #d9e8ff, transparent 56%),
+        linear-gradient(180deg, #f5f8fe 0%, var(--bg) 65%);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1120px;
+      margin: 0 auto;
+      padding: 18px;
+      display: grid;
+      gap: 14px;
+      grid-template-columns: 1fr;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #f9fcff;
+    }
+
+    .panel-body {
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+    }
+
+    .status {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .status.ok {
+      border-color: #b7e0cb;
+      background: var(--ok-soft);
+      color: var(--ok);
+    }
+
+    .form-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(220px, 1fr));
+      gap: 10px;
+    }
+
+    .field {
+      display: grid;
+      gap: 6px;
+    }
+
+    .field label {
+      font-size: 0.85rem;
+      color: var(--muted);
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.93rem;
+      color: var(--text);
+      background: #fff;
+      width: 100%;
+    }
+
+    .checkbox {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      font-size: 0.9rem;
+      color: var(--text);
+      margin-top: 4px;
+    }
+
+    .checkbox input { margin: 0; }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    button.danger {
+      border-color: #efc8c4;
+      background: #fff5f4;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.55;
+      cursor: default;
+    }
+
+    .kv-list {
+      display: grid;
+      gap: 8px;
+      grid-template-columns: repeat(4, minmax(130px, 1fr));
+    }
+
+    .kv {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 8px;
+      background: #fbfdff;
+    }
+
+    .kv .k {
+      color: var(--muted);
+      font-size: 0.78rem;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin-bottom: 4px;
+    }
+
+    .kv .v {
+      font-weight: 600;
+      font-size: 0.94rem;
+      word-break: break-word;
+    }
+
+    pre {
+      margin: 0;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: #f7f9fd;
+      padding: 10px;
+      overflow: auto;
+      max-height: 260px;
+      font-size: 0.82rem;
+      line-height: 1.5;
+    }
+
+    .muted {
+      color: var(--muted);
+      font-size: 0.86rem;
+    }
+
+    #jellyfin-panel {
+      grid-column: 1 / -1;
+      display: grid;
+      gap: 10px;
+      border: 1px solid #c8d8f0;
+      border-radius: 10px;
+      padding: 10px;
+      background: #f7fbff;
+    }
+
+    @media (max-width: 920px) {
+      main {
+        padding: 12px;
+      }
+
+      .form-grid,
+      .kv-list {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr" class="active">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>DVR Connection</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+
+        <div class="form-grid">
+          <div class="field">
+            <label for="provider">Primary Provider (sync/mapping)</label>
+            <select id="provider">
+              <option value="channels">Channels DVR</option>
+              <option value="jellyfin">Jellyfin Live TV</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label>Active Providers for Post-Sync Reload</label>
+            <label class="checkbox">
+              <input id="active-provider-channels" type="checkbox">
+              Channels DVR
+            </label>
+            <label class="checkbox">
+              <input id="active-provider-jellyfin" type="checkbox">
+              Jellyfin Live TV
+            </label>
+          </div>
+
+          <div class="field">
+            <label for="channels-base-url">Channels DVR Base URL</label>
+            <input id="channels-base-url" type="text" placeholder="http://channels.lan:8089">
+          </div>
+
+          <div class="field">
+            <label for="jellyfin-base-url">Jellyfin API Base URL</label>
+            <input id="jellyfin-base-url" type="text" placeholder="http://jellyfin.lan:8096">
+          </div>
+
+          <div class="field">
+            <label for="hdhr-device-id">HDHR Device ID (read-only)</label>
+            <input id="hdhr-device-id" type="text" value="" readonly>
+          </div>
+
+          <div class="field">
+            <label for="default-lineup-id">Default Lineup ID</label>
+            <input id="default-lineup-id" type="text" placeholder="USA-MN22577-X (manual override)">
+          </div>
+
+          <div id="jellyfin-panel">
+            <div class="field">
+              <label for="jellyfin-api-token">Jellyfin API Token (write-only)</label>
+              <input id="jellyfin-api-token" type="password" autocomplete="new-password" placeholder="Leave blank to keep existing token">
+            </div>
+
+            <div class="field">
+              <label for="jellyfin-host-id">Jellyfin tuner host ID override (optional)</label>
+              <input id="jellyfin-host-id" type="text" placeholder="db45abff86f1417ea5ff462aee703e24">
+            </div>
+
+            <div id="jellyfin-token-status" class="muted"></div>
+
+            <div class="muted">
+              Jellyfin refresh endpoints:
+              <code>GET /System/Configuration/livetv</code>,
+              <code>POST /LiveTv/TunerHosts</code>,
+              <code>GET /ScheduledTasks?isHidden=false</code>.
+            </div>
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <button id="save-config" class="primary" type="button">Save Configuration</button>
+          <button id="test-connection" class="secondary" type="button">Test Connection</button>
+        </div>
+
+        <div id="test-result" class="muted" hidden></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Lineups</h2>
+      <div class="panel-body">
+        <div class="field">
+          <label for="lineup-select">Discovered lineups</label>
+          <select id="lineup-select">
+            <option value="">(none discovered)</option>
+          </select>
+        </div>
+
+        <div class="toolbar">
+          <button id="discover-lineups" class="secondary" type="button">Discover Lineups</button>
+          <button id="use-selected-lineup" type="button">Use Selected as Default</button>
+        </div>
+
+        <div id="lineups-meta" class="muted"></div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Sync Behavior and Schedule</h2>
+      <div class="panel-body">
+        <div class="form-grid">
+          <div class="field">
+            <label for="sync-mode">Sync mode</label>
+            <select id="sync-mode">
+              <option value="configured_only">configured_only</option>
+              <option value="mirror_device">mirror_device</option>
+            </select>
+          </div>
+
+          <div class="field">
+            <label for="sync-cron">Sync cron expression</label>
+            <input id="sync-cron" type="text" placeholder="*/30 * * * *">
+          </div>
+        </div>
+
+        <label class="checkbox">
+          <input id="sync-enabled" type="checkbox">
+          Enable scheduled DVR lineup sync
+        </label>
+
+        <label class="checkbox">
+          <input id="pre-sync-refresh" type="checkbox">
+          Run device refresh before each sync
+        </label>
+
+        <div class="toolbar">
+          <button id="dry-run" class="secondary" type="button">Dry-run Preview</button>
+          <button id="run-sync" class="primary" type="button">Sync All Channels Now</button>
+          <button id="reverse-sync" type="button">Pull Associations from DVR</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Sync Results</h2>
+      <div class="panel-body">
+        <div id="summary-empty" class="muted">No sync runs yet.</div>
+        <div id="summary" hidden>
+          <div class="kv-list" id="summary-kv"></div>
+          <div class="muted" id="summary-lineups"></div>
+        </div>
+
+        <div class="field">
+          <label>Warnings</label>
+          <pre id="warnings">[]</pre>
+        </div>
+
+        <div class="field">
+          <label>Patch preview</label>
+          <pre id="patch-preview">{}</pre>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const state = {
+      config: null,
+      lineups: [],
+      cachedLineupsAt: 0,
+      lastSync: null,
+      latestSyncResult: null,
+    };
+
+    const statusEl = document.getElementById("status");
+    const providerEl = document.getElementById("provider");
+    const activeProviderChannelsEl = document.getElementById("active-provider-channels");
+    const activeProviderJellyfinEl = document.getElementById("active-provider-jellyfin");
+    const channelsBaseURLEl = document.getElementById("channels-base-url");
+    const jellyfinBaseURLEl = document.getElementById("jellyfin-base-url");
+    const jellyfinAPITokenEl = document.getElementById("jellyfin-api-token");
+    const jellyfinHostIDEl = document.getElementById("jellyfin-host-id");
+    const jellyfinTokenStatusEl = document.getElementById("jellyfin-token-status");
+    const hdhrDeviceEl = document.getElementById("hdhr-device-id");
+    const defaultLineupInputEl = document.getElementById("default-lineup-id");
+    const lineupSelectEl = document.getElementById("lineup-select");
+    const lineupsMetaEl = document.getElementById("lineups-meta");
+    const discoverLineupsButtonEl = document.getElementById("discover-lineups");
+    const useSelectedLineupButtonEl = document.getElementById("use-selected-lineup");
+    const syncModeEl = document.getElementById("sync-mode");
+    const syncEnabledEl = document.getElementById("sync-enabled");
+    const syncCronEl = document.getElementById("sync-cron");
+    const preSyncRefreshEl = document.getElementById("pre-sync-refresh");
+    const testResultEl = document.getElementById("test-result");
+
+    const summaryEmptyEl = document.getElementById("summary-empty");
+    const summaryWrapEl = document.getElementById("summary");
+    const summaryKVEl = document.getElementById("summary-kv");
+    const summaryLineupsEl = document.getElementById("summary-lineups");
+    const warningsEl = document.getElementById("warnings");
+    const patchPreviewEl = document.getElementById("patch-preview");
+
+    function showStatus(message, kind = "info") {
+      statusEl.hidden = false;
+      statusEl.classList.remove("error", "ok");
+      if (kind === "error") {
+        statusEl.classList.add("error");
+      }
+      if (kind === "ok") {
+        statusEl.classList.add("ok");
+      }
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 4500);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function toLocalTime(epochSec) {
+      if (!Number.isFinite(epochSec) || epochSec <= 0) {
+        return "-";
+      }
+      return new Date(epochSec * 1000).toLocaleString();
+    }
+
+    function setLineupOptions(lineups, selectedID = "") {
+      lineupSelectEl.innerHTML = "";
+      if (!Array.isArray(lineups) || lineups.length === 0) {
+        const option = document.createElement("option");
+        option.value = "";
+        option.textContent = "(none discovered)";
+        lineupSelectEl.appendChild(option);
+        return;
+      }
+
+      for (const lineup of lineups) {
+        const option = document.createElement("option");
+        option.value = lineup.id || "";
+        option.textContent = lineup.name ? `${lineup.id} - ${lineup.name}` : lineup.id;
+        if (lineup.id === selectedID) {
+          option.selected = true;
+        }
+        lineupSelectEl.appendChild(option);
+      }
+    }
+
+    function selectedActiveProviders() {
+      const selected = [];
+      if (activeProviderChannelsEl.checked) {
+        selected.push("channels");
+      }
+      if (activeProviderJellyfinEl.checked) {
+        selected.push("jellyfin");
+      }
+      return selected;
+    }
+
+    function updateProviderFields() {
+      const provider = (providerEl.value || "").trim().toLowerCase();
+      const supportsLineups = provider === "channels";
+      lineupSelectEl.disabled = !supportsLineups;
+      discoverLineupsButtonEl.disabled = !supportsLineups;
+      useSelectedLineupButtonEl.disabled = !supportsLineups;
+
+      if (selectedActiveProviders().length === 0) {
+        if (provider === "jellyfin") {
+          activeProviderJellyfinEl.checked = true;
+        } else {
+          activeProviderChannelsEl.checked = true;
+        }
+      }
+
+      if (!state.config) {
+        jellyfinTokenStatusEl.textContent = "";
+        return;
+      }
+      if (state.config.jellyfin_api_token_configured) {
+        jellyfinTokenStatusEl.textContent = "API token is stored. Leave token blank to keep current value.";
+      } else {
+        jellyfinTokenStatusEl.textContent = "No API token is stored yet.";
+      }
+    }
+
+    function syncFormFromState() {
+      if (!state.config) {
+        return;
+      }
+      const instance = state.config;
+      const provider = (instance.provider || "channels").toLowerCase();
+      const activeProviders = Array.isArray(instance.active_providers) && instance.active_providers.length > 0
+        ? instance.active_providers.map((value) => String(value || "").toLowerCase())
+        : [provider];
+
+      providerEl.value = provider;
+      activeProviderChannelsEl.checked = activeProviders.includes("channels");
+      activeProviderJellyfinEl.checked = activeProviders.includes("jellyfin");
+
+      channelsBaseURLEl.value = instance.channels_base_url || (provider === "channels" ? (instance.base_url || "") : "");
+      jellyfinBaseURLEl.value = instance.jellyfin_base_url || (provider === "jellyfin" ? (instance.base_url || "") : "");
+      jellyfinHostIDEl.value = instance.jellyfin_tuner_host_id || "";
+      jellyfinAPITokenEl.value = "";
+      defaultLineupInputEl.value = instance.default_lineup_id || "";
+      syncModeEl.value = instance.sync_mode || "configured_only";
+      syncEnabledEl.checked = !!instance.sync_enabled;
+      syncCronEl.value = instance.sync_cron || "";
+      preSyncRefreshEl.checked = !!instance.pre_sync_refresh_devices;
+
+      setLineupOptions(state.lineups, instance.default_lineup_id || "");
+      if (lineupSelectEl.value && !defaultLineupInputEl.value) {
+        defaultLineupInputEl.value = lineupSelectEl.value;
+      }
+      updateProviderFields();
+    }
+
+    function renderLineupsMeta() {
+      const count = state.lineups.length;
+      if (count === 0) {
+        lineupsMetaEl.textContent = "No cached lineups.";
+        return;
+      }
+
+      const tsText = state.cachedLineupsAt > 0 ? toLocalTime(state.cachedLineupsAt) : "unknown";
+      lineupsMetaEl.textContent = `Cached lineups: ${count} (updated ${tsText})`;
+    }
+
+    function renderSyncSummary(result) {
+      const summary = result || state.lastSync || null;
+      if (!summary) {
+        summaryEmptyEl.hidden = false;
+        summaryWrapEl.hidden = true;
+        warningsEl.textContent = "[]";
+        patchPreviewEl.textContent = "{}";
+        return;
+      }
+
+      summaryEmptyEl.hidden = true;
+      summaryWrapEl.hidden = false;
+
+      const kvs = [
+        ["Provider", summary.provider || "-"],
+        ["Mode", summary.sync_mode || "-"],
+        ["Dry Run", summary.dry_run ? "yes" : "no"],
+        ["Started", toLocalTime(summary.started_at)],
+        ["Finished", toLocalTime(summary.finished_at)],
+        ["Duration", `${summary.duration_ms || 0} ms`],
+        ["Updated", `${summary.updated_count || 0}`],
+        ["Cleared", `${summary.cleared_count || 0}`],
+        ["Unchanged", `${summary.unchanged_count || 0}`],
+        ["Unresolved", `${summary.unresolved_count || 0}`],
+        ["Missing Tuners", `${summary.missing_tuner_count || 0}`],
+        ["Warnings", `${(summary.warnings || []).length}`],
+      ];
+
+      summaryKVEl.innerHTML = "";
+      for (const [key, value] of kvs) {
+        const box = document.createElement("div");
+        box.className = "kv";
+
+        const k = document.createElement("div");
+        k.className = "k";
+        k.textContent = key;
+
+        const v = document.createElement("div");
+        v.className = "v";
+        v.textContent = value;
+
+        box.append(k, v);
+        summaryKVEl.appendChild(box);
+      }
+
+      const lineups = Array.isArray(summary.lineups) ? summary.lineups : [];
+      if (lineups.length === 0) {
+        summaryLineupsEl.textContent = "Lineup breakdown unavailable.";
+      } else {
+        summaryLineupsEl.textContent = lineups
+          .map((entry) => `${entry.lineup_id}: resolved ${entry.resolved_channels}/${entry.configured_channels}, updated ${entry.updated_count}, cleared ${entry.cleared_count}`)
+          .join(" | ");
+      }
+
+      warningsEl.textContent = JSON.stringify(summary.warnings || [], null, 2);
+      patchPreviewEl.textContent = JSON.stringify(summary.patch_preview || {}, null, 2);
+    }
+
+    function collectConfigPayload() {
+      const manualLineup = defaultLineupInputEl.value.trim();
+      const selectedLineup = lineupSelectEl.value.trim();
+      const resolvedDefaultLineup = manualLineup || selectedLineup;
+      const tokenValue = jellyfinAPITokenEl.value.trim();
+      const selectedProvider = (providerEl.value || "").trim().toLowerCase() || "channels";
+      const channelsBaseURL = channelsBaseURLEl.value.trim();
+      const jellyfinBaseURL = jellyfinBaseURLEl.value.trim();
+      const activeProviders = selectedActiveProviders();
+      if (activeProviders.length === 0) {
+        activeProviders.push(selectedProvider);
+      }
+
+      const payload = {
+        provider: selectedProvider,
+        active_providers: activeProviders,
+        base_url: selectedProvider === "jellyfin" ? jellyfinBaseURL : channelsBaseURL,
+        channels_base_url: channelsBaseURL,
+        jellyfin_base_url: jellyfinBaseURL,
+        default_lineup_id: resolvedDefaultLineup,
+        sync_enabled: syncEnabledEl.checked,
+        sync_cron: syncCronEl.value.trim(),
+        sync_mode: syncModeEl.value,
+        pre_sync_refresh_devices: preSyncRefreshEl.checked,
+        jellyfin_tuner_host_id: jellyfinHostIDEl.value.trim(),
+      };
+      if (tokenValue) {
+        payload.jellyfin_api_token = tokenValue;
+      }
+      return payload;
+    }
+
+    async function refreshLineupsIfNeeded() {
+      if (state.config && String(state.config.provider || "").toLowerCase() === "jellyfin") {
+        return;
+      }
+      if (state.lineups.length > 0) {
+        return;
+      }
+      try {
+        const payload = await api("/api/admin/dvr/lineups?refresh=1");
+        state.lineups = payload.lineups || [];
+        state.cachedLineupsAt = Math.floor(Date.now() / 1000);
+      } catch (err) {
+        console.warn("initial lineup discovery failed", err);
+      }
+    }
+
+    async function loadState() {
+      const payload = await api("/api/admin/dvr");
+      state.config = payload.instance || null;
+      state.lineups = payload.cached_lineups || [];
+      state.cachedLineupsAt = payload.cached_lineups_at || 0;
+      state.lastSync = payload.last_sync || null;
+
+      await refreshLineupsIfNeeded();
+
+      hdhrDeviceEl.value = (state.lastSync && state.lastSync.hdhr_device_id) || "(not reported yet)";
+
+      syncFormFromState();
+      renderLineupsMeta();
+      renderSyncSummary(state.latestSyncResult || state.lastSync);
+    }
+
+    async function saveConfig() {
+      const payload = collectConfigPayload();
+
+      if (payload.sync_enabled && !payload.sync_cron) {
+        throw new Error("sync_cron is required when scheduled sync is enabled");
+      }
+
+      const updated = await api("/api/admin/dvr", {
+        method: "PUT",
+        body: JSON.stringify(payload),
+      });
+
+      state.config = updated.instance || null;
+      state.lineups = updated.cached_lineups || state.lineups;
+      state.cachedLineupsAt = updated.cached_lineups_at || state.cachedLineupsAt;
+      state.lastSync = updated.last_sync || state.lastSync;
+
+      syncFormFromState();
+      renderLineupsMeta();
+      showStatus("DVR configuration saved", "ok");
+    }
+
+    async function testConnection() {
+      const result = await api("/api/admin/dvr/test", { method: "POST" });
+
+      hdhrDeviceEl.value = result.hdhr_device_id || hdhrDeviceEl.value;
+      testResultEl.hidden = false;
+      testResultEl.textContent = `Reachable=${result.reachable ? "yes" : "no"} | Device channels=${result.device_channel_count} | Filtered channels=${result.filtered_channel_count} | Provider=${result.provider}`;
+      showStatus("DVR connection test succeeded", "ok");
+    }
+
+    async function discoverLineups() {
+      if (String(providerEl.value || "").toLowerCase() === "jellyfin") {
+        throw new Error("lineup discovery is supported for Channels DVR provider only");
+      }
+      const payload = await api("/api/admin/dvr/lineups?refresh=1");
+      state.lineups = payload.lineups || [];
+      state.cachedLineupsAt = Math.floor(Date.now() / 1000);
+
+      const selected = defaultLineupInputEl.value.trim();
+      setLineupOptions(state.lineups, selected);
+      renderLineupsMeta();
+      showStatus(`Discovered ${state.lineups.length} lineup(s)`, "ok");
+    }
+
+    async function runSync(dryRun) {
+      const result = await api("/api/admin/dvr/sync", {
+        method: "POST",
+        body: JSON.stringify({ dry_run: dryRun }),
+      });
+
+      state.latestSyncResult = result;
+      state.lastSync = result;
+      renderSyncSummary(result);
+
+      const message = dryRun
+        ? `Dry-run complete: ${result.updated_count || 0} update(s), ${result.cleared_count || 0} clear(s)`
+        : `Sync complete: ${result.updated_count || 0} update(s), ${result.cleared_count || 0} clear(s)`;
+      showStatus(message, "ok");
+    }
+
+    async function runReverseSync() {
+      const lineupID = defaultLineupInputEl.value.trim() || lineupSelectEl.value.trim();
+      const result = await api("/api/admin/dvr/reverse-sync", {
+        method: "POST",
+        body: JSON.stringify({ lineup_id: lineupID }),
+      });
+      const lineupText = result.lineup_id || lineupID || "(unknown)";
+      showStatus(
+        `Reverse sync complete (${lineupText}): imported ${result.imported_count || 0}, unchanged ${result.unchanged_count || 0}`,
+        "ok",
+      );
+    }
+
+    function withBusy(button, work) {
+      const prior = button.textContent;
+      button.disabled = true;
+      button.textContent = "Working...";
+      return Promise.resolve()
+        .then(work)
+        .finally(() => {
+          button.disabled = false;
+          button.textContent = prior;
+        });
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "request failed", "error");
+    }
+
+    providerEl.addEventListener("change", () => {
+      updateProviderFields();
+    });
+    activeProviderChannelsEl.addEventListener("change", () => {
+      updateProviderFields();
+    });
+    activeProviderJellyfinEl.addEventListener("change", () => {
+      updateProviderFields();
+    });
+
+    document.getElementById("save-config").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, saveConfig).catch(handleError);
+    });
+
+    document.getElementById("test-connection").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, testConnection).catch(handleError);
+    });
+
+    document.getElementById("discover-lineups").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, discoverLineups).catch(handleError);
+    });
+
+    document.getElementById("use-selected-lineup").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, async () => {
+        const selected = lineupSelectEl.value.trim();
+        if (!selected) {
+          throw new Error("select a discovered lineup first");
+        }
+        defaultLineupInputEl.value = selected;
+        await saveConfig();
+      }).catch(handleError);
+    });
+
+    document.getElementById("dry-run").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, () => runSync(true)).catch(handleError);
+    });
+
+    document.getElementById("run-sync").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, () => runSync(false)).catch(handleError);
+    });
+
+    document.getElementById("reverse-sync").addEventListener("click", (event) => {
+      withBusy(event.currentTarget, runReverseSync).catch(handleError);
+    });
+
+    loadState().catch(handleError);
+  </script>
+</body>
+</html>

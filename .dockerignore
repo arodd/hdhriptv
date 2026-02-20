@@ -1,0 +1,8 @@
+.git
+.gitignore
+*.db
+*.sqlite
+*.sqlite3
+tmp/
+coverage.out
+bin/

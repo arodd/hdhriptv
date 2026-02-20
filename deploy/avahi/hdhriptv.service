@@ -1,0 +1,9 @@
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">HDHR IPTV (%h)</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>5004</port>
+    <txt-record>path=/</txt-record>
+  </service>
+</service-group>

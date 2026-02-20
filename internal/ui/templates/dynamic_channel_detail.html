@@ -1,0 +1,788 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --border: #d6deeb;
+      --text: #152035;
+      --muted: #5a667b;
+      --brand: #0d63e6;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f5f7fc 0%, #eef2f9 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    input[type="text"] {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      color: var(--text);
+      background: #fff;
+      min-width: 220px;
+      flex: 1;
+    }
+
+    label {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      color: var(--text);
+      font-size: 0.9rem;
+    }
+
+    button,
+    .action-link {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary,
+    .action-link.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    button.danger {
+      border-color: #efc8c4;
+      background: #fff5f4;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .status {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+      margin-bottom: 10px;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .meta {
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .search-warning {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+      font-size: 0.84rem;
+    }
+
+    .group-picker {
+      width: 100%;
+      border: 1px solid #dce5f5;
+      border-radius: 8px;
+      background: #ffffff;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .group-picker-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .selected-groups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 26px;
+    }
+
+    .group-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #aac5f0;
+      background: #e9f2ff;
+      color: #1f4e92;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.82rem;
+    }
+
+    .group-chip button {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 0.85rem;
+      line-height: 1;
+      color: #1f4e92;
+      cursor: pointer;
+    }
+
+    .group-picker-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .group-picker-controls input[type="text"] {
+      min-width: 200px;
+      flex: 1;
+    }
+
+    .channel-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      gap: 8px;
+      background: #fff;
+    }
+
+    .channel-title {
+      font-weight: 600;
+    }
+
+    .channel-meta {
+      color: var(--muted);
+      font-size: 0.84rem;
+      word-break: break-word;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 8px 2px;
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels" class="active">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Dynamic Block Configuration</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+        <div id="query-meta" class="meta"></div>
+        <form id="query-form" class="toolbar">
+          <input id="query-name" type="text" placeholder="Block name (optional)">
+
+          <div class="group-picker">
+            <div class="group-picker-label">Catalog Groups (Multi-select)</div>
+            <div id="query-group-chips" class="selected-groups"></div>
+            <div class="group-picker-controls">
+              <input id="query-group-input" type="text" list="query-group-options" placeholder="Add catalog group filter (blank = all groups)">
+              <button id="query-group-add" type="button">Add Group</button>
+              <button id="query-group-clear" type="button">All Groups</button>
+            </div>
+          </div>
+
+          <input id="query-search" type="text" placeholder="Catalog search query (token mode: |/OR and -term/!term; regex mode: full pattern)">
+          <label class="channel-meta">
+            <input id="query-search-regex" type="checkbox">
+            Regex mode
+          </label>
+          <label>
+            <input id="query-enabled" type="checkbox">
+            Enabled
+          </label>
+          <button class="primary" type="submit">Save Block</button>
+          <button id="reload-btn" type="button">Reload</button>
+          <button id="delete-btn" class="danger" type="button">Delete Block</button>
+          <a class="action-link secondary" href="/ui/channels">Back to Channels</a>
+        </form>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Generated Channels (Block Sorting)</h2>
+      <div class="panel-body">
+        <div class="meta">Generated rows are materialized 1:1 from catalog matches. Reordering here reassigns guide numbers within this block range.</div>
+        <div id="channels-empty" class="empty" hidden>No generated channels currently match this block.</div>
+        <div id="channel-list"></div>
+      </div>
+    </section>
+  </main>
+
+  <datalist id="query-group-options"></datalist>
+
+  <script>
+    const queryID = Number({{.QueryID}});
+    const channelPageLimit = 200;
+
+    const state = {
+      query: null,
+      channels: [],
+      catalogGroups: [],
+      selectedGroups: [],
+      searchRegex: false,
+      reorderBusy: false,
+    };
+
+    const statusEl = document.getElementById("status");
+    const queryMetaEl = document.getElementById("query-meta");
+    const channelListEl = document.getElementById("channel-list");
+    const channelsEmptyEl = document.getElementById("channels-empty");
+    const queryNameEl = document.getElementById("query-name");
+    const queryGroupInputEl = document.getElementById("query-group-input");
+    const queryGroupChipsEl = document.getElementById("query-group-chips");
+    const queryGroupOptionsEl = document.getElementById("query-group-options");
+    const querySearchEl = document.getElementById("query-search");
+    const querySearchRegexEl = document.getElementById("query-search-regex");
+    const queryEnabledEl = document.getElementById("query-enabled");
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.classList.toggle("error", isError);
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 3500);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "request failed", true);
+    }
+
+    {{template "search-warning-summary-function"}}
+
+    function normalizeGroupNameValue(raw) {
+      return String(raw || "").trim();
+    }
+
+    function normalizeGroupNameList(raw) {
+      const deduped = new Map();
+      for (const value of raw || []) {
+        const trimmed = normalizeGroupNameValue(value);
+        if (!trimmed) {
+          continue;
+        }
+        const key = trimmed.toLowerCase();
+        if (deduped.has(key)) {
+          continue;
+        }
+        deduped.set(key, trimmed);
+      }
+      return Array.from(deduped.entries())
+        .sort((a, b) => {
+          if (a[0] === b[0]) {
+            return a[1].localeCompare(b[1]);
+          }
+          return a[0].localeCompare(b[0]);
+        })
+        .map((entry) => entry[1]);
+    }
+
+    function groupAlias(groupNames) {
+      return groupNames.length > 0 ? groupNames[0] : "";
+    }
+
+    function normalizeGroupName(raw) {
+      if (raw && typeof raw === "object") {
+        if (typeof raw.name === "string") {
+          return raw.name.trim();
+        }
+        if (typeof raw.Name === "string") {
+          return raw.Name.trim();
+        }
+      }
+      return "";
+    }
+
+    function normalizeQueryGroups(query) {
+      const rawList = Array.isArray(query?.group_names) ? query.group_names : [];
+      const rawLegacy = normalizeGroupNameValue(query?.group_name || "");
+      return normalizeGroupNameList(rawList.length > 0 ? rawList : [rawLegacy]);
+    }
+
+    function renderSelectedGroupChips() {
+      queryGroupChipsEl.innerHTML = "";
+      if (state.selectedGroups.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "empty";
+        hint.textContent = "All groups selected.";
+        queryGroupChipsEl.appendChild(hint);
+        return;
+      }
+
+      for (const groupName of state.selectedGroups) {
+        const chip = document.createElement("div");
+        chip.className = "group-chip";
+
+        const label = document.createElement("span");
+        label.textContent = groupName;
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "x";
+        removeBtn.setAttribute("aria-label", `Remove ${groupName}`);
+        removeBtn.addEventListener("click", () => {
+          state.selectedGroups = state.selectedGroups.filter((name) => name !== groupName);
+          renderSelectedGroupChips();
+          renderGroupOptions();
+        });
+
+        chip.append(label, removeBtn);
+        queryGroupChipsEl.appendChild(chip);
+      }
+    }
+
+    function renderGroupOptions() {
+      queryGroupOptionsEl.innerHTML = "";
+      const merged = normalizeGroupNameList(state.catalogGroups.concat(state.selectedGroups));
+      for (const groupName of merged) {
+        const option = document.createElement("option");
+        option.value = groupName;
+        queryGroupOptionsEl.appendChild(option);
+      }
+    }
+
+    async function loadCatalogGroups() {
+      try {
+        const groups = await loadPagedCollection("/api/groups?include_counts=0", "groups");
+        state.catalogGroups = groups.map(normalizeGroupName).filter((name) => name.length > 0);
+      } catch (err) {
+        console.warn("unable to load catalog groups for dynamic block autocomplete", err);
+        state.catalogGroups = [];
+      }
+      renderGroupOptions();
+    }
+
+    function addGroupFromInput() {
+      const next = normalizeGroupNameValue(queryGroupInputEl.value);
+      queryGroupInputEl.value = "";
+      if (!next) {
+        return;
+      }
+      if (state.selectedGroups.includes(next)) {
+        return;
+      }
+      state.selectedGroups = normalizeGroupNameList(state.selectedGroups.concat(next));
+      renderSelectedGroupChips();
+      renderGroupOptions();
+    }
+
+    function clearSelectedGroups() {
+      state.selectedGroups = [];
+      renderSelectedGroupChips();
+      renderGroupOptions();
+    }
+
+    async function loadPagedCollection(path, key, pageLimit = channelPageLimit) {
+      const items = [];
+      let offset = 0;
+      let total = -1;
+
+      while (true) {
+        const params = new URLSearchParams({
+          limit: String(pageLimit),
+          offset: String(offset),
+        });
+        const separator = path.includes("?") ? "&" : "?";
+        const data = await api(`${path}${separator}${params.toString()}`);
+        const page = Array.isArray(data?.[key]) ? data[key] : [];
+        const reportedTotal = Number(data?.total);
+        if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
+          total = reportedTotal;
+        }
+
+        items.push(...page);
+        if (page.length === 0) {
+          break;
+        }
+
+        const reportedLimit = Number(data?.limit);
+        const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
+        if (step <= 0) {
+          break;
+        }
+        offset += step;
+
+        if (total >= 0 && offset >= total) {
+          break;
+        }
+      }
+
+      return items;
+    }
+
+    async function loadQuery() {
+      state.query = await api(`/api/dynamic-channels/${queryID}`);
+
+      queryNameEl.value = state.query.name || "";
+      state.selectedGroups = normalizeQueryGroups(state.query);
+      renderSelectedGroupChips();
+      renderGroupOptions();
+      querySearchEl.value = state.query.search_query || "";
+      state.searchRegex = Boolean(state.query.search_regex);
+      querySearchRegexEl.checked = state.searchRegex;
+      queryEnabledEl.checked = Boolean(state.query.enabled);
+
+      const truncation = Number(state.query.truncated_by || 0) > 0
+        ? ` | truncated by ${state.query.truncated_by}`
+        : "";
+      const warningSummary = formatSearchWarningSummary(state.query.search_warning);
+      const warning = warningSummary ? ` | ${warningSummary}` : "";
+      const groupSummary = state.selectedGroups.length > 0 ? state.selectedGroups.join(",") : "all";
+      queryMetaEl.textContent = [
+        `Query ID ${state.query.query_id}`,
+        `range ${state.query.block_start}-${state.query.block_end}`,
+        `order ${state.query.order_index}`,
+        `${state.query.enabled ? "enabled" : "disabled"}`,
+        `mode ${state.searchRegex ? "regex" : "token"}`,
+        `groups ${groupSummary}`,
+        `generated ${state.query.generated_count || 0}${truncation}${warning}`,
+      ].join(" | ");
+      queryMetaEl.className = warningSummary ? "search-warning" : "meta";
+    }
+
+    async function loadGeneratedChannels() {
+      state.channels = await loadPagedCollection(`/api/dynamic-channels/${queryID}/channels`, "channels");
+      renderGeneratedChannels();
+    }
+
+    function renderGeneratedChannels() {
+      channelListEl.innerHTML = "";
+      channelsEmptyEl.hidden = state.channels.length > 0;
+
+      for (let i = 0; i < state.channels.length; i++) {
+        const ch = state.channels[i];
+
+        const row = document.createElement("div");
+        row.className = "channel-row";
+
+        const title = document.createElement("div");
+        title.className = "channel-title";
+        title.textContent = `${ch.guide_number} ${ch.guide_name}`;
+
+        const meta = document.createElement("div");
+        meta.className = "channel-meta";
+        meta.textContent = `${ch.channel_key || "(no channel key)"} | dynamic_item_key=${ch.dynamic_item_key || "-"} | position ${i + 1}/${state.channels.length}`;
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+
+        const reorderLocked = state.reorderBusy;
+
+        const topBtn = document.createElement("button");
+        topBtn.textContent = "Top";
+        topBtn.disabled = reorderLocked || i === 0;
+        topBtn.addEventListener("click", () => reorderToIndex(i, 0).catch(handleError));
+
+        const upBtn = document.createElement("button");
+        upBtn.textContent = "Move Up";
+        upBtn.disabled = reorderLocked || i === 0;
+        upBtn.addEventListener("click", () => reorderToIndex(i, i - 1).catch(handleError));
+
+        const downBtn = document.createElement("button");
+        downBtn.textContent = "Move Down";
+        downBtn.disabled = reorderLocked || i === state.channels.length - 1;
+        downBtn.addEventListener("click", () => reorderToIndex(i, i + 1).catch(handleError));
+
+        const bottomBtn = document.createElement("button");
+        bottomBtn.textContent = "Bottom";
+        bottomBtn.disabled = reorderLocked || i === state.channels.length - 1;
+        bottomBtn.addEventListener("click", () => reorderToIndex(i, state.channels.length - 1).catch(handleError));
+
+        const moveToBtn = document.createElement("button");
+        moveToBtn.className = "secondary";
+        moveToBtn.textContent = "Move To...";
+        moveToBtn.disabled = reorderLocked || state.channels.length <= 1;
+        moveToBtn.addEventListener("click", () => promptMovePosition(i, ch).catch(handleError));
+
+        actions.append(topBtn, upBtn, downBtn, bottomBtn, moveToBtn);
+
+        row.append(title, meta, actions);
+        channelListEl.appendChild(row);
+      }
+    }
+
+    async function reorderToIndex(index, target) {
+      if (state.reorderBusy) {
+        return;
+      }
+      if (target < 0 || target >= state.channels.length) {
+        return;
+      }
+      if (index < 0 || index >= state.channels.length || index === target) {
+        return;
+      }
+
+      const next = [...state.channels];
+      const moved = next[index];
+      next.splice(index, 1);
+      next.splice(target, 0, moved);
+
+      state.reorderBusy = true;
+      renderGeneratedChannels();
+      try {
+        await api(`/api/dynamic-channels/${queryID}/channels/reorder`, {
+          method: "PATCH",
+          body: JSON.stringify({ channel_ids: next.map((channel) => channel.channel_id) }),
+        });
+        state.channels = next;
+        showStatus("Generated channel order saved");
+      } finally {
+        state.reorderBusy = false;
+        await loadQuery();
+        renderGeneratedChannels();
+      }
+    }
+
+    async function promptMovePosition(index, channel) {
+      const total = state.channels.length;
+      if (total <= 1) {
+        return;
+      }
+
+      const input = window.prompt(
+        `Move ${channel.guide_number} ${channel.guide_name} to which position? Enter 1-${total}.`,
+        String(index + 1),
+      );
+      if (input === null) {
+        return;
+      }
+
+      const trimmed = input.trim();
+      if (!/^\d+$/.test(trimmed)) {
+        showStatus("Position must be a whole number", true);
+        return;
+      }
+
+      const target = Number.parseInt(trimmed, 10) - 1;
+      if (target < 0 || target >= total) {
+        showStatus(`Position must be between 1 and ${total}`, true);
+        return;
+      }
+
+      await reorderToIndex(index, target);
+    }
+
+    async function saveQuery(event) {
+      event.preventDefault();
+
+      const groupNames = normalizeGroupNameList(state.selectedGroups);
+      const patch = {
+        name: queryNameEl.value.trim(),
+        group_name: groupAlias(groupNames),
+        group_names: groupNames,
+        search_query: querySearchEl.value.trim(),
+        search_regex: Boolean(querySearchRegexEl.checked),
+        enabled: Boolean(queryEnabledEl.checked),
+      };
+
+      const updated = await api(`/api/dynamic-channels/${queryID}`, {
+        method: "PATCH",
+        body: JSON.stringify(patch),
+      });
+
+      await loadAll();
+      const warning = formatSearchWarningSummary(updated?.search_warning);
+      showStatus(`Dynamic block updated${warning ? ` (${warning})` : ""}`);
+    }
+
+    async function deleteQuery() {
+      if (!state.query) {
+        return;
+      }
+
+      const label = String(state.query.name || "").trim() || `Block ${state.query.order_index}`;
+      const confirmed = window.confirm(`Delete dynamic block ${label} (${state.query.block_start}-${state.query.block_end})?`);
+      if (!confirmed) {
+        return;
+      }
+
+      await api(`/api/dynamic-channels/${queryID}`, { method: "DELETE" });
+      window.location.assign("/ui/channels");
+    }
+
+    async function loadAll() {
+      await Promise.all([
+        loadCatalogGroups(),
+        loadQuery(),
+        loadGeneratedChannels(),
+      ]);
+    }
+
+    document.getElementById("query-form").addEventListener("submit", (event) => {
+      saveQuery(event).catch(handleError);
+    });
+
+    document.getElementById("reload-btn").addEventListener("click", () => {
+      loadAll().then(() => showStatus("Block reloaded")).catch(handleError);
+    });
+
+    document.getElementById("delete-btn").addEventListener("click", () => {
+      deleteQuery().catch(handleError);
+    });
+
+    document.getElementById("query-group-add").addEventListener("click", () => {
+      addGroupFromInput();
+    });
+
+    queryGroupInputEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === ",") {
+        event.preventDefault();
+        addGroupFromInput();
+      }
+    });
+
+    document.getElementById("query-group-clear").addEventListener("click", () => {
+      clearSelectedGroups();
+    });
+
+    loadAll().catch(handleError);
+  </script>
+</body>
+</html>

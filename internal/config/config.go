@@ -1,0 +1,933 @@
+package config
+
+import (
+	"fmt"
+	"net/netip"
+	"os"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/robfig/cron/v3"
+	"github.com/spf13/pflag"
+)
+
+const (
+	streamModeDirect          = "direct"
+	streamModeFFmpegCopy      = "ffmpeg-copy"
+	streamModeFFmpegTranscode = "ffmpeg-transcode"
+
+	defaultUPnPContentDirectoryUpdateIDCacheTTL = time.Second
+
+	defaultCatalogSearchMaxTerms      = 12
+	defaultCatalogSearchMaxDisjuncts  = 6
+	defaultCatalogSearchMaxTermRunes  = 64
+	maxCatalogSearchMaxTermsLimit     = 256
+	maxCatalogSearchMaxDisjunctsLimit = 128
+	maxCatalogSearchMaxTermRunesLimit = 256
+
+	defaultRecoveryFillerText           = "Channel recovering..."
+	defaultFFmpegStartupProbeSizeBytes  = 1_000_000
+	defaultFFmpegStartupAnalyzeDuration = 1500 * time.Millisecond
+	minFFmpegStartupProbeSizeBytes      = 128_000
+	minFFmpegStartupAnalyzeDuration     = 1 * time.Second
+)
+
+// Config carries runtime settings from CLI flags and environment variables.
+type Config struct {
+	PlaylistURL                          string
+	DBPath                               string
+	LogDir                               string
+	HTTPAddr                             string
+	LegacyHTTPAddr                       string
+	UPnPEnabled                          bool
+	UPnPAddr                             string
+	UPnPNotifyInterval                   time.Duration
+	UPnPMaxAge                           time.Duration
+	UPnPContentDirectoryUpdateIDCacheTTL time.Duration
+	TunerCount                           int
+	FriendlyName                         string
+	DeviceID                             string
+	DeviceAuth                           string
+	RefreshSchedule                      string
+	ReconcileDynamicRulePaged            bool
+	FFmpegPath                           string
+	StreamMode                           string
+	StartupTimeout                       time.Duration
+	StartupRandomAccessRecoveryOnly      bool
+	MinProbeBytes                        int
+	MaxFailovers                         int
+	FailoverTotalTimeout                 time.Duration
+	UpstreamOverlimitCooldown            time.Duration
+	FFmpegReconnectEnabled               bool
+	FFmpegReconnectDelayMax              time.Duration
+	FFmpegReconnectMaxRetries            int
+	FFmpegReconnectHTTPErrors            string
+	FFmpegStartupProbeSize               int
+	FFmpegStartupAnalyzeDuration         time.Duration
+	FFmpegCopyRegenerateTimestamps       bool
+	ProducerReadRate                     float64
+	ProducerInitialBurst                 int
+	BufferChunkBytes                     int
+	BufferFlushInterval                  time.Duration
+	BufferTSAlign188                     bool
+	StallDetect                          time.Duration
+	StallHardDeadline                    time.Duration
+	StallPolicy                          string
+	StallMaxFailovers                    int
+	CycleFailureMinHealth                time.Duration
+	RecoveryFillerEnabled                bool
+	RecoveryFillerMode                   string
+	RecoveryFillerInterval               time.Duration
+	RecoveryFillerText                   string
+	RecoveryFillerEnableAudio            bool
+	SubscriberJoinLag                    int
+	SubscriberSlowPolicy                 string
+	SubscriberMaxBlocked                 time.Duration
+	SessionIdleTimeout                   time.Duration
+	SessionDrainTimeout                  time.Duration
+	SessionMaxSubscribers                int
+	SessionHistoryLimit                  int
+	SessionSourceHistoryLimit            int
+	SessionSubscriberHistoryLimit        int
+	SourceHealthDrainTimeout             time.Duration
+	PreemptSettleDelay                   time.Duration
+	AutoPrioritizeProbeTuneDelay         time.Duration
+	AutoPrioritizeWorkers                string
+	ProbeInterval                        time.Duration
+	ProbeTimeout                         time.Duration
+	AdminBasicAuth                       string
+	AdminJSONBodyLimitBytes              int64
+	RequestTimeout                       time.Duration
+	RateLimitRPS                         float64
+	RateLimitBurst                       int
+	RateLimitMaxClients                  int
+	RateLimitTrustedProxies              []string
+	TuneBackoffMaxTunes                  int
+	TuneBackoffInterval                  time.Duration
+	TuneBackoffCooldown                  time.Duration
+	EnableMetrics                        bool
+	LogLevel                             string
+	CatalogSearchMaxTerms                int
+	CatalogSearchMaxDisjuncts            int
+	CatalogSearchMaxTermRunes            int
+}
+
+// RedactedConfig is safe for logs and startup output.
+type RedactedConfig struct {
+	PlaylistURLConfigured                bool     `json:"playlist_url_configured"`
+	DBPath                               string   `json:"db_path"`
+	LogDir                               string   `json:"log_dir"`
+	HTTPAddr                             string   `json:"http_addr"`
+	LegacyHTTPAddr                       string   `json:"legacy_http_addr,omitempty"`
+	UPnPEnabled                          bool     `json:"upnp_enabled"`
+	UPnPAddr                             string   `json:"upnp_addr"`
+	UPnPNotifyInterval                   string   `json:"upnp_notify_interval"`
+	UPnPMaxAge                           string   `json:"upnp_max_age"`
+	UPnPContentDirectoryUpdateIDCacheTTL string   `json:"upnp_content_directory_update_id_cache_ttl"`
+	TunerCount                           int      `json:"tuner_count"`
+	FriendlyName                         string   `json:"friendly_name"`
+	DeviceID                             string   `json:"device_id"`
+	DeviceAuthConfigured                 bool     `json:"device_auth_configured"`
+	RefreshSchedule                      string   `json:"refresh_schedule,omitempty"`
+	ReconcileDynamicRulePaged            bool     `json:"reconcile_dynamic_rule_paged"`
+	FFmpegPath                           string   `json:"ffmpeg_path"`
+	StreamMode                           string   `json:"stream_mode"`
+	StartupTimeout                       string   `json:"startup_timeout"`
+	StartupRandomAccessRecoveryOnly      bool     `json:"startup_random_access_recovery_only"`
+	MinProbeBytes                        int      `json:"min_probe_bytes"`
+	MaxFailovers                         int      `json:"max_failovers"`
+	FailoverTotalTimeout                 string   `json:"failover_total_timeout"`
+	UpstreamOverlimitCooldown            string   `json:"upstream_overlimit_cooldown"`
+	FFmpegReconnectEnabled               bool     `json:"ffmpeg_reconnect_enabled"`
+	FFmpegReconnectDelayMax              string   `json:"ffmpeg_reconnect_delay_max"`
+	FFmpegReconnectMaxRetries            int      `json:"ffmpeg_reconnect_max_retries"`
+	FFmpegReconnectHTTPErrors            string   `json:"ffmpeg_reconnect_http_errors"`
+	FFmpegStartupProbeSize               int      `json:"ffmpeg_startup_probesize"`
+	FFmpegStartupAnalyzeDuration         string   `json:"ffmpeg_startup_analyzeduration"`
+	FFmpegCopyRegenerateTimestamps       bool     `json:"ffmpeg_copy_regenerate_timestamps"`
+	ProducerReadRate                     string   `json:"producer_readrate"`
+	ProducerInitialBurst                 int      `json:"producer_initial_burst"`
+	BufferChunkBytes                     int      `json:"buffer_chunk_bytes"`
+	BufferFlushInterval                  string   `json:"buffer_flush_interval"`
+	BufferTSAlign188                     bool     `json:"buffer_ts_align_188"`
+	StallDetect                          string   `json:"stall_detect"`
+	StallHardDeadline                    string   `json:"stall_hard_deadline"`
+	StallPolicy                          string   `json:"stall_policy"`
+	StallMaxFailovers                    int      `json:"stall_max_failovers"`
+	CycleFailureMinHealth                string   `json:"cycle_failure_min_health"`
+	RecoveryFillerEnabled                bool     `json:"recovery_filler_enabled"`
+	RecoveryFillerMode                   string   `json:"recovery_filler_mode"`
+	RecoveryFillerInterval               string   `json:"recovery_filler_interval"`
+	RecoveryFillerText                   string   `json:"recovery_filler_text"`
+	RecoveryFillerEnableAudio            bool     `json:"recovery_filler_enable_audio"`
+	SubscriberJoinLag                    int      `json:"subscriber_join_lag"`
+	SubscriberSlowPolicy                 string   `json:"subscriber_slow_policy"`
+	SubscriberMaxBlocked                 string   `json:"subscriber_max_blocked"`
+	SessionIdleTimeout                   string   `json:"session_idle_timeout"`
+	SessionDrainTimeout                  string   `json:"session_drain_timeout"`
+	SessionMaxSubscribers                int      `json:"session_max_subscribers"`
+	SessionHistoryLimit                  int      `json:"session_history_limit"`
+	SessionSourceHistoryLimit            int      `json:"session_source_history_limit"`
+	SessionSubscriberHistoryLimit        int      `json:"session_subscriber_history_limit"`
+	SourceHealthDrainTimeout             string   `json:"source_health_drain_timeout"`
+	PreemptSettleDelay                   string   `json:"preempt_settle_delay"`
+	AutoPrioritizeProbeTuneDelay         string   `json:"auto_prioritize_probe_tune_delay"`
+	AutoPrioritizeWorkers                string   `json:"auto_prioritize_workers"`
+	ProbeInterval                        string   `json:"probe_interval"`
+	ProbeTimeout                         string   `json:"probe_timeout"`
+	AdminAuthConfigured                  bool     `json:"admin_auth_configured"`
+	AdminJSONBodyLimitBytes              int64    `json:"admin_json_body_limit_bytes"`
+	RequestTimeout                       string   `json:"request_timeout"`
+	RateLimitRPS                         string   `json:"rate_limit_rps"`
+	RateLimitBurst                       int      `json:"rate_limit_burst"`
+	RateLimitMaxClients                  int      `json:"rate_limit_max_clients"`
+	RateLimitTrustedProxies              []string `json:"rate_limit_trusted_proxies,omitempty"`
+	TuneBackoffMaxTunes                  int      `json:"tune_backoff_max_tunes"`
+	TuneBackoffInterval                  string   `json:"tune_backoff_interval"`
+	TuneBackoffCooldown                  string   `json:"tune_backoff_cooldown"`
+	EnableMetrics                        bool     `json:"enable_metrics"`
+	LogLevel                             string   `json:"log_level"`
+	CatalogSearchMaxTerms                int      `json:"catalog_search_max_terms"`
+	CatalogSearchMaxDisjuncts            int      `json:"catalog_search_max_disjuncts"`
+	CatalogSearchMaxTermRunes            int      `json:"catalog_search_max_term_runes"`
+}
+
+func (c Config) Redacted() RedactedConfig {
+	return RedactedConfig{
+		PlaylistURLConfigured:                strings.TrimSpace(c.PlaylistURL) != "",
+		DBPath:                               c.DBPath,
+		LogDir:                               c.LogDir,
+		HTTPAddr:                             c.HTTPAddr,
+		LegacyHTTPAddr:                       c.LegacyHTTPAddr,
+		UPnPEnabled:                          c.UPnPEnabled,
+		UPnPAddr:                             c.UPnPAddr,
+		UPnPNotifyInterval:                   c.UPnPNotifyInterval.String(),
+		UPnPMaxAge:                           c.UPnPMaxAge.String(),
+		UPnPContentDirectoryUpdateIDCacheTTL: c.UPnPContentDirectoryUpdateIDCacheTTL.String(),
+		TunerCount:                           c.TunerCount,
+		FriendlyName:                         c.FriendlyName,
+		DeviceID:                             c.DeviceID,
+		DeviceAuthConfigured:                 strings.TrimSpace(c.DeviceAuth) != "",
+		RefreshSchedule:                      c.RefreshSchedule,
+		ReconcileDynamicRulePaged:            c.ReconcileDynamicRulePaged,
+		FFmpegPath:                           c.FFmpegPath,
+		StreamMode:                           c.StreamMode,
+		StartupTimeout:                       c.StartupTimeout.String(),
+		StartupRandomAccessRecoveryOnly:      c.StartupRandomAccessRecoveryOnly,
+		MinProbeBytes:                        c.MinProbeBytes,
+		MaxFailovers:                         c.MaxFailovers,
+		FailoverTotalTimeout:                 c.FailoverTotalTimeout.String(),
+		UpstreamOverlimitCooldown:            c.UpstreamOverlimitCooldown.String(),
+		FFmpegReconnectEnabled:               c.FFmpegReconnectEnabled,
+		FFmpegReconnectDelayMax:              c.FFmpegReconnectDelayMax.String(),
+		FFmpegReconnectMaxRetries:            c.FFmpegReconnectMaxRetries,
+		FFmpegReconnectHTTPErrors:            c.FFmpegReconnectHTTPErrors,
+		FFmpegStartupProbeSize:               c.FFmpegStartupProbeSize,
+		FFmpegStartupAnalyzeDuration:         c.FFmpegStartupAnalyzeDuration.String(),
+		FFmpegCopyRegenerateTimestamps:       c.FFmpegCopyRegenerateTimestamps,
+		ProducerReadRate:                     strconv.FormatFloat(c.ProducerReadRate, 'f', -1, 64),
+		ProducerInitialBurst:                 c.ProducerInitialBurst,
+		BufferChunkBytes:                     c.BufferChunkBytes,
+		BufferFlushInterval:                  c.BufferFlushInterval.String(),
+		BufferTSAlign188:                     c.BufferTSAlign188,
+		StallDetect:                          c.StallDetect.String(),
+		StallHardDeadline:                    c.StallHardDeadline.String(),
+		StallPolicy:                          c.StallPolicy,
+		StallMaxFailovers:                    c.StallMaxFailovers,
+		CycleFailureMinHealth:                c.CycleFailureMinHealth.String(),
+		RecoveryFillerEnabled:                c.RecoveryFillerEnabled,
+		RecoveryFillerMode:                   c.RecoveryFillerMode,
+		RecoveryFillerInterval:               c.RecoveryFillerInterval.String(),
+		RecoveryFillerText:                   c.RecoveryFillerText,
+		RecoveryFillerEnableAudio:            c.RecoveryFillerEnableAudio,
+		SubscriberJoinLag:                    c.SubscriberJoinLag,
+		SubscriberSlowPolicy:                 c.SubscriberSlowPolicy,
+		SubscriberMaxBlocked:                 c.SubscriberMaxBlocked.String(),
+		SessionIdleTimeout:                   c.SessionIdleTimeout.String(),
+		SessionDrainTimeout:                  c.SessionDrainTimeout.String(),
+		SessionMaxSubscribers:                c.SessionMaxSubscribers,
+		SessionHistoryLimit:                  c.SessionHistoryLimit,
+		SessionSourceHistoryLimit:            c.SessionSourceHistoryLimit,
+		SessionSubscriberHistoryLimit:        c.SessionSubscriberHistoryLimit,
+		SourceHealthDrainTimeout:             c.SourceHealthDrainTimeout.String(),
+		PreemptSettleDelay:                   c.PreemptSettleDelay.String(),
+		AutoPrioritizeProbeTuneDelay:         c.AutoPrioritizeProbeTuneDelay.String(),
+		AutoPrioritizeWorkers:                c.AutoPrioritizeWorkers,
+		ProbeInterval:                        c.ProbeInterval.String(),
+		ProbeTimeout:                         c.ProbeTimeout.String(),
+		AdminAuthConfigured:                  strings.TrimSpace(c.AdminBasicAuth) != "",
+		AdminJSONBodyLimitBytes:              c.AdminJSONBodyLimitBytes,
+		RequestTimeout:                       c.RequestTimeout.String(),
+		RateLimitRPS:                         strconv.FormatFloat(c.RateLimitRPS, 'f', -1, 64),
+		RateLimitBurst:                       c.RateLimitBurst,
+		RateLimitMaxClients:                  c.RateLimitMaxClients,
+		RateLimitTrustedProxies:              append([]string(nil), c.RateLimitTrustedProxies...),
+		TuneBackoffMaxTunes:                  c.TuneBackoffMaxTunes,
+		TuneBackoffInterval:                  c.TuneBackoffInterval.String(),
+		TuneBackoffCooldown:                  c.TuneBackoffCooldown.String(),
+		CatalogSearchMaxTerms:                c.CatalogSearchMaxTerms,
+		CatalogSearchMaxDisjuncts:            c.CatalogSearchMaxDisjuncts,
+		CatalogSearchMaxTermRunes:            c.CatalogSearchMaxTermRunes,
+		EnableMetrics:                        c.EnableMetrics,
+		LogLevel:                             c.LogLevel,
+	}
+}
+
+func Load(args []string) (Config, error) {
+	refreshSchedule := strings.TrimSpace(getenv("REFRESH_SCHEDULE", ""))
+	defaultLogDir := defaultWorkingDirectory()
+	legacyRefreshIntervalRaw := strings.TrimSpace(os.Getenv("REFRESH_INTERVAL"))
+	legacyRefreshInterval := time.Duration(0)
+	if refreshSchedule == "" && legacyRefreshIntervalRaw != "" {
+		parsed, err := time.ParseDuration(legacyRefreshIntervalRaw)
+		if err != nil {
+			return Config{}, fmt.Errorf("parse REFRESH_INTERVAL: %w", err)
+		}
+		legacyRefreshInterval = parsed
+	}
+
+	cfg := Config{
+		PlaylistURL:                          getenv("PLAYLIST_URL", ""),
+		DBPath:                               getenv("DB_PATH", "./hdhr-iptv.db"),
+		LogDir:                               getenv("LOG_DIR", defaultLogDir),
+		HTTPAddr:                             getenv("HTTP_ADDR", ":5004"),
+		LegacyHTTPAddr:                       getenv("HTTP_ADDR_LEGACY", ""),
+		UPnPEnabled:                          getenvBool("UPNP_ENABLED", true),
+		UPnPAddr:                             getenv("UPNP_ADDR", ":1900"),
+		UPnPNotifyInterval:                   getenvDuration("UPNP_NOTIFY_INTERVAL", 5*time.Minute),
+		UPnPMaxAge:                           getenvDuration("UPNP_MAX_AGE", 30*time.Minute),
+		UPnPContentDirectoryUpdateIDCacheTTL: getenvDuration("UPNP_CONTENT_DIRECTORY_UPDATE_ID_CACHE_TTL", defaultUPnPContentDirectoryUpdateIDCacheTTL),
+		TunerCount:                           getenvInt("TUNER_COUNT", 2),
+		FriendlyName:                         getenv("FRIENDLY_NAME", "HDHR IPTV"),
+		DeviceID:                             getenv("DEVICE_ID", ""),
+		DeviceAuth:                           getenv("DEVICE_AUTH", ""),
+		RefreshSchedule:                      refreshSchedule,
+		ReconcileDynamicRulePaged:            getenvBool("RECONCILE_DYNAMIC_RULE_PAGED", false),
+		FFmpegPath:                           getenv("FFMPEG_PATH", "ffmpeg"),
+		StreamMode:                           getenv("STREAM_MODE", streamModeFFmpegCopy),
+		StartupTimeout:                       getenvDuration("STARTUP_TIMEOUT", 6*time.Second),
+		StartupRandomAccessRecoveryOnly:      getenvBool("STARTUP_RANDOM_ACCESS_RECOVERY_ONLY", true),
+		MinProbeBytes:                        getenvInt("MIN_PROBE_BYTES", 940),
+		MaxFailovers:                         getenvInt("MAX_FAILOVERS", 3),
+		FailoverTotalTimeout:                 getenvDuration("FAILOVER_TOTAL_TIMEOUT", 32*time.Second),
+		UpstreamOverlimitCooldown:            getenvDuration("UPSTREAM_OVERLIMIT_COOLDOWN", 3*time.Second),
+		FFmpegReconnectEnabled:               getenvBool("FFMPEG_RECONNECT_ENABLED", false),
+		FFmpegReconnectDelayMax:              getenvDuration("FFMPEG_RECONNECT_DELAY_MAX", 3*time.Second),
+		FFmpegReconnectMaxRetries:            getenvInt("FFMPEG_RECONNECT_MAX_RETRIES", 1),
+		FFmpegReconnectHTTPErrors:            getenv("FFMPEG_RECONNECT_HTTP_ERRORS", ""),
+		FFmpegStartupProbeSize:               getenvInt("FFMPEG_STARTUP_PROBESIZE_BYTES", defaultFFmpegStartupProbeSizeBytes),
+		FFmpegStartupAnalyzeDuration:         getenvDuration("FFMPEG_STARTUP_ANALYZEDURATION", defaultFFmpegStartupAnalyzeDuration),
+		FFmpegCopyRegenerateTimestamps:       getenvBool("FFMPEG_COPY_REGENERATE_TIMESTAMPS", true),
+		ProducerReadRate:                     getenvFloat("PRODUCER_READRATE", 1),
+		ProducerInitialBurst:                 getenvInt("PRODUCER_INITIAL_BURST", 1),
+		BufferChunkBytes:                     getenvInt("BUFFER_CHUNK_BYTES", 64*1024),
+		BufferFlushInterval:                  getenvDuration("BUFFER_PUBLISH_FLUSH_INTERVAL", 100*time.Millisecond),
+		BufferTSAlign188:                     getenvBool("BUFFER_TS_ALIGN_188", false),
+		StallDetect:                          getenvDuration("STALL_DETECT", 4*time.Second),
+		StallHardDeadline:                    getenvDuration("STALL_HARD_DEADLINE", 32*time.Second),
+		StallPolicy:                          getenv("STALL_POLICY", "failover_source"),
+		StallMaxFailovers:                    getenvInt("STALL_MAX_FAILOVERS_PER_STALL", 3),
+		CycleFailureMinHealth:                getenvDuration("CYCLE_FAILURE_MIN_HEALTH", 20*time.Second),
+		RecoveryFillerEnabled:                getenvBool("RECOVERY_FILLER_ENABLED", true),
+		RecoveryFillerMode:                   getenv("RECOVERY_FILLER_MODE", "slate_av"),
+		RecoveryFillerInterval:               getenvDuration("RECOVERY_FILLER_INTERVAL", 200*time.Millisecond),
+		RecoveryFillerText:                   getenv("RECOVERY_FILLER_TEXT", defaultRecoveryFillerText),
+		RecoveryFillerEnableAudio:            getenvBool("RECOVERY_FILLER_ENABLE_AUDIO", true),
+		SubscriberJoinLag:                    getenvInt("SUBSCRIBER_JOIN_LAG_BYTES", 2*1024*1024),
+		SubscriberSlowPolicy:                 getenv("SUBSCRIBER_SLOW_CLIENT_POLICY", "disconnect"),
+		SubscriberMaxBlocked:                 getenvDuration("SUBSCRIBER_MAX_BLOCKED_WRITE", 6*time.Second),
+		SessionIdleTimeout:                   getenvDuration("SESSION_IDLE_TIMEOUT", 5*time.Second),
+		SessionDrainTimeout:                  getenvDuration("SESSION_DRAIN_TIMEOUT", 2*time.Second),
+		SessionMaxSubscribers:                getenvInt("SESSION_MAX_SUBSCRIBERS", 0),
+		SessionHistoryLimit:                  getenvInt("SESSION_HISTORY_LIMIT", 0),
+		SessionSourceHistoryLimit:            getenvInt("SESSION_SOURCE_HISTORY_LIMIT", 0),
+		SessionSubscriberHistoryLimit:        getenvInt("SESSION_SUBSCRIBER_HISTORY_LIMIT", 0),
+		SourceHealthDrainTimeout:             getenvDuration("SOURCE_HEALTH_DRAIN_TIMEOUT", 0),
+		PreemptSettleDelay:                   getenvDuration("PREEMPT_SETTLE_DELAY", 500*time.Millisecond),
+		AutoPrioritizeProbeTuneDelay:         getenvDuration("AUTO_PRIORITIZE_PROBE_TUNE_DELAY", 1*time.Second),
+		AutoPrioritizeWorkers:                getenv("AUTO_PRIORITIZE_WORKERS", "2"),
+		ProbeInterval:                        getenvDuration("PROBE_INTERVAL", 0),
+		ProbeTimeout:                         getenvDuration("PROBE_TIMEOUT", 3*time.Second),
+		AdminBasicAuth:                       getenv("ADMIN_AUTH", ""),
+		AdminJSONBodyLimitBytes:              getenvInt64("ADMIN_JSON_BODY_LIMIT_BYTES", 1<<20),
+		RequestTimeout:                       getenvDuration("REQUEST_TIMEOUT", 15*time.Second),
+		RateLimitRPS:                         getenvFloat("RATE_LIMIT_RPS", 8),
+		RateLimitBurst:                       getenvInt("RATE_LIMIT_BURST", 32),
+		RateLimitMaxClients:                  getenvInt("RATE_LIMIT_MAX_CLIENTS", 4096),
+		RateLimitTrustedProxies:              getenvCSV("RATE_LIMIT_TRUSTED_PROXIES"),
+		TuneBackoffMaxTunes:                  getenvInt("TUNE_BACKOFF_MAX_TUNES", 8),
+		TuneBackoffInterval:                  getenvDuration("TUNE_BACKOFF_INTERVAL", 1*time.Minute),
+		TuneBackoffCooldown:                  getenvDuration("TUNE_BACKOFF_COOLDOWN", 20*time.Second),
+		CatalogSearchMaxTerms:                getenvInt("CATALOG_SEARCH_MAX_TERMS", defaultCatalogSearchMaxTerms),
+		CatalogSearchMaxDisjuncts:            getenvInt("CATALOG_SEARCH_MAX_DISJUNCTS", defaultCatalogSearchMaxDisjuncts),
+		CatalogSearchMaxTermRunes:            getenvInt("CATALOG_SEARCH_MAX_TERM_RUNES", defaultCatalogSearchMaxTermRunes),
+		EnableMetrics:                        getenvBool("ENABLE_METRICS", false),
+		LogLevel:                             getenv("LOG_LEVEL", "info"),
+	}
+
+	fs := pflag.NewFlagSet("hdhriptv", pflag.ContinueOnError)
+	fs.StringVar(&cfg.PlaylistURL, "playlist-url", cfg.PlaylistURL, "M3U playlist URL")
+	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "SQLite DB path")
+	fs.StringVar(&cfg.HTTPAddr, "http-addr", cfg.HTTPAddr, "HTTP listen address")
+	fs.StringVar(&cfg.LegacyHTTPAddr, "http-addr-legacy", cfg.LegacyHTTPAddr, "Legacy HTTP listen address (often :80)")
+	fs.BoolVar(&cfg.UPnPEnabled, "upnp-enabled", cfg.UPnPEnabled, "Enable UPnP/SSDP discovery responder")
+	fs.StringVar(&cfg.UPnPAddr, "upnp-addr", cfg.UPnPAddr, "UPnP/SSDP UDP listen address")
+	fs.DurationVar(&cfg.UPnPNotifyInterval, "upnp-notify-interval", cfg.UPnPNotifyInterval, "UPnP NOTIFY alive interval (0 disables periodic announcements)")
+	fs.DurationVar(&cfg.UPnPMaxAge, "upnp-max-age", cfg.UPnPMaxAge, "UPnP SSDP max-age advertised in CACHE-CONTROL")
+	fs.DurationVar(&cfg.UPnPContentDirectoryUpdateIDCacheTTL, "upnp-content-directory-update-id-cache-ttl", cfg.UPnPContentDirectoryUpdateIDCacheTTL, "UPnP ContentDirectory GetSystemUpdateID cache TTL")
+	fs.IntVar(&cfg.TunerCount, "tuner-count", cfg.TunerCount, "Number of emulated tuners")
+	fs.StringVar(&cfg.FriendlyName, "friendly-name", cfg.FriendlyName, "Device friendly name")
+	fs.StringVar(&cfg.DeviceID, "device-id", cfg.DeviceID, "8 hex character device ID")
+	fs.StringVar(&cfg.DeviceAuth, "device-auth", cfg.DeviceAuth, "Device auth token")
+	fs.StringVar(&cfg.RefreshSchedule, "refresh-schedule", cfg.RefreshSchedule, "Playlist sync cron schedule (5-field or optional-seconds 6-field)")
+	fs.BoolVar(&cfg.ReconcileDynamicRulePaged, "reconcile-dynamic-rule-paged", cfg.ReconcileDynamicRulePaged, "Enable paged catalog-filter sync for one-off dynamic reconcile rules (default false uses legacy slice mode)")
+	fs.DurationVar(&legacyRefreshInterval, "refresh-interval", legacyRefreshInterval, "Deprecated: playlist refresh interval duration (converted to --refresh-schedule when representable)")
+	fs.StringVar(&cfg.FFmpegPath, "ffmpeg-path", cfg.FFmpegPath, "Path to ffmpeg executable")
+	fs.StringVar(&cfg.StreamMode, "stream-mode", cfg.StreamMode, "Stream mode: direct|ffmpeg-copy|ffmpeg-transcode")
+	fs.DurationVar(&cfg.StartupTimeout, "startup-timeout", cfg.StartupTimeout, "Per-source startup timeout before failover")
+	fs.BoolVar(&cfg.StartupRandomAccessRecoveryOnly, "startup-random-access-recovery-only", cfg.StartupRandomAccessRecoveryOnly, "When enabled, enforce startup random-access gating only during recovery cycles (not initial startup)")
+	fs.IntVar(&cfg.MinProbeBytes, "min-probe-bytes", cfg.MinProbeBytes, "Minimum startup bytes required before committing stream")
+	fs.IntVar(&cfg.MaxFailovers, "max-failovers", cfg.MaxFailovers, "Maximum fallback attempts after primary source (0 to try all)")
+	fs.DurationVar(&cfg.FailoverTotalTimeout, "failover-total-timeout", cfg.FailoverTotalTimeout, "Total timeout budget for startup failover attempts")
+	fs.DurationVar(&cfg.UpstreamOverlimitCooldown, "upstream-overlimit-cooldown", cfg.UpstreamOverlimitCooldown, "Per-provider-scope cooldown after upstream 429 startup failures before retrying the same provider scope")
+	fs.BoolVar(&cfg.FFmpegReconnectEnabled, "ffmpeg-reconnect-enabled", cfg.FFmpegReconnectEnabled, "Enable ffmpeg input reconnect flags for ffmpeg stream modes")
+	fs.DurationVar(&cfg.FFmpegReconnectDelayMax, "ffmpeg-reconnect-delay-max", cfg.FFmpegReconnectDelayMax, "Maximum ffmpeg reconnect delay between attempts for ffmpeg stream modes")
+	fs.IntVar(&cfg.FFmpegReconnectMaxRetries, "ffmpeg-reconnect-max-retries", cfg.FFmpegReconnectMaxRetries, "Maximum ffmpeg reconnect attempts per input URL (-1 uses ffmpeg defaults/unlimited)")
+	fs.StringVar(&cfg.FFmpegReconnectHTTPErrors, "ffmpeg-reconnect-http-errors", cfg.FFmpegReconnectHTTPErrors, "Comma-separated HTTP classes/codes for ffmpeg reconnect_on_http_error (for example 404,429,5xx)")
+	fs.IntVar(&cfg.FFmpegStartupProbeSize, "ffmpeg-startup-probesize-bytes", cfg.FFmpegStartupProbeSize, "FFmpeg input probesize in bytes used during startup analysis for ffmpeg stream modes (runtime floor applies)")
+	fs.DurationVar(&cfg.FFmpegStartupAnalyzeDuration, "ffmpeg-startup-analyzeduration", cfg.FFmpegStartupAnalyzeDuration, "FFmpeg input analyzeduration during startup for ffmpeg stream modes (runtime floor applies)")
+	fs.BoolVar(&cfg.FFmpegCopyRegenerateTimestamps, "ffmpeg-copy-regenerate-timestamps", cfg.FFmpegCopyRegenerateTimestamps, "Enable ffmpeg-copy timestamp regeneration using -fflags +genpts")
+	fs.Float64Var(&cfg.ProducerReadRate, "producer-readrate", cfg.ProducerReadRate, "FFmpeg producer readrate value for shared sessions")
+	fs.IntVar(&cfg.ProducerInitialBurst, "producer-initial-burst", cfg.ProducerInitialBurst, "FFmpeg producer initial burst seconds for shared sessions")
+	fs.IntVar(&cfg.BufferChunkBytes, "buffer-chunk-bytes", cfg.BufferChunkBytes, "Shared stream chunk publish size in bytes")
+	fs.DurationVar(&cfg.BufferFlushInterval, "buffer-publish-flush-interval", cfg.BufferFlushInterval, "Shared stream chunk flush interval")
+	fs.BoolVar(&cfg.BufferTSAlign188, "buffer-ts-align-188", cfg.BufferTSAlign188, "Align shared-stream chunk publishes to 188-byte MPEG-TS packet boundaries")
+	fs.DurationVar(&cfg.StallDetect, "stall-detect", cfg.StallDetect, "No-publish duration threshold before shared stream recovery")
+	fs.DurationVar(&cfg.StallHardDeadline, "stall-hard-deadline", cfg.StallHardDeadline, "Maximum recovery window after stall detection before closing session")
+	fs.StringVar(&cfg.StallPolicy, "stall-policy", cfg.StallPolicy, "Shared stream stall policy: failover_source|restart_same|close_session")
+	fs.IntVar(&cfg.StallMaxFailovers, "stall-max-failovers-per-stall", cfg.StallMaxFailovers, "Maximum failover attempts per detected shared-session stall")
+	fs.DurationVar(&cfg.CycleFailureMinHealth, "cycle-failure-min-health", cfg.CycleFailureMinHealth, "Minimum healthy duration for recovery-selected sources before cycle-close failures are persisted (0 disables)")
+	fs.BoolVar(&cfg.RecoveryFillerEnabled, "recovery-filler-enabled", cfg.RecoveryFillerEnabled, "Enable recovery keepalive filler while shared sessions recover")
+	fs.StringVar(&cfg.RecoveryFillerMode, "recovery-filler-mode", cfg.RecoveryFillerMode, "Recovery keepalive mode: null|psi|slate_av")
+	fs.DurationVar(&cfg.RecoveryFillerInterval, "recovery-filler-interval", cfg.RecoveryFillerInterval, "Interval between packet-based keepalive chunks (null/psi modes)")
+	fs.StringVar(&cfg.RecoveryFillerText, "recovery-filler-text", cfg.RecoveryFillerText, "Text rendered by slate_av recovery filler")
+	fs.BoolVar(&cfg.RecoveryFillerEnableAudio, "recovery-filler-enable-audio", cfg.RecoveryFillerEnableAudio, "Emit silent AAC audio in slate_av recovery filler mode")
+	fs.IntVar(&cfg.SubscriberJoinLag, "subscriber-join-lag-bytes", cfg.SubscriberJoinLag, "Initial shared stream lag window in bytes for new subscribers")
+	fs.StringVar(&cfg.SubscriberSlowPolicy, "subscriber-slow-client-policy", cfg.SubscriberSlowPolicy, "Slow client policy: disconnect|skip")
+	fs.DurationVar(&cfg.SubscriberMaxBlocked, "subscriber-max-blocked-write", cfg.SubscriberMaxBlocked, "Max blocked write duration per chunk for shared stream subscribers (0 to disable)")
+	fs.DurationVar(&cfg.SessionIdleTimeout, "session-idle-timeout", cfg.SessionIdleTimeout, "Shared channel session idle timeout after last subscriber leaves")
+	fs.DurationVar(&cfg.SessionDrainTimeout, "session-drain-timeout", cfg.SessionDrainTimeout, "Timeout budget for bounded shared-session reader close operations")
+	fs.IntVar(&cfg.SessionMaxSubscribers, "session-max-subscribers", cfg.SessionMaxSubscribers, "Maximum subscribers per shared channel session (0 for unlimited)")
+	fs.IntVar(&cfg.SessionHistoryLimit, "session-history-limit", cfg.SessionHistoryLimit, "Shared-session history retention cap for lifecycle snapshots (0 uses runtime default)")
+	fs.IntVar(&cfg.SessionSourceHistoryLimit, "session-source-history-limit", cfg.SessionSourceHistoryLimit, "Per-session source history retention cap (0 falls back to session-history-limit/runtime defaults)")
+	fs.IntVar(&cfg.SessionSubscriberHistoryLimit, "session-subscriber-history-limit", cfg.SessionSubscriberHistoryLimit, "Per-session subscriber history retention cap (0 falls back to session-history-limit/runtime defaults)")
+	fs.DurationVar(&cfg.SourceHealthDrainTimeout, "source-health-drain-timeout", cfg.SourceHealthDrainTimeout, "Timeout budget for source-health persistence drain during session teardown (0 uses runtime default)")
+	fs.DurationVar(&cfg.PreemptSettleDelay, "preempt-settle-delay", cfg.PreemptSettleDelay, "Delay before refilling from full tuner usage back to full usage (also applied to preempted slot reuse)")
+	fs.DurationVar(&cfg.AutoPrioritizeProbeTuneDelay, "auto-prioritize-probe-tune-delay", cfg.AutoPrioritizeProbeTuneDelay, "Delay between automated probe tune attempts (auto-prioritize and background source probing)")
+	fs.StringVar(&cfg.AutoPrioritizeWorkers, "auto-prioritize-workers", cfg.AutoPrioritizeWorkers, "Auto-prioritize worker policy: auto or a fixed positive integer")
+	fs.DurationVar(&cfg.ProbeInterval, "probe-interval", cfg.ProbeInterval, "Background source probe interval (0 to disable)")
+	fs.DurationVar(&cfg.ProbeTimeout, "probe-timeout", cfg.ProbeTimeout, "Per-source timeout for background probes")
+	fs.StringVar(&cfg.AdminBasicAuth, "admin-auth", cfg.AdminBasicAuth, "Admin basic auth in user:pass format")
+	fs.Int64Var(&cfg.AdminJSONBodyLimitBytes, "admin-json-body-limit-bytes", cfg.AdminJSONBodyLimitBytes, "Maximum JSON request body bytes accepted by admin mutation endpoints")
+	fs.DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "HTTP request timeout for metadata/admin routes (0 to disable)")
+	fs.Float64Var(&cfg.RateLimitRPS, "rate-limit-rps", cfg.RateLimitRPS, "Per-client request rate limit in requests/second (0 to disable)")
+	fs.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", cfg.RateLimitBurst, "Per-client request burst size")
+	fs.IntVar(&cfg.RateLimitMaxClients, "rate-limit-max-clients", cfg.RateLimitMaxClients, "Maximum in-memory distinct client IP limiter entries (0 disables cap)")
+	fs.StringSliceVar(&cfg.RateLimitTrustedProxies, "rate-limit-trusted-proxies", cfg.RateLimitTrustedProxies, "Comma-separated trusted proxy CIDR/IP entries used to honor Forwarded/X-Forwarded-For/X-Real-IP for rate-limit identity")
+	fs.IntVar(&cfg.TuneBackoffMaxTunes, "tune-backoff-max-tunes", cfg.TuneBackoffMaxTunes, "Per-channel startup-failure threshold within tune-backoff-interval before tune-backoff-cooldown is applied (0 to disable)")
+	fs.DurationVar(&cfg.TuneBackoffInterval, "tune-backoff-interval", cfg.TuneBackoffInterval, "Rolling window used to count per-channel startup failures for tune backoff")
+	fs.DurationVar(&cfg.TuneBackoffCooldown, "tune-backoff-cooldown", cfg.TuneBackoffCooldown, "Per-channel cooldown duration applied when tune backoff threshold is exceeded")
+	fs.IntVar(&cfg.CatalogSearchMaxTerms, "catalog-search-max-terms", cfg.CatalogSearchMaxTerms, "Maximum token-mode search terms (0 uses default)")
+	fs.IntVar(&cfg.CatalogSearchMaxDisjuncts, "catalog-search-max-disjuncts", cfg.CatalogSearchMaxDisjuncts, "Maximum OR disjunct clauses in token-mode search (0 uses default)")
+	fs.IntVar(&cfg.CatalogSearchMaxTermRunes, "catalog-search-max-term-runes", cfg.CatalogSearchMaxTermRunes, "Maximum runes retained per token in token-mode search (0 uses default)")
+	fs.BoolVar(&cfg.EnableMetrics, "enable-metrics", cfg.EnableMetrics, "Expose Prometheus metrics endpoint at /metrics")
+	fs.StringVar(&cfg.LogDir, "log-dir", cfg.LogDir, "Directory for startup timestamped log files")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: debug|info|warn|error")
+
+	if err := fs.Parse(args); err != nil {
+		return Config{}, err
+	}
+	if fs.Changed("refresh-schedule") && fs.Changed("refresh-interval") {
+		return Config{}, fmt.Errorf("cannot set both --refresh-schedule and --refresh-interval")
+	}
+
+	if fs.Changed("refresh-interval") {
+		schedule, err := intervalToCron(legacyRefreshInterval)
+		if err != nil {
+			return Config{}, fmt.Errorf("convert --refresh-interval to --refresh-schedule: %w", err)
+		}
+		cfg.RefreshSchedule = schedule
+	} else if !fs.Changed("refresh-schedule") && cfg.RefreshSchedule == "" && legacyRefreshInterval > 0 {
+		schedule, err := intervalToCron(legacyRefreshInterval)
+		if err != nil {
+			return Config{}, fmt.Errorf("convert REFRESH_INTERVAL to REFRESH_SCHEDULE: %w", err)
+		}
+		cfg.RefreshSchedule = schedule
+	}
+
+	if err := cfg.normalize(); err != nil {
+		return Config{}, err
+	}
+	return cfg, nil
+}
+
+func (c *Config) normalize() error {
+	c.PlaylistURL = strings.TrimSpace(c.PlaylistURL)
+	c.DBPath = strings.TrimSpace(c.DBPath)
+	c.LogDir = strings.TrimSpace(c.LogDir)
+	c.HTTPAddr = strings.TrimSpace(c.HTTPAddr)
+	c.LegacyHTTPAddr = strings.TrimSpace(c.LegacyHTTPAddr)
+	c.UPnPAddr = strings.TrimSpace(c.UPnPAddr)
+	c.FriendlyName = strings.TrimSpace(c.FriendlyName)
+	c.DeviceID = strings.TrimSpace(c.DeviceID)
+	c.DeviceAuth = strings.TrimSpace(c.DeviceAuth)
+	c.RefreshSchedule = strings.TrimSpace(c.RefreshSchedule)
+	c.FFmpegPath = strings.TrimSpace(c.FFmpegPath)
+	c.FFmpegReconnectHTTPErrors = strings.TrimSpace(c.FFmpegReconnectHTTPErrors)
+	c.StreamMode = strings.ToLower(strings.TrimSpace(c.StreamMode))
+	c.StallPolicy = strings.ToLower(strings.TrimSpace(c.StallPolicy))
+	c.RecoveryFillerMode = strings.ToLower(strings.TrimSpace(c.RecoveryFillerMode))
+	if c.RecoveryFillerMode == "slate-av" {
+		c.RecoveryFillerMode = "slate_av"
+	}
+	c.RecoveryFillerText = strings.TrimSpace(c.RecoveryFillerText)
+	c.SubscriberSlowPolicy = strings.ToLower(strings.TrimSpace(c.SubscriberSlowPolicy))
+	c.AutoPrioritizeWorkers = strings.ToLower(strings.TrimSpace(c.AutoPrioritizeWorkers))
+	c.LogLevel = strings.ToLower(strings.TrimSpace(c.LogLevel))
+
+	normalizedTrustedProxies, err := normalizeTrustedProxyCIDRs(c.RateLimitTrustedProxies)
+	if err != nil {
+		return fmt.Errorf("rate-limit-trusted-proxies: %w", err)
+	}
+	c.RateLimitTrustedProxies = normalizedTrustedProxies
+
+	if c.DBPath == "" {
+		c.DBPath = "./hdhr-iptv.db"
+	}
+	if c.HTTPAddr == "" {
+		c.HTTPAddr = ":5004"
+	}
+	if c.UPnPAddr == "" {
+		c.UPnPAddr = ":1900"
+	}
+	if c.FriendlyName == "" {
+		c.FriendlyName = "HDHR IPTV"
+	}
+	if c.FFmpegPath == "" {
+		c.FFmpegPath = "ffmpeg"
+	}
+	if c.LogLevel == "" {
+		c.LogLevel = "info"
+	}
+	if c.LogDir == "" {
+		c.LogDir = defaultWorkingDirectory()
+	}
+	if c.RecoveryFillerMode == "" {
+		c.RecoveryFillerMode = "slate_av"
+	}
+	if c.RecoveryFillerText == "" {
+		c.RecoveryFillerText = defaultRecoveryFillerText
+	}
+	if c.AutoPrioritizeWorkers == "" {
+		c.AutoPrioritizeWorkers = "2"
+	}
+	c.FFmpegStartupProbeSize = normalizeFFmpegStartupProbeSize(c.FFmpegStartupProbeSize)
+	c.FFmpegStartupAnalyzeDuration = normalizeFFmpegStartupAnalyzeDuration(c.FFmpegStartupAnalyzeDuration)
+
+	if c.TunerCount < 1 {
+		return fmt.Errorf("tuner-count must be at least 1")
+	}
+	if c.UPnPNotifyInterval < 0 {
+		return fmt.Errorf("upnp-notify-interval must be zero or positive")
+	}
+	if c.UPnPMaxAge <= 0 {
+		return fmt.Errorf("upnp-max-age must be positive")
+	}
+	if c.UPnPContentDirectoryUpdateIDCacheTTL <= 0 {
+		return fmt.Errorf("upnp-content-directory-update-id-cache-ttl must be positive")
+	}
+	if c.RefreshSchedule != "" {
+		if err := validateCron(c.RefreshSchedule); err != nil {
+			return fmt.Errorf("refresh-schedule is invalid: %w", err)
+		}
+	}
+	if c.StartupTimeout <= 0 {
+		return fmt.Errorf("startup-timeout must be positive")
+	}
+	if c.MinProbeBytes < 1 {
+		return fmt.Errorf("min-probe-bytes must be at least 1")
+	}
+	if c.MaxFailovers < 0 {
+		return fmt.Errorf("max-failovers must be zero or positive")
+	}
+	if c.FailoverTotalTimeout <= 0 {
+		return fmt.Errorf("failover-total-timeout must be positive")
+	}
+	if c.UpstreamOverlimitCooldown < 0 {
+		return fmt.Errorf("upstream-overlimit-cooldown must be zero or positive")
+	}
+	if c.FFmpegReconnectDelayMax < 0 {
+		return fmt.Errorf("ffmpeg-reconnect-delay-max must be zero or positive")
+	}
+	if c.FFmpegReconnectMaxRetries < -1 {
+		return fmt.Errorf("ffmpeg-reconnect-max-retries must be -1 or greater")
+	}
+	if c.ProducerReadRate <= 0 {
+		return fmt.Errorf("producer-readrate must be positive")
+	}
+	if c.ProducerInitialBurst < 0 {
+		return fmt.Errorf("producer-initial-burst must be zero or positive")
+	}
+	if c.BufferChunkBytes < 1 {
+		return fmt.Errorf("buffer-chunk-bytes must be at least 1")
+	}
+	if c.BufferFlushInterval <= 0 {
+		return fmt.Errorf("buffer-publish-flush-interval must be positive")
+	}
+	if c.StallDetect <= 0 {
+		return fmt.Errorf("stall-detect must be positive")
+	}
+	if c.StallHardDeadline <= 0 {
+		return fmt.Errorf("stall-hard-deadline must be positive")
+	}
+	switch c.StallPolicy {
+	case "failover_source", "restart_same", "close_session":
+	default:
+		return fmt.Errorf("invalid stall-policy %q", c.StallPolicy)
+	}
+	if c.StallMaxFailovers < 0 {
+		return fmt.Errorf("stall-max-failovers-per-stall must be zero or positive")
+	}
+	if c.CycleFailureMinHealth < 0 {
+		return fmt.Errorf("cycle-failure-min-health must be zero or positive")
+	}
+	if c.RecoveryFillerInterval <= 0 {
+		return fmt.Errorf("recovery-filler-interval must be positive")
+	}
+	switch c.RecoveryFillerMode {
+	case "null", "psi", "slate_av":
+	default:
+		return fmt.Errorf("invalid recovery-filler-mode %q", c.RecoveryFillerMode)
+	}
+	if c.SubscriberJoinLag < 0 {
+		return fmt.Errorf("subscriber-join-lag-bytes must be zero or positive")
+	}
+	switch c.SubscriberSlowPolicy {
+	case "disconnect", "skip":
+	default:
+		return fmt.Errorf("invalid subscriber-slow-client-policy %q", c.SubscriberSlowPolicy)
+	}
+	if c.SubscriberMaxBlocked < 0 {
+		return fmt.Errorf("subscriber-max-blocked-write must be zero or positive")
+	}
+	if c.SessionIdleTimeout < 0 {
+		return fmt.Errorf("session-idle-timeout must be zero or positive")
+	}
+	if c.SessionDrainTimeout <= 0 {
+		return fmt.Errorf("session-drain-timeout must be positive")
+	}
+	if c.SessionMaxSubscribers < 0 {
+		return fmt.Errorf("session-max-subscribers must be zero or positive")
+	}
+	if c.SessionHistoryLimit < 0 {
+		return fmt.Errorf("session-history-limit must be zero or positive")
+	}
+	if c.SessionSourceHistoryLimit < 0 {
+		return fmt.Errorf("session-source-history-limit must be zero or positive")
+	}
+	if c.SessionSubscriberHistoryLimit < 0 {
+		return fmt.Errorf("session-subscriber-history-limit must be zero or positive")
+	}
+	if c.SourceHealthDrainTimeout < 0 {
+		return fmt.Errorf("source-health-drain-timeout must be zero or positive")
+	}
+	if c.PreemptSettleDelay < 0 {
+		return fmt.Errorf("preempt-settle-delay must be zero or positive")
+	}
+	if c.AutoPrioritizeProbeTuneDelay < 0 {
+		return fmt.Errorf("auto-prioritize-probe-tune-delay must be zero or positive")
+	}
+	normalizedWorkers, err := normalizeAutoPrioritizeWorkers(c.AutoPrioritizeWorkers)
+	if err != nil {
+		return fmt.Errorf("auto-prioritize-workers must be \"auto\" or a positive integer")
+	}
+	c.AutoPrioritizeWorkers = normalizedWorkers
+	if c.ProbeInterval < 0 {
+		return fmt.Errorf("probe-interval must be zero or positive")
+	}
+	if c.ProbeTimeout <= 0 {
+		return fmt.Errorf("probe-timeout must be positive")
+	}
+	if c.ProbeInterval > 0 && c.ProbeTimeout > c.ProbeInterval {
+		return fmt.Errorf("probe-timeout must be less than or equal to probe-interval when probing is enabled")
+	}
+	if c.AdminJSONBodyLimitBytes <= 0 {
+		return fmt.Errorf("admin-json-body-limit-bytes must be positive")
+	}
+	if c.RequestTimeout < 0 {
+		return fmt.Errorf("request-timeout must be zero or positive")
+	}
+	if c.RateLimitRPS < 0 {
+		return fmt.Errorf("rate-limit-rps must be zero or positive")
+	}
+	if c.RateLimitRPS > 0 && c.RateLimitBurst < 1 {
+		return fmt.Errorf("rate-limit-burst must be at least 1 when rate limiting is enabled")
+	}
+	if c.RateLimitMaxClients < 0 {
+		return fmt.Errorf("rate-limit-max-clients must be zero or positive")
+	}
+	if c.TuneBackoffMaxTunes < 0 {
+		return fmt.Errorf("tune-backoff-max-tunes must be zero or positive")
+	}
+	if c.TuneBackoffInterval < 0 {
+		return fmt.Errorf("tune-backoff-interval must be zero or positive")
+	}
+	if c.TuneBackoffCooldown < 0 {
+		return fmt.Errorf("tune-backoff-cooldown must be zero or positive")
+	}
+	if c.TuneBackoffMaxTunes > 0 {
+		if c.TuneBackoffInterval <= 0 {
+			return fmt.Errorf("tune-backoff-interval must be positive when tune-backoff-max-tunes is enabled")
+		}
+		if c.TuneBackoffCooldown <= 0 {
+			return fmt.Errorf("tune-backoff-cooldown must be positive when tune-backoff-max-tunes is enabled")
+		}
+	}
+	if c.CatalogSearchMaxTerms < 0 {
+		return fmt.Errorf("catalog-search-max-terms must be zero or positive")
+	}
+	if c.CatalogSearchMaxTerms == 0 {
+		c.CatalogSearchMaxTerms = defaultCatalogSearchMaxTerms
+	}
+	if c.CatalogSearchMaxTerms > maxCatalogSearchMaxTermsLimit {
+		return fmt.Errorf("catalog-search-max-terms cannot exceed %d", maxCatalogSearchMaxTermsLimit)
+	}
+	if c.CatalogSearchMaxDisjuncts < 0 {
+		return fmt.Errorf("catalog-search-max-disjuncts must be zero or positive")
+	}
+	if c.CatalogSearchMaxDisjuncts == 0 {
+		c.CatalogSearchMaxDisjuncts = defaultCatalogSearchMaxDisjuncts
+	}
+	if c.CatalogSearchMaxDisjuncts > maxCatalogSearchMaxDisjunctsLimit {
+		return fmt.Errorf("catalog-search-max-disjuncts cannot exceed %d", maxCatalogSearchMaxDisjunctsLimit)
+	}
+	if c.CatalogSearchMaxTermRunes < 0 {
+		return fmt.Errorf("catalog-search-max-term-runes must be zero or positive")
+	}
+	if c.CatalogSearchMaxTermRunes == 0 {
+		c.CatalogSearchMaxTermRunes = defaultCatalogSearchMaxTermRunes
+	}
+	if c.CatalogSearchMaxTermRunes > maxCatalogSearchMaxTermRunesLimit {
+		return fmt.Errorf("catalog-search-max-term-runes cannot exceed %d", maxCatalogSearchMaxTermRunesLimit)
+	}
+
+	switch c.StreamMode {
+	case streamModeDirect, streamModeFFmpegCopy, streamModeFFmpegTranscode:
+	default:
+		return fmt.Errorf("invalid stream-mode %q", c.StreamMode)
+	}
+
+	if c.DeviceID != "" {
+		if len(c.DeviceID) != 8 {
+			return fmt.Errorf("device-id must be 8 hex characters")
+		}
+		for _, ch := range c.DeviceID {
+			if !(ch >= '0' && ch <= '9') && !(ch >= 'a' && ch <= 'f') && !(ch >= 'A' && ch <= 'F') {
+				return fmt.Errorf("device-id must be hex")
+			}
+		}
+		c.DeviceID = strings.ToUpper(c.DeviceID)
+	}
+
+	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
+		return fmt.Errorf("invalid log-level %q", c.LogLevel)
+	}
+
+	return nil
+}
+
+func normalizeFFmpegStartupProbeSize(v int) int {
+	if v <= 0 {
+		return defaultFFmpegStartupProbeSizeBytes
+	}
+	if v < minFFmpegStartupProbeSizeBytes {
+		return minFFmpegStartupProbeSizeBytes
+	}
+	return v
+}
+
+func normalizeFFmpegStartupAnalyzeDuration(v time.Duration) time.Duration {
+	if v <= 0 {
+		return defaultFFmpegStartupAnalyzeDuration
+	}
+	if v < minFFmpegStartupAnalyzeDuration {
+		return minFFmpegStartupAnalyzeDuration
+	}
+	return v
+}
+
+func getenv(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func defaultWorkingDirectory() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	wd = strings.TrimSpace(wd)
+	if wd == "" {
+		return "."
+	}
+	return wd
+}
+
+func getenvInt(key string, def int) int {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.Atoi(v)
+	if err != nil {
+		return def
+	}
+	return parsed
+}
+
+func getenvInt64(key string, def int64) int64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.ParseInt(v, 10, 64)
+	if err != nil {
+		return def
+	}
+	return parsed
+}
+
+func getenvDuration(key string, def time.Duration) time.Duration {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	parsed, err := time.ParseDuration(v)
+	if err != nil {
+		return def
+	}
+	return parsed
+}
+
+func normalizeAutoPrioritizeWorkers(raw string) (string, error) {
+	raw = strings.ToLower(strings.TrimSpace(raw))
+	if raw == "" {
+		return "2", nil
+	}
+	if raw == "auto" {
+		return "auto", nil
+	}
+
+	workers, err := strconv.Atoi(raw)
+	if err != nil || workers < 1 {
+		return "", fmt.Errorf("invalid workers value")
+	}
+	return strconv.Itoa(workers), nil
+}
+
+var scheduleParser = cron.NewParser(
+	cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor,
+)
+
+func validateCron(spec string) error {
+	_, err := scheduleParser.Parse(strings.TrimSpace(spec))
+	return err
+}
+
+func intervalToCron(interval time.Duration) (string, error) {
+	if interval <= 0 {
+		return "", fmt.Errorf("interval must be positive")
+	}
+	if interval%time.Minute != 0 {
+		return "", fmt.Errorf("interval %s is not representable as cron; use --refresh-schedule", interval)
+	}
+
+	minutes := int(interval / time.Minute)
+	if minutes < 60 {
+		if 60%minutes != 0 {
+			return "", fmt.Errorf("interval %s is not representable as stable cron minutes; use --refresh-schedule", interval)
+		}
+		return fmt.Sprintf("*/%d * * * *", minutes), nil
+	}
+
+	if minutes%60 == 0 {
+		hours := minutes / 60
+		if hours < 24 {
+			if 24%hours != 0 {
+				return "", fmt.Errorf("interval %s is not representable as stable cron hours; use --refresh-schedule", interval)
+			}
+			return fmt.Sprintf("0 */%d * * *", hours), nil
+		}
+		if hours == 24 {
+			return "0 0 * * *", nil
+		}
+	}
+
+	return "", fmt.Errorf("interval %s is not representable as cron; use --refresh-schedule", interval)
+}
+
+func getenvCSV(key string) []string {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return nil
+	}
+	return strings.Split(raw, ",")
+}
+
+func normalizeTrustedProxyCIDRs(entries []string) ([]string, error) {
+	normalized := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		trimmed := strings.TrimSpace(entry)
+		if trimmed == "" {
+			continue
+		}
+		if prefix, err := netip.ParsePrefix(trimmed); err == nil {
+			normalized = append(normalized, prefix.Masked().String())
+			continue
+		}
+		if addr, err := netip.ParseAddr(trimmed); err == nil {
+			addr = addr.Unmap()
+			normalized = append(normalized, netip.PrefixFrom(addr, addr.BitLen()).String())
+			continue
+		}
+		return nil, fmt.Errorf("invalid CIDR/IP %q", trimmed)
+	}
+	return normalized, nil
+}
+
+func getenvFloat(key string, def float64) float64 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.ParseFloat(v, 64)
+	if err != nil {
+		return def
+	}
+	return parsed
+}
+
+func getenvBool(key string, def bool) bool {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	parsed, err := strconv.ParseBool(v)
+	if err != nil {
+		return def
+	}
+	return parsed
+}

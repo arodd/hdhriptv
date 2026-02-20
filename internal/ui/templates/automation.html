@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f6f8fc;
+      --panel: #ffffff;
+      --border: #d6deeb;
+      --text: #152035;
+      --muted: #5a667b;
+      --brand: #0d63e6;
+      --brand-soft: #eaf2ff;
+      --danger: #b42318;
+      --ok: #0a7c34;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      background: linear-gradient(180deg, #f5f7fc 0%, #eef2f9 100%);
+      color: var(--text);
+      min-height: 100vh;
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    main {
+      max-width: 1180px;
+      margin: 0 auto;
+      padding: 16px;
+      display: grid;
+      gap: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 12px 14px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+
+    .grid-two {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .row {
+      display: grid;
+      gap: 6px;
+    }
+
+    label {
+      color: var(--text);
+      font-size: 0.88rem;
+      font-weight: 600;
+    }
+
+    input[type="text"],
+    input[type="number"],
+    select {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.92rem;
+      color: var(--text);
+      background: #fff;
+      min-height: 36px;
+      width: 100%;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.9rem;
+      color: var(--text);
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary {
+      border-color: #b9cbea;
+      background: var(--brand-soft);
+      color: #1c4a87;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    .status {
+      border-radius: 8px;
+      padding: 8px 10px;
+      border: 1px solid #c7d9ff;
+      background: #ecf3ff;
+      color: #194d95;
+      font-size: 0.88rem;
+    }
+
+    .status.error {
+      border-color: #f0c5c5;
+      background: #fff3f3;
+      color: #a53a3a;
+    }
+
+    .status.ok {
+      border-color: #b7e3c2;
+      background: #effcf4;
+      color: var(--ok);
+    }
+
+    .meta-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+
+    .meta-cell {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px;
+      background: #fbfdff;
+    }
+
+    .meta-label {
+      color: var(--muted);
+      font-size: 0.8rem;
+      margin-bottom: 4px;
+    }
+
+    .meta-value {
+      font-size: 0.88rem;
+      word-break: break-word;
+    }
+
+    .table-wrap {
+      overflow-x: auto;
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+
+    th,
+    td {
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+      padding: 7px;
+      vertical-align: top;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    th {
+      color: var(--muted);
+      font-weight: 600;
+    }
+
+    td.wrap {
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .cell-tight {
+      white-space: nowrap;
+    }
+
+    .cell-status {
+      min-width: 140px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .cell-summary {
+      min-width: 340px;
+      white-space: normal;
+      overflow-wrap: anywhere;
+      word-break: break-word;
+    }
+
+    .empty {
+      color: var(--muted);
+      font-size: 0.9rem;
+      padding: 4px 0;
+    }
+
+    @media (max-width: 980px) {
+      .grid-two,
+      .meta-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog">Catalog</a>
+      <a href="/ui/channels">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation" class="active">Automation</a>
+    </nav>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Automation Settings</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+
+        <div class="grid-two">
+          <div class="row">
+            <label for="playlist-url">Playlist URL</label>
+            <input id="playlist-url" type="text" placeholder="https://provider.example/playlist.m3u">
+          </div>
+          <div class="row">
+            <label for="timezone">Scheduler Timezone</label>
+            <input id="timezone" type="text" placeholder="America/Chicago">
+          </div>
+        </div>
+
+        <div class="grid-two">
+          <div class="row">
+            <label for="playlist-sync-cron">Playlist Sync Cron</label>
+            <input id="playlist-sync-cron" type="text" placeholder="*/30 * * * *">
+            <label class="checkbox-row">
+              <input id="playlist-sync-enabled" type="checkbox">
+              Playlist Sync Enabled
+            </label>
+          </div>
+          <div class="row">
+            <label for="auto-prioritize-cron">Auto-prioritize Cron</label>
+            <input id="auto-prioritize-cron" type="text" placeholder="30 3 * * *">
+            <label class="checkbox-row">
+              <input id="auto-prioritize-enabled" type="checkbox">
+              Auto-prioritize Enabled
+            </label>
+          </div>
+        </div>
+
+        <div class="grid-two">
+          <div class="row">
+            <label for="probe-timeout-ms">Probe Timeout (ms)</label>
+            <input id="probe-timeout-ms" type="number" min="1">
+          </div>
+          <div class="row">
+            <label for="analyze-duration-us">Analyze Duration (microseconds)</label>
+            <input id="analyze-duration-us" type="number" min="1">
+          </div>
+          <div class="row">
+            <label for="probe-size-bytes">Probe Size (bytes)</label>
+            <input id="probe-size-bytes" type="number" min="1">
+          </div>
+          <div class="row">
+            <label for="bitrate-mode">Bitrate Mode</label>
+            <select id="bitrate-mode">
+              <option value="metadata">metadata</option>
+              <option value="sample">sample</option>
+              <option value="metadata_then_sample">metadata_then_sample</option>
+            </select>
+          </div>
+          <div class="row">
+            <label for="sample-seconds">Bitrate Sample Seconds</label>
+            <input id="sample-seconds" type="number" min="1">
+          </div>
+          <div class="row">
+            <label class="checkbox-row">
+              <input id="enabled-only" type="checkbox">
+              Analyze enabled sources only
+            </label>
+          </div>
+          <div class="row">
+            <label for="top-n-per-channel">Top-N Sources Per Channel (0 = all)</label>
+            <input id="top-n-per-channel" type="number" min="0">
+          </div>
+        </div>
+
+        <div class="toolbar">
+          <button id="save-btn" class="primary" type="button">Save Settings</button>
+          <button id="reload-btn" type="button">Reload</button>
+          <button id="run-playlist-sync-btn" class="secondary" type="button">Run Playlist Sync Now</button>
+          <button id="run-auto-prioritize-btn" class="secondary" type="button">Run Auto-prioritize Now</button>
+          <button id="clear-all-source-health-btn" class="secondary" type="button">Clear All Source Health + Cooldowns</button>
+          <button id="clear-auto-prioritize-cache-btn" class="secondary" type="button">Clear Auto-prioritize Cache</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Current Schedule State</h2>
+      <div class="panel-body">
+        <div class="meta-grid">
+          <div class="meta-cell">
+            <div class="meta-label">Playlist Sync Next Run</div>
+            <div id="playlist-next-run" class="meta-value">-</div>
+          </div>
+          <div class="meta-cell">
+            <div class="meta-label">Playlist Sync Last Run</div>
+            <div id="playlist-last-run" class="meta-value">-</div>
+          </div>
+          <div class="meta-cell">
+            <div class="meta-label">Playlist Sync Last Status</div>
+            <div id="playlist-last-status" class="meta-value">-</div>
+          </div>
+          <div class="meta-cell">
+            <div class="meta-label">Auto-prioritize Next Run</div>
+            <div id="auto-next-run" class="meta-value">-</div>
+          </div>
+          <div class="meta-cell">
+            <div class="meta-label">Auto-prioritize Last Run</div>
+            <div id="auto-last-run" class="meta-value">-</div>
+          </div>
+          <div class="meta-cell">
+            <div class="meta-label">Auto-prioritize Last Status</div>
+            <div id="auto-last-status" class="meta-value">-</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Recent Job Runs</h2>
+      <div class="panel-body">
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Run ID</th>
+                <th>Job</th>
+                <th>Status</th>
+                <th>Started</th>
+                <th>Finished</th>
+                <th>Progress</th>
+                <th>Summary / Error</th>
+              </tr>
+            </thead>
+            <tbody id="runs-body"></tbody>
+          </table>
+          <div id="runs-empty" class="empty" hidden>No job runs recorded yet.</div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById("status");
+    const runsBodyEl = document.getElementById("runs-body");
+    const runsEmptyEl = document.getElementById("runs-empty");
+
+    const playlistUrlEl = document.getElementById("playlist-url");
+    const timezoneEl = document.getElementById("timezone");
+    const playlistEnabledEl = document.getElementById("playlist-sync-enabled");
+    const playlistCronEl = document.getElementById("playlist-sync-cron");
+    const autoEnabledEl = document.getElementById("auto-prioritize-enabled");
+    const autoCronEl = document.getElementById("auto-prioritize-cron");
+
+    const probeTimeoutEl = document.getElementById("probe-timeout-ms");
+    const analyzeDurationEl = document.getElementById("analyze-duration-us");
+    const probeSizeEl = document.getElementById("probe-size-bytes");
+    const bitrateModeEl = document.getElementById("bitrate-mode");
+    const sampleSecondsEl = document.getElementById("sample-seconds");
+    const enabledOnlyEl = document.getElementById("enabled-only");
+    const topNEl = document.getElementById("top-n-per-channel");
+
+    const playlistNextRunEl = document.getElementById("playlist-next-run");
+    const playlistLastRunEl = document.getElementById("playlist-last-run");
+    const playlistLastStatusEl = document.getElementById("playlist-last-status");
+    const autoNextRunEl = document.getElementById("auto-next-run");
+    const autoLastRunEl = document.getElementById("auto-last-run");
+    const autoLastStatusEl = document.getElementById("auto-last-status");
+
+    let pollTimer = null;
+
+    function showStatus(message, level = "info") {
+      statusEl.hidden = false;
+      statusEl.classList.remove("error", "ok");
+      if (level === "error") {
+        statusEl.classList.add("error");
+      } else if (level === "ok") {
+        statusEl.classList.add("ok");
+      }
+      statusEl.textContent = message;
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 4500);
+    }
+
+    function unixToText(value) {
+      if (!value) {
+        return "-";
+      }
+      const date = new Date(value * 1000);
+      if (Number.isNaN(date.getTime())) {
+        return "-";
+      }
+      return `${date.toLocaleString()} (${date.toISOString()})`;
+    }
+
+    function runToText(run) {
+      if (!run) {
+        return "-";
+      }
+      const start = unixToText(run.started_at);
+      return `#${run.run_id} ${start}`;
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function loadStateToForm(data) {
+      playlistUrlEl.value = data.playlist_url || "";
+      timezoneEl.value = data.timezone || "";
+
+      playlistEnabledEl.checked = !!data.playlist_sync?.enabled;
+      playlistCronEl.value = data.playlist_sync?.cron_spec || "";
+      autoEnabledEl.checked = !!data.auto_prioritize?.enabled;
+      autoCronEl.value = data.auto_prioritize?.cron_spec || "";
+
+      const analyzer = data.analyzer || {};
+      probeTimeoutEl.value = analyzer.probe_timeout_ms ?? 7000;
+      analyzeDurationEl.value = analyzer.analyzeduration_us ?? 1500000;
+      probeSizeEl.value = analyzer.probesize_bytes ?? 1000000;
+      bitrateModeEl.value = analyzer.bitrate_mode || "metadata_then_sample";
+      sampleSecondsEl.value = analyzer.sample_seconds ?? 3;
+      enabledOnlyEl.checked = analyzer.enabled_only !== false;
+      topNEl.value = analyzer.top_n_per_channel ?? 0;
+
+      playlistNextRunEl.textContent = unixToText(data.playlist_sync?.next_run);
+      playlistLastRunEl.textContent = runToText(data.playlist_sync?.last_run);
+      playlistLastStatusEl.textContent = data.playlist_sync?.last_run?.status || "-";
+      autoNextRunEl.textContent = unixToText(data.auto_prioritize?.next_run);
+      autoLastRunEl.textContent = runToText(data.auto_prioritize?.last_run);
+      autoLastStatusEl.textContent = data.auto_prioritize?.last_run?.status || "-";
+    }
+
+    function collectPayload() {
+      return {
+        playlist_url: playlistUrlEl.value.trim(),
+        timezone: timezoneEl.value.trim(),
+        playlist_sync: {
+          enabled: playlistEnabledEl.checked,
+          cron_spec: playlistCronEl.value.trim(),
+        },
+        auto_prioritize: {
+          enabled: autoEnabledEl.checked,
+          cron_spec: autoCronEl.value.trim(),
+        },
+        analyzer: {
+          probe_timeout_ms: Number.parseInt(probeTimeoutEl.value, 10),
+          analyzeduration_us: Number.parseInt(analyzeDurationEl.value, 10),
+          probesize_bytes: Number.parseInt(probeSizeEl.value, 10),
+          bitrate_mode: bitrateModeEl.value.trim(),
+          sample_seconds: Number.parseInt(sampleSecondsEl.value, 10),
+          enabled_only: enabledOnlyEl.checked,
+          top_n_per_channel: Number.parseInt(topNEl.value, 10),
+        },
+      };
+    }
+
+    async function refreshState() {
+      const data = await api("/api/admin/automation");
+      loadStateToForm(data);
+    }
+
+    function renderRuns(runs) {
+      runsBodyEl.innerHTML = "";
+      runsEmptyEl.hidden = runs.length > 0;
+      for (const run of runs) {
+        const tr = document.createElement("tr");
+        const progressMax = Number(run.progress_max || 0);
+        const progressCur = Number(run.progress_cur || 0);
+        const progressText = progressMax > 0 ? `${progressCur}/${progressMax}` : `${progressCur}`;
+        const summary = (run.summary || "").trim();
+        const err = (run.error || "").trim();
+
+        tr.innerHTML = `
+          <td class="cell-tight">${run.run_id}</td>
+          <td class="cell-tight">${run.job_name}</td>
+          <td class="cell-status">${run.status || "-"}</td>
+          <td class="cell-tight">${unixToText(run.started_at)}</td>
+          <td class="cell-tight">${unixToText(run.finished_at)}</td>
+          <td class="cell-tight">${progressText}</td>
+          <td class="wrap cell-summary">${summary || err || "-"}</td>
+        `;
+        runsBodyEl.appendChild(tr);
+      }
+    }
+
+    async function refreshRuns() {
+      const data = await api("/api/admin/jobs?limit=25");
+      const runs = data.runs || [];
+      renderRuns(runs);
+
+      const hasRunning = runs.some((run) => run.status === "running");
+      if (hasRunning) {
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    }
+
+    function startPolling() {
+      if (pollTimer !== null) {
+        return;
+      }
+      pollTimer = window.setInterval(async () => {
+        try {
+          await Promise.all([refreshState(), refreshRuns()]);
+        } catch (err) {
+          console.error(err);
+        }
+      }, 2000);
+    }
+
+    function stopPolling() {
+      if (pollTimer === null) {
+        return;
+      }
+      window.clearInterval(pollTimer);
+      pollTimer = null;
+    }
+
+    async function runJob(path, label) {
+      const data = await api(path, { method: "POST" });
+      showStatus(`${label} queued (run #${data.run_id})`, "ok");
+      startPolling();
+      await Promise.all([refreshState(), refreshRuns()]);
+    }
+
+    async function init() {
+      try {
+        await Promise.all([refreshState(), refreshRuns()]);
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "failed to load automation state", "error");
+      }
+    }
+
+    document.getElementById("save-btn").addEventListener("click", async () => {
+      try {
+        const payload = collectPayload();
+        const data = await api("/api/admin/automation", {
+          method: "PUT",
+          body: JSON.stringify(payload),
+        });
+        loadStateToForm(data);
+        await refreshRuns();
+        showStatus("Automation settings saved", "ok");
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "save failed", "error");
+      }
+    });
+
+    document.getElementById("reload-btn").addEventListener("click", async () => {
+      try {
+        await Promise.all([refreshState(), refreshRuns()]);
+        showStatus("Automation settings reloaded", "ok");
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "reload failed", "error");
+      }
+    });
+
+    document.getElementById("run-playlist-sync-btn").addEventListener("click", async () => {
+      try {
+        await runJob("/api/admin/jobs/playlist-sync/run", "Playlist sync");
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "playlist sync run failed", "error");
+      }
+    });
+
+    document.getElementById("run-auto-prioritize-btn").addEventListener("click", async () => {
+      try {
+        await runJob("/api/admin/jobs/auto-prioritize/run", "Auto-prioritize");
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "auto-prioritize run failed", "error");
+      }
+    });
+
+    document.getElementById("clear-auto-prioritize-cache-btn").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/admin/jobs/auto-prioritize/cache/clear", { method: "POST" });
+        const deleted = Number(data?.deleted || 0);
+        const noun = deleted === 1 ? "entry" : "entries";
+        showStatus(`Auto-prioritize cache cleared (${deleted} ${noun} removed)`, "ok");
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "clear auto-prioritize cache failed", "error");
+      }
+    });
+
+    document.getElementById("clear-all-source-health-btn").addEventListener("click", async () => {
+      try {
+        const confirmed = window.confirm(
+          "Clear health stats and cooldown windows for all channel sources?"
+        );
+        if (!confirmed) {
+          return;
+        }
+
+        const data = await api("/api/channels/sources/health/clear", { method: "POST" });
+        const cleared = Number(data?.cleared || 0);
+        const noun = cleared === 1 ? "source" : "sources";
+        showStatus(`Cleared source health stats and cooldown windows for ${cleared} ${noun}`, "ok");
+      } catch (err) {
+        console.error(err);
+        showStatus(err.message || "clear source health failed", "error");
+      }
+    });
+
+    init();
+  </script>
+</body>
+</html>

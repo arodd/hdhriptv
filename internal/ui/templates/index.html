@@ -1,0 +1,591 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    :root {
+      --bg: #f7f8fb;
+      --panel: #ffffff;
+      --border: #d9deea;
+      --text: #1f2a37;
+      --muted: #5b6677;
+      --brand: #0b5fff;
+      --brand-soft: #e9f0ff;
+      --danger: #c0262d;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "IBM Plex Sans", "Segoe UI", Tahoma, sans-serif;
+      color: var(--text);
+      background: radial-gradient(circle at 20% -10%, #f2f6ff, #f7f8fb 45%);
+    }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 14px 18px;
+      background: #10192a;
+      color: #f5f8ff;
+    }
+
+    .brand {
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .topnav {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .topnav a {
+      color: #dbe7ff;
+      text-decoration: none;
+      border: 1px solid #2f4c77;
+      border-radius: 8px;
+      padding: 6px 10px;
+      font-size: 0.9rem;
+    }
+
+    .topnav a.active {
+      background: #1f3b68;
+      border-color: #3764a8;
+      color: #fff;
+    }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 260px 1fr 340px;
+      gap: 16px;
+      min-height: calc(100vh - 60px);
+      padding: 16px;
+    }
+
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      box-shadow: 0 6px 18px rgba(31, 42, 55, 0.05);
+      overflow: hidden;
+    }
+
+    .panel h2 {
+      margin: 0;
+      padding: 14px 16px;
+      font-size: 1rem;
+      border-bottom: 1px solid var(--border);
+      background: #fcfdff;
+    }
+
+    .panel-body {
+      padding: 12px;
+      max-height: calc(100vh - 120px);
+      overflow: auto;
+    }
+
+    .toolbar {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 12px;
+    }
+
+    input[type="search"] {
+      width: 100%;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font-size: 0.95rem;
+    }
+
+    button {
+      border: 1px solid var(--border);
+      background: #fff;
+      color: var(--text);
+      border-radius: 8px;
+      padding: 7px 10px;
+      font-size: 0.9rem;
+      cursor: pointer;
+    }
+
+    button.primary {
+      border-color: var(--brand);
+      background: var(--brand);
+      color: #fff;
+    }
+
+    button.secondary {
+      border-color: var(--brand);
+      background: var(--brand-soft);
+      color: var(--brand);
+    }
+
+    button.danger {
+      border-color: #f2ccd1;
+      background: #fff5f6;
+      color: var(--danger);
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
+    ul { list-style: none; margin: 0; padding: 0; }
+
+    .group-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      width: 100%;
+      margin-bottom: 8px;
+      text-align: left;
+    }
+
+    .group-item.active {
+      border-color: var(--brand);
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-weight: 600;
+    }
+
+    .channel-row,
+    .favorite-row {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-bottom: 10px;
+      display: grid;
+      gap: 6px;
+    }
+
+    .channel-meta,
+    .favorite-meta {
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+
+    .row-actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .status {
+      padding: 8px 12px;
+      margin: 0 0 10px;
+      border-radius: 8px;
+      background: #eef4ff;
+      border: 1px solid #c7d9ff;
+      color: #1d4ed8;
+      font-size: 0.88rem;
+    }
+
+    .pagination {
+      margin-top: 8px;
+      padding-top: 10px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+
+    .pagination-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    @media (max-width: 960px) {
+      .layout {
+        grid-template-columns: 1fr;
+      }
+
+      .panel-body {
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">HDHR IPTV Admin</div>
+    <nav class="topnav">
+      <a href="/ui/catalog" class="active">Catalog</a>
+      <a href="/ui/channels">Channels</a>
+      <a href="/ui/merge">Merge Suggestions</a>
+      <a href="/ui/tuners">Tuners</a>
+      <a href="/ui/dvr">DVR</a>
+      <a href="/ui/automation">Automation</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <section class="panel">
+      <h2>Groups</h2>
+      <div class="panel-body">
+        <button id="group-all" class="group-item active" type="button">
+          <span>All groups</span>
+          <span id="group-all-count"></span>
+        </button>
+        <ul id="group-list"></ul>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Playlist Catalog</h2>
+      <div class="panel-body">
+        <div id="status" class="status" hidden></div>
+
+        <form id="search-form" class="toolbar">
+          <input id="search" type="search" placeholder="Search channels">
+          <button class="primary" type="submit">Search</button>
+          <button id="search-reset" type="button">Reset</button>
+        </form>
+
+        <div id="items-empty" class="channel-meta" hidden>No channels found for this filter.</div>
+        <div id="item-list"></div>
+        <div id="pagination" class="pagination" hidden>
+          <div id="pagination-summary" class="channel-meta"></div>
+          <div class="pagination-actions">
+            <button id="pagination-prev" type="button">Previous</button>
+            <button id="pagination-next" type="button">Next</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>Favorites</h2>
+      <div class="panel-body">
+        <div id="favorites-empty" class="channel-meta" hidden>No favorites selected yet.</div>
+        <div id="favorite-list"></div>
+      </div>
+    </section>
+  </div>
+
+  <script>
+    const state = {
+      group: "",
+      q: "",
+      limit: 200,
+      offset: 0,
+      total: 0,
+      favorites: [],
+    };
+
+    const statusEl = document.getElementById("status");
+    const groupListEl = document.getElementById("group-list");
+    const itemListEl = document.getElementById("item-list");
+    const favoriteListEl = document.getElementById("favorite-list");
+    const itemsEmptyEl = document.getElementById("items-empty");
+    const favoritesEmptyEl = document.getElementById("favorites-empty");
+    const groupAllBtn = document.getElementById("group-all");
+    const groupAllCountEl = document.getElementById("group-all-count");
+    const paginationEl = document.getElementById("pagination");
+    const paginationSummaryEl = document.getElementById("pagination-summary");
+    const paginationPrevBtn = document.getElementById("pagination-prev");
+    const paginationNextBtn = document.getElementById("pagination-next");
+
+    function showStatus(message, isError = false) {
+      statusEl.hidden = false;
+      statusEl.textContent = message;
+      if (isError) {
+        statusEl.style.background = "#fff5f6";
+        statusEl.style.borderColor = "#f3c6cc";
+        statusEl.style.color = "#b42318";
+      } else {
+        statusEl.style.background = "#eef4ff";
+        statusEl.style.borderColor = "#c7d9ff";
+        statusEl.style.color = "#1d4ed8";
+      }
+      window.clearTimeout(showStatus.timer);
+      showStatus.timer = window.setTimeout(() => {
+        statusEl.hidden = true;
+      }, 2500);
+    }
+
+    async function api(path, options = {}) {
+      const resp = await fetch(path, {
+        headers: { "Content-Type": "application/json" },
+        ...options,
+      });
+
+      if (!resp.ok) {
+        const text = await resp.text();
+        throw new Error(text || `request failed (${resp.status})`);
+      }
+
+      if (resp.status === 204) {
+        return null;
+      }
+      return resp.json();
+    }
+
+    function normalizeGroup(raw) {
+      const name = typeof raw.name === "string"
+        ? raw.name
+        : (typeof raw.Name === "string" ? raw.Name : "");
+      const numericCount = Number(raw.count ?? raw.Count ?? 0);
+      const count = Number.isFinite(numericCount) && numericCount > 0 ? numericCount : 0;
+      return { name, count };
+    }
+
+    function renderGroups(groups) {
+      groupListEl.innerHTML = "";
+      let total = 0;
+
+      for (const g of (groups || []).map(normalizeGroup)) {
+        total += g.count;
+        const li = document.createElement("li");
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "group-item" + (state.group === g.name ? " active" : "");
+        btn.dataset.groupName = g.name;
+
+        const label = document.createElement("span");
+        label.textContent = g.name || "Ungrouped";
+
+        const count = document.createElement("span");
+        count.textContent = String(g.count);
+
+        btn.append(label, count);
+        btn.addEventListener("click", () => {
+          state.group = g.name;
+          state.offset = 0;
+          selectGroupButtons();
+          loadItems().catch(handleError);
+        });
+        li.appendChild(btn);
+        groupListEl.appendChild(li);
+      }
+
+      groupAllCountEl.textContent = total > 0 ? `(${total})` : "";
+      selectGroupButtons();
+    }
+
+    function selectGroupButtons() {
+      groupAllBtn.classList.toggle("active", state.group === "");
+      for (const btn of groupListEl.querySelectorAll("button.group-item")) {
+        btn.classList.toggle("active", btn.dataset.groupName === state.group);
+      }
+    }
+
+    function renderItems(items) {
+      itemListEl.innerHTML = "";
+      itemsEmptyEl.hidden = items.length > 0;
+
+      for (const item of items) {
+        const row = document.createElement("div");
+        row.className = "channel-row";
+
+        const title = document.createElement("div");
+        title.textContent = item.name;
+
+        const meta = document.createElement("div");
+        meta.className = "channel-meta";
+        meta.textContent = `${item.group || "Ungrouped"} | ${item.item_key}`;
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+        const toggleBtn = document.createElement("button");
+
+        if (item.favorite) {
+          toggleBtn.className = "danger";
+          toggleBtn.textContent = "Unfavorite";
+          toggleBtn.addEventListener("click", () => removeFavorite(item.fav_id));
+        } else {
+          toggleBtn.className = "secondary";
+          toggleBtn.textContent = "Favorite";
+          toggleBtn.addEventListener("click", () => addFavorite(item.item_key));
+        }
+
+        actions.appendChild(toggleBtn);
+        row.append(title, meta, actions);
+        itemListEl.appendChild(row);
+      }
+    }
+
+    function renderPagination() {
+      if (state.total <= state.limit) {
+        paginationEl.hidden = true;
+        return;
+      }
+
+      const start = state.total > 0 ? state.offset + 1 : 0;
+      const end = Math.min(state.offset + state.limit, state.total);
+      const hasPrev = state.offset > 0;
+      const hasNext = state.offset + state.limit < state.total;
+
+      paginationSummaryEl.textContent = `Showing ${start}-${end} of ${state.total}`;
+      paginationPrevBtn.disabled = !hasPrev;
+      paginationNextBtn.disabled = !hasNext;
+      paginationEl.hidden = false;
+    }
+
+    function renderFavorites(favorites) {
+      favoriteListEl.innerHTML = "";
+      favoritesEmptyEl.hidden = favorites.length > 0;
+
+      for (let i = 0; i < favorites.length; i++) {
+        const fav = favorites[i];
+
+        const row = document.createElement("div");
+        row.className = "favorite-row";
+
+        const title = document.createElement("div");
+        title.textContent = `${fav.guide_number} ${fav.guide_name}`;
+
+        const meta = document.createElement("div");
+        meta.className = "favorite-meta";
+        meta.textContent = `${fav.group_name || "Ungrouped"} | ${fav.item_key}`;
+
+        const actions = document.createElement("div");
+        actions.className = "row-actions";
+
+        const upBtn = document.createElement("button");
+        upBtn.textContent = "Move Up";
+        upBtn.disabled = i === 0;
+        upBtn.addEventListener("click", () => moveFavorite(i, -1));
+
+        const downBtn = document.createElement("button");
+        downBtn.textContent = "Move Down";
+        downBtn.disabled = i === favorites.length - 1;
+        downBtn.addEventListener("click", () => moveFavorite(i, +1));
+
+        const removeBtn = document.createElement("button");
+        removeBtn.className = "danger";
+        removeBtn.textContent = "Remove";
+        removeBtn.addEventListener("click", () => removeFavorite(fav.fav_id));
+
+        actions.append(upBtn, downBtn, removeBtn);
+        row.append(title, meta, actions);
+        favoriteListEl.appendChild(row);
+      }
+    }
+
+    async function loadGroups() {
+      const data = await api("/api/groups");
+      renderGroups(data.groups || []);
+    }
+
+    async function loadItems() {
+      const params = new URLSearchParams();
+      if (state.group) {
+        params.set("group", state.group);
+      }
+      if (state.q) {
+        params.set("q", state.q);
+      }
+      params.set("limit", String(state.limit));
+      params.set("offset", String(state.offset));
+
+      const data = await api(`/api/items?${params.toString()}`);
+      state.total = Number(data.total || 0);
+      state.limit = Number(data.limit || state.limit);
+      state.offset = Number(data.offset || 0);
+      renderItems(data.items || []);
+      renderPagination();
+    }
+
+    async function loadFavorites() {
+      const data = await api("/api/favorites");
+      state.favorites = data.favorites || [];
+      renderFavorites(state.favorites);
+    }
+
+    async function loadAll() {
+      await Promise.all([loadGroups(), loadFavorites()]);
+      await loadItems();
+    }
+
+    async function addFavorite(itemKey) {
+      await api("/api/favorites", {
+        method: "POST",
+        body: JSON.stringify({ item_key: itemKey }),
+      });
+      await Promise.all([loadFavorites(), loadItems()]);
+      showStatus("Favorite added");
+    }
+
+    async function removeFavorite(favID) {
+      await api(`/api/favorites/${favID}`, { method: "DELETE" });
+      await Promise.all([loadFavorites(), loadItems()]);
+      showStatus("Favorite removed");
+    }
+
+    async function moveFavorite(index, delta) {
+      const next = [...state.favorites];
+      const target = index + delta;
+      if (target < 0 || target >= next.length) {
+        return;
+      }
+
+      const tmp = next[index];
+      next[index] = next[target];
+      next[target] = tmp;
+
+      await api("/api/favorites/reorder", {
+        method: "PATCH",
+        body: JSON.stringify({ fav_ids: next.map((v) => v.fav_id) }),
+      });
+
+      await Promise.all([loadFavorites(), loadItems()]);
+      showStatus("Favorites reordered");
+    }
+
+    function handleError(err) {
+      console.error(err);
+      showStatus(err.message || "Request failed", true);
+    }
+
+    groupAllBtn.addEventListener("click", () => {
+      state.group = "";
+      state.offset = 0;
+      selectGroupButtons();
+      loadItems().catch(handleError);
+    });
+
+    document.getElementById("search-form").addEventListener("submit", (event) => {
+      event.preventDefault();
+      state.q = document.getElementById("search").value.trim();
+      state.offset = 0;
+      loadItems().catch(handleError);
+    });
+
+    document.getElementById("search-reset").addEventListener("click", () => {
+      document.getElementById("search").value = "";
+      state.q = "";
+      state.offset = 0;
+      loadItems().catch(handleError);
+    });
+
+    paginationPrevBtn.addEventListener("click", () => {
+      if (state.offset <= 0) {
+        return;
+      }
+      state.offset = Math.max(0, state.offset - state.limit);
+      loadItems().catch(handleError);
+    });
+
+    paginationNextBtn.addEventListener("click", () => {
+      if (state.offset + state.limit >= state.total) {
+        return;
+      }
+      state.offset += state.limit;
+      loadItems().catch(handleError);
+    });
+
+    loadAll().catch(handleError);
+  </script>
+</body>
+</html>
