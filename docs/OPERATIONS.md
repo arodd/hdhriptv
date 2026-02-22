@@ -201,6 +201,8 @@ object or assets).
 2. Build release binaries and checksum file:
    - `dist/hdhriptv-linux-amd64`
    - `dist/hdhriptv-linux-arm64`
+   - `dist/hdhriptv-darwin-amd64`
+   - `dist/hdhriptv-darwin-arm64`
    - `dist/SHA256SUMS`
 3. Run `make publish-github` to synchronize public mirror commit.
 4. Verify internal/public branch tree hashes match.

@@ -1,3 +1,4 @@
+- 2026-02-22 [feature] Expanded `make release-github-sync-tag` artifacts to include `darwin` (`amd64`/`arm64`) binaries in GitHub releases with checksum coverage.
 - 2026-02-22 [feature] Added `make release-github-sync-tag` to build release binaries once, push matching release tags to internal/public remotes, and publish binaries on GitHub releases (without creating a GitLab release).
 - 2026-02-20 [docs] Documented recovery continuity handoff (`live -> slate_av -> live`), mode/filler continuity tradeoffs, and strict validation harness guidance in `docs/RECOVERY.md`.
 - 2026-02-20 [bug] Propagated recovery timeline offsets into resumed ffmpeg source startup (`-output_ts_offset`) and expanded the slate AV ffplay harness to record TS output and enforce monotonic post-failover packet timestamp validation.

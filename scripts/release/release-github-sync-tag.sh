@@ -156,13 +156,30 @@ fi
 log "Building release binaries from ${internal_tip}"
 mkdir -p "$RELEASE_DIST_DIR"
 go mod download
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o "${RELEASE_DIST_DIR}/hdhriptv-linux-amd64" ./cmd/hdhriptv
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o "${RELEASE_DIST_DIR}/hdhriptv-linux-arm64" ./cmd/hdhriptv
-test -f "${RELEASE_DIST_DIR}/hdhriptv-linux-amd64"
-test -f "${RELEASE_DIST_DIR}/hdhriptv-linux-arm64"
+
+build_target() {
+  goos="$1"
+  goarch="$2"
+  output="$3"
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="-s -w" -o "${RELEASE_DIST_DIR}/${output}" ./cmd/hdhriptv
+  test -f "${RELEASE_DIST_DIR}/${output}"
+}
+
+release_artifacts=(
+  hdhriptv-linux-amd64
+  hdhriptv-linux-arm64
+  hdhriptv-darwin-amd64
+  hdhriptv-darwin-arm64
+)
+
+build_target linux amd64 hdhriptv-linux-amd64
+build_target linux arm64 hdhriptv-linux-arm64
+build_target darwin amd64 hdhriptv-darwin-amd64
+build_target darwin arm64 hdhriptv-darwin-arm64
+
 (
   cd "$RELEASE_DIST_DIR"
-  sha256sum hdhriptv-linux-amd64 hdhriptv-linux-arm64 > SHA256SUMS
+  sha256sum "${release_artifacts[@]}" > SHA256SUMS
 )
 test -f "${RELEASE_DIST_DIR}/SHA256SUMS"
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
@@ -225,12 +242,13 @@ else
 fi
 
 log "Uploading release assets to GitHub (clobber enabled)"
-gh release upload "$RELEASE_TAG" \
-  "${RELEASE_DIST_DIR}/hdhriptv-linux-amd64" \
-  "${RELEASE_DIST_DIR}/hdhriptv-linux-arm64" \
-  "${RELEASE_DIST_DIR}/SHA256SUMS" \
-  --repo "$release_repo" \
-  --clobber
+release_upload_paths=()
+for artifact in "${release_artifacts[@]}"; do
+  release_upload_paths+=("${RELEASE_DIST_DIR}/${artifact}")
+done
+release_upload_paths+=("${RELEASE_DIST_DIR}/SHA256SUMS")
+
+gh release upload "$RELEASE_TAG" "${release_upload_paths[@]}" --repo "$release_repo" --clobber
 
 log "Release complete"
 log "Internal commit: ${internal_tip}"

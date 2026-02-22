@@ -80,8 +80,11 @@ Behavior summary:
 
 - Refuses to run with tracked local changes or branch divergence from internal
   `SYNC_BRANCH`.
-- Builds `dist/hdhriptv-linux-amd64`, `dist/hdhriptv-linux-arm64`, and
-  `dist/SHA256SUMS`.
+- Builds the following release binaries plus `dist/SHA256SUMS`:
+  - `dist/hdhriptv-linux-amd64`
+  - `dist/hdhriptv-linux-arm64`
+  - `dist/hdhriptv-darwin-amd64`
+  - `dist/hdhriptv-darwin-arm64`
 - Runs `make publish-github` and verifies internal/public trees match.
 - Ensures `RELEASE_TAG` points to internal tip on GitLab remote and public tip
   on GitHub remote, failing fast if an existing remote tag points elsewhere.
