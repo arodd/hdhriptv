@@ -3,6 +3,7 @@ package stream
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNormalizeRecoveryFillerProfileDefaults(t *testing.T) {
@@ -161,6 +162,35 @@ func TestSlateAVFillerProducerArgsMatchProfile(t *testing.T) {
 	assertArgContains(t, args, "-x264-params")
 	assertArgContains(t, args, "repeat-headers=1")
 	assertArgContains(t, args, "aud=1")
+}
+
+func TestSlateAVFillerProducerArgsApplyPTSOffsetToVideoAndAudio(t *testing.T) {
+	producer, err := newSlateAVFillerProducer(slateAVFillerConfig{
+		FFmpegPath: "ffmpeg",
+		Profile: streamProfile{
+			Width:           1280,
+			Height:          720,
+			FrameRate:       30000.0 / 1001.0,
+			AudioSampleRate: 48000,
+			AudioChannels:   2,
+		},
+		Text:        "Recovering",
+		EnableAudio: true,
+		PTSOffset:   1500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("newSlateAVFillerProducer() error = %v", err)
+	}
+
+	typed, ok := producer.(*slateAVFillerProducer)
+	if !ok {
+		t.Fatalf("producer type = %T, want *slateAVFillerProducer", producer)
+	}
+
+	args := typed.args()
+	assertArgContains(t, args, "setpts=PTS+1500000/1000000/TB")
+	assertArgContains(t, args, "-af")
+	assertArgContains(t, args, "asetpts=PTS+1500000/1000000/TB")
 }
 
 func TestSlateAVFillerProducerArgsInputPacingBeforeInput(t *testing.T) {

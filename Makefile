@@ -7,8 +7,16 @@ PUBLIC_REMOTE ?= github
 PUBLIC_REPO_URL ?= git@github.com:arodd/hdhriptv.git
 SYNC_BRANCH ?= main
 PUBLIC_SYNC_TAG ?= public-sync/latest
+# Optional override for publish-github squash commit subject.
+# Example: make publish-github PUBLISH_GITHUB_COMMIT_MESSAGE="release: sync main"
+PUBLISH_GITHUB_COMMIT_MESSAGE ?=
+RELEASE_TAG ?=
+RELEASE_TITLE ?=
+RELEASE_NOTES_FILE ?=
+RELEASE_DIST_DIR ?= dist
+GITHUB_RELEASE_REPO ?=
 
-.PHONY: production-build release-local docs-check publish-github
+.PHONY: production-build release-local docs-check publish-github release-github-sync-tag
 
 production-build:
 	go build -o hdhriptv ./cmd/hdhriptv
@@ -33,6 +41,21 @@ release-local:
 docs-check:
 	./scripts/docs/check-open-todo-links.sh
 	./scripts/docs/check-api-paths.sh
+
+release-github-sync-tag:
+	test -n "$(RELEASE_TAG)" || (echo "RELEASE_TAG is required (example: RELEASE_TAG=v1.2.3)" && exit 1)
+	INTERNAL_REMOTE="$(INTERNAL_REMOTE)" \
+	INTERNAL_REPO_URL="$(INTERNAL_REPO_URL)" \
+	PUBLIC_REMOTE="$(PUBLIC_REMOTE)" \
+	PUBLIC_REPO_URL="$(PUBLIC_REPO_URL)" \
+	SYNC_BRANCH="$(SYNC_BRANCH)" \
+	RELEASE_TAG="$(RELEASE_TAG)" \
+	RELEASE_TITLE="$(RELEASE_TITLE)" \
+	RELEASE_NOTES_FILE="$(RELEASE_NOTES_FILE)" \
+	RELEASE_DIST_DIR="$(RELEASE_DIST_DIR)" \
+	GITHUB_RELEASE_REPO="$(GITHUB_RELEASE_REPO)" \
+	PUBLISH_GITHUB_COMMIT_MESSAGE="$(PUBLISH_GITHUB_COMMIT_MESSAGE)" \
+	./scripts/release/release-github-sync-tag.sh
 
 publish-github:
 	@set -eu; \
@@ -73,8 +96,11 @@ publish-github:
 		echo "Push/pull and re-run publish-github."; \
 		exit 1; \
 	fi; \
-	tree="$$(git rev-parse "$$internal_tip^{tree}")"; \
-	last_internal="$$(git rev-parse -q --verify "$(PUBLIC_SYNC_TAG)^{commit}" 2>/dev/null || true)"; \
+	internal_tree="$$(git rev-parse "$$internal_tip^{tree}")"; \
+	last_internal="$$(git ls-remote --refs --tags "$(INTERNAL_REMOTE)" "refs/tags/$(PUBLIC_SYNC_TAG)" | cut -f1)"; \
+	if [ -n "$$last_internal" ]; then \
+		last_internal="$$(git rev-parse "$$last_internal^{commit}")"; \
+	fi; \
 	if [ -n "$$last_internal" ] && [ "$$last_internal" = "$$internal_tip" ]; then \
 		echo "No new internal commits to publish."; \
 		exit 0; \
@@ -85,10 +111,32 @@ publish-github:
 		exit 1; \
 	fi; \
 	if git rev-parse --verify -q "$(PUBLIC_REMOTE)/$(SYNC_BRANCH)" >/dev/null; then \
+		has_public_tip=1; \
 		public_tip="$$(git rev-parse "$(PUBLIC_REMOTE)/$(SYNC_BRANCH)")"; \
-		new_commit="$$(printf 'public(main): squash sync\n\nInternal-From: %s\nInternal-To: %s\n' "$${last_internal:-<initial>}" "$$internal_tip" | git commit-tree "$$tree" -p "$$public_tip")"; \
+		public_tree="$$(git rev-parse "$$public_tip^{tree}")"; \
 	else \
-		new_commit="$$(printf 'public(main): initial squash sync\n\nInternal-From: %s\nInternal-To: %s\n' "$${last_internal:-<initial>}" "$$internal_tip" | git commit-tree "$$tree")"; \
+		has_public_tip=0; \
+		public_tree=""; \
+	fi; \
+	if [ "$$has_public_tip" -eq 1 ] && [ "$$public_tree" = "$$internal_tree" ]; then \
+		echo "Public $(PUBLIC_REMOTE)/$(SYNC_BRANCH) already matches internal tree; updating marker only."; \
+		git tag -f "$(PUBLIC_SYNC_TAG)" "$$internal_tip"; \
+		git push -f "$(INTERNAL_REMOTE)" "refs/tags/$(PUBLIC_SYNC_TAG)"; \
+		echo "Updated $(PUBLIC_SYNC_TAG) to $$internal_tip without creating a new public commit"; \
+		exit 0; \
+	fi; \
+	commit_subject="$(PUBLISH_GITHUB_COMMIT_MESSAGE)"; \
+	if [ -z "$$commit_subject" ]; then \
+		if [ "$$has_public_tip" -eq 1 ]; then \
+			commit_subject="public(main): squash sync"; \
+		else \
+			commit_subject="public(main): initial squash sync"; \
+		fi; \
+	fi; \
+	if [ "$$has_public_tip" -eq 1 ]; then \
+		new_commit="$$(printf '%s\n\nInternal-From: %s\nInternal-To: %s\n' "$$commit_subject" "$${last_internal:-<initial>}" "$$internal_tip" | git commit-tree "$$internal_tree" -p "$$public_tip")"; \
+	else \
+		new_commit="$$(printf '%s\n\nInternal-From: %s\nInternal-To: %s\n' "$$commit_subject" "$${last_internal:-<initial>}" "$$internal_tip" | git commit-tree "$$internal_tree")"; \
 	fi; \
 	git push "$(PUBLIC_REMOTE)" "$$new_commit:refs/heads/$(SYNC_BRANCH)"; \
 	git tag -f "$(PUBLIC_SYNC_TAG)" "$$internal_tip"; \

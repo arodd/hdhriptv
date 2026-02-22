@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"crypto/rand"
 	"database/sql"
@@ -408,6 +409,7 @@ func main() {
 		},
 	)(handler)
 	handler = httpmw.Timeout(cfg.RequestTimeout, "/auto/")(handler)
+	handler = debugRequestLogger(handler, cfg.HTTPRequestLogEnabled)
 
 	discoveryServer, err := discovery.NewServer(discovery.Config{
 		DeviceID:       cfg.DeviceID,
@@ -553,6 +555,7 @@ func main() {
 		"probe_timeout", cfg.ProbeTimeout.String(),
 		"admin_json_body_limit_bytes", cfg.AdminJSONBodyLimitBytes,
 		"request_timeout", cfg.RequestTimeout.String(),
+		"http_request_log_enabled", cfg.HTTPRequestLogEnabled,
 		"rate_limit_rps", cfg.RateLimitRPS,
 		"rate_limit_burst", cfg.RateLimitBurst,
 		"rate_limit_max_clients", cfg.RateLimitMaxClients,
@@ -1056,6 +1059,102 @@ func waitForHTTPReadiness(ctx context.Context, httpAddr string, pollInterval tim
 		case <-ticker.C:
 		}
 	}
+}
+
+type debugResponseWriter struct {
+	http.ResponseWriter
+	statusCode   int
+	bytesWritten int64
+}
+
+func (w *debugResponseWriter) WriteHeader(code int) {
+	if w.statusCode == 0 {
+		w.statusCode = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *debugResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	n, err := w.ResponseWriter.Write(p)
+	w.bytesWritten += int64(n)
+	return n, err
+}
+
+func (w *debugResponseWriter) Flush() {
+	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
+		flusher.Flush()
+	}
+}
+
+func (w *debugResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, fmt.Errorf("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func (w *debugResponseWriter) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := w.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
+
+func (w *debugResponseWriter) ReadFrom(src io.Reader) (int64, error) {
+	readerFrom, ok := w.ResponseWriter.(io.ReaderFrom)
+	if !ok {
+		return io.Copy(struct{ io.Writer }{w}, src)
+	}
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	n, err := readerFrom.ReadFrom(src)
+	w.bytesWritten += n
+	return n, err
+}
+
+func (w *debugResponseWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
+}
+
+func debugRequestLogger(next http.Handler, enabled bool) http.Handler {
+	if next == nil {
+		return http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
+	}
+	if !enabled {
+		return next
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		startedAt := time.Now()
+		observed := &debugResponseWriter{ResponseWriter: w}
+		next.ServeHTTP(observed, r)
+
+		statusCode := observed.statusCode
+		if statusCode == 0 {
+			statusCode = http.StatusOK
+		}
+		slog.Info(
+			"http request",
+			"remote_addr", strings.TrimSpace(r.RemoteAddr),
+			"method", r.Method,
+			"host", strings.TrimSpace(r.Host),
+			"path", r.URL.Path,
+			"query", strings.TrimSpace(r.URL.RawQuery),
+			"proto", r.Proto,
+			"user_agent", strings.TrimSpace(r.UserAgent()),
+			"accept", strings.TrimSpace(r.Header.Get("Accept")),
+			"content_type", strings.TrimSpace(r.Header.Get("Content-Type")),
+			"soap_action", strings.TrimSpace(r.Header.Get("SOAPAction")),
+			"status_code", statusCode,
+			"response_bytes", observed.bytesWritten,
+			"duration", time.Since(startedAt),
+		)
+	})
 }
 
 func readinessProbeURL(httpAddr string) (string, error) {

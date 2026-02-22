@@ -564,8 +564,8 @@ func TestHandlerDirectModeStreamsChannel(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if got := rec.Header().Get("Content-Type"); got != "video/MP2T" {
-		t.Fatalf("Content-Type = %q, want video/MP2T", got)
+	if got := rec.Header().Get("Content-Type"); got != "video/mpeg" {
+		t.Fatalf("Content-Type = %q, want video/mpeg", got)
 	}
 	if got := rec.Body.String(); !strings.Contains(got, "transport-stream-data") {
 		t.Fatalf("body = %q, want data containing transport-stream-data", got)
@@ -636,8 +636,8 @@ func TestHandlerDirectModeStreamsDynamicGuideRangeChannel(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", rec.Code, http.StatusOK)
 	}
-	if got := rec.Header().Get("Content-Type"); got != "video/MP2T" {
-		t.Fatalf("Content-Type = %q, want video/MP2T", got)
+	if got := rec.Header().Get("Content-Type"); got != "video/mpeg" {
+		t.Fatalf("Content-Type = %q, want video/mpeg", got)
 	}
 	if got := rec.Body.String(); !strings.Contains(got, "dynamic-transport-stream") {
 		t.Fatalf("body = %q, want dynamic-transport-stream", got)
@@ -2310,6 +2310,36 @@ func TestFFmpegArgs(t *testing.T) {
 	)
 	if hasArg(copyNoRegenArgs, "-fflags") {
 		t.Fatalf("ffmpeg-copy args unexpectedly include -fflags when regeneration disabled: %#v", copyNoRegenArgs)
+	}
+
+	copyOffsetArgs := ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
+		"ffmpeg-copy",
+		"http://example.com/live.m3u8",
+		1,
+		1,
+		32*1024,
+		200*time.Millisecond,
+		true,
+		1500*time.Millisecond,
+		3,
+		"4xx,5xx",
+		true,
+		1500*time.Millisecond,
+	)
+	copyOffsetIndex, copyOffsetValue, ok := findArg(copyOffsetArgs, ffmpegOutputTSOffsetOption)
+	if !ok || copyOffsetValue != "1.500000" {
+		t.Fatalf(
+			"ffmpeg-copy args missing %s 1.500000 when output offset is configured: %#v",
+			ffmpegOutputTSOffsetOption,
+			copyOffsetArgs,
+		)
+	}
+	if copyOffsetIndex <= copyInputIndex {
+		t.Fatalf(
+			"ffmpeg-copy args place %s before input args: %#v",
+			ffmpegOutputTSOffsetOption,
+			copyOffsetArgs,
+		)
 	}
 
 	transcodeArgs := ffmpegArgs(

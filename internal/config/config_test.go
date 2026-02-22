@@ -156,6 +156,9 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.TuneBackoffCooldown.String() != "20s" {
 		t.Fatalf("TuneBackoffCooldown = %s, want 20s", cfg.TuneBackoffCooldown)
 	}
+	if cfg.HTTPRequestLogEnabled {
+		t.Fatal("HTTPRequestLogEnabled = true, want false")
+	}
 
 	wd, err := os.Getwd()
 	if err != nil {
@@ -163,6 +166,21 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	}
 	if cfg.LogDir != wd {
 		t.Fatalf("LogDir = %q, want %q", cfg.LogDir, wd)
+	}
+}
+
+func TestConfigRedactedIncludesUPnPContentDirectoryUpdateIDCacheTTL(t *testing.T) {
+	cfg := Config{
+		UPnPContentDirectoryUpdateIDCacheTTL: 1500 * time.Millisecond,
+	}
+
+	redacted := cfg.Redacted()
+	if redacted.UPnPContentDirectoryUpdateIDCacheTTL != "1.5s" {
+		t.Fatalf(
+			"Redacted().UPnPContentDirectoryUpdateIDCacheTTL = %q, want %q",
+			redacted.UPnPContentDirectoryUpdateIDCacheTTL,
+			"1.5s",
+		)
 	}
 }
 
@@ -243,6 +261,27 @@ func TestLoadAcceptsLogDirOverride(t *testing.T) {
 	}
 	if cfg.LogDir != "/tmp/hdhriptv-logs" {
 		t.Fatalf("LogDir = %q, want /tmp/hdhriptv-logs", cfg.LogDir)
+	}
+}
+
+func TestLoadHTTPRequestLogEnabledFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("HTTP_REQUEST_LOG_ENABLED", "true")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if !cfg.HTTPRequestLogEnabled {
+		t.Fatal("HTTPRequestLogEnabled = false, want true from env")
+	}
+
+	cfg, err = Load([]string{"--http-request-log-enabled=false"})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.HTTPRequestLogEnabled {
+		t.Fatal("HTTPRequestLogEnabled = true, want false from flag override")
 	}
 }
 
@@ -1302,6 +1341,15 @@ func TestLoadRejectsInvalidSharedSessionSettings(t *testing.T) {
 	_, err = Load([]string{
 		"--device-id=1234ABCD",
 		"--device-auth=test-token",
+		"--upnp-content-directory-update-id-cache-ttl=-1s",
+	})
+	if err == nil {
+		t.Fatal("expected error for negative upnp-content-directory-update-id-cache-ttl")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
 		"--ffmpeg-reconnect-delay-max=-1ms",
 	})
 	if err == nil {
@@ -1544,6 +1592,7 @@ func clearConfigEnv(t *testing.T) {
 		"CATALOG_SEARCH_MAX_DISJUNCTS",
 		"CATALOG_SEARCH_MAX_TERM_RUNES",
 		"ENABLE_METRICS",
+		"HTTP_REQUEST_LOG_ENABLED",
 		"LOG_DIR",
 		"LOG_LEVEL",
 	}

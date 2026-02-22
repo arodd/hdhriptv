@@ -184,10 +184,20 @@ The most common settings are listed below. For the full reference including all 
 
 | Document | Description |
 | --- | --- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Architecture and route map |
-| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full configuration reference |
 | [docs/API.md](docs/API.md) | API and endpoint reference |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Runtime architecture, route map, and subsystem wiring |
+| [docs/AUTOMATION.md](docs/AUTOMATION.md) | Job runner, scheduler, and background automation behavior |
+| [docs/CATALOG-PIPELINE.md](docs/CATALOG-PIPELINE.md) | M3U ingest, normalization, and reconcile pipeline details |
+| [docs/CHANNELS.md](docs/CHANNELS.md) | Channel/favorites service model and dynamic block flows |
+| [docs/CONFIGURATION.md](docs/CONFIGURATION.md) | Full flag and environment variable reference |
+| [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) | Testing, CI, and GitHub mirror publish workflow |
+| [docs/DATA-MODEL.md](docs/DATA-MODEL.md) | SQLite data model, keys, and persistence semantics |
+| [docs/DVR-INTEGRATION.md](docs/DVR-INTEGRATION.md) | Channels DVR and Jellyfin sync workflows and edge cases |
 | [docs/OPERATIONS.md](docs/OPERATIONS.md) | Operations, troubleshooting, and advanced topics |
+| [docs/RECOVERY.md](docs/RECOVERY.md) | Stall detection, failover, and recovery filler behavior |
+| [docs/SESSION-LIFECYCLE-BASELINE.md](docs/SESSION-LIFECYCLE-BASELINE.md) | Shared-session lifecycle baseline evidence workflow |
+| [docs/STREAMING.md](docs/STREAMING.md) | Shared-session streaming pipeline internals and tuning |
+| [docs/UI-COMPONENTS.md](docs/UI-COMPONENTS.md) | Admin UI pages, templates, and frontend architecture |
 | [deploy/systemd/README.md](deploy/systemd/README.md) | Systemd deployment |
 | [deploy/avahi/README.md](deploy/avahi/README.md) | Avahi/mDNS setup |
 | [deploy/testing/compatibility-checklist.md](deploy/testing/compatibility-checklist.md) | Client compatibility testing |
@@ -201,27 +211,4 @@ The most common settings are listed below. For the full reference including all 
 
 ## Testing
 
-### Automated Tests
-
-```bash
-go test ./...
-```
-
-### Manual Smoke Checks
-
-```bash
-curl -s http://127.0.0.1:5004/healthz
-curl -s http://127.0.0.1:5004/discover.json
-curl -s http://127.0.0.1:5004/lineup_status.json
-```
-
-### Client Compatibility
-
-Run [deploy/testing/compatibility-checklist.md](deploy/testing/compatibility-checklist.md) against real clients on your LAN (Plex, Emby, Jellyfin, VLC).
-
-### Recovery Continuity
-
-```bash
-./deploy/testing/recovery-slate-av-ffmpeg-copy.sh
-./deploy/testing/recovery-slate-av-ffmpeg-copy-ffplay.sh
-```
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for test commands, smoke checks, client compatibility testing, and the GitHub mirror publish workflow.

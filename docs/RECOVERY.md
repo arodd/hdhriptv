@@ -151,6 +151,50 @@ When switching between live and keepalive (and back), transition boundary marker
 - `live_to_keepalive`: emitted when recovery keepalive starts
 - `keepalive_to_live`: emitted when keepalive stops for any reason, including successful source establishment **and** terminal recovery failure paths (budget exhaustion, hard deadline, no subscribers). The stop callback runs unconditionally before the recovery error is checked (`shared_session.go` lines 1792–1794), so consumers should not assume this marker means a new source is ready — only that keepalive emission has ended
 
+### Timeline Continuity Across `live -> keepalive -> live`
+
+Recovery now carries one timeline anchor across the full failover path instead of starting independent timestamp epochs per phase:
+
+1. The session continuously tracks the latest observed PCR while publishing live packets.
+2. On `live_to_keepalive`, a transition boundary chunk is emitted with discontinuity signaling, continuity-counter progression, PSI version progression, and PCR anchoring.
+3. In `slate_av`, filler ffmpeg applies `setpts`/`asetpts` using the current recovery timeline offset, so filler PTS/DTS starts from the outgoing live timeline.
+4. When a replacement source starts during recovery, ffmpeg startup receives `-output_ts_offset` derived from the same recovery timeline offset, so resumed live output continues from the outgoing keepalive timeline.
+
+For `ffmpeg-copy`, this compounds with `FFMPEG_COPY_REGENERATE_TIMESTAMPS=true` (`-fflags +genpts`) so regenerated timestamps are still rebased to the outgoing recovery timeline.
+
+### Continuity Behavior by Mode Combination
+
+| Stream Mode | Recovery Filler Mode | Runtime Continuity Characteristics |
+|---|---|---|
+| `ffmpeg-copy` | `slate_av` | Strongest continuity profile. Filler timeline is anchored (`setpts`/`asetpts`), recovery startup is rebased (`-output_ts_offset`), and copy-mode timestamp regeneration (`+genpts`) is preserved while aligned to outgoing timeline. |
+| `ffmpeg-transcode` | `slate_av` | Strong continuity. Filler and resumed transcode output are both timeline-anchored via shared recovery offset and `-output_ts_offset`. |
+| `direct` | `slate_av` | Partial continuity. Filler is anchored, but resumed direct-source output does not use ffmpeg `-output_ts_offset`; continuity after cutback depends on upstream source timestamps. |
+| `ffmpeg-copy` or `ffmpeg-transcode` | `psi` or `null` | Moderate continuity. Transition boundary PCR/discontinuity signaling remains, and resumed ffmpeg output is rebased, but keepalive window does not contain decodable A/V media. Some players can still show temporary runtime instability during the outage window. |
+| `direct` | `psi` or `null` | Weakest continuity. Only packet-level transition signaling is available; resumed source timing is entirely upstream-defined. |
+
+### Recommended Combination for DVR Timeline Stability
+
+For recorded failover streams where monotonic runtime continuity is the priority, use:
+
+- `STREAM_MODE=ffmpeg-copy`
+- `FFMPEG_COPY_REGENERATE_TIMESTAMPS=true`
+- `RECOVERY_FILLER_ENABLED=true`
+- `RECOVERY_FILLER_MODE=slate_av`
+- `RECOVERY_FILLER_ENABLE_AUDIO=true`
+
+This combination provides the most robust live-to-filler-to-live timestamp continuity for downstream DVR duration estimation and player runtime reporting.
+
+### Validation Harness (Strict Continuity)
+
+Use the end-to-end harness to validate failover continuity with strict checks:
+
+```bash
+cd project
+STRICT_CONTINUITY=1 KEEP_RUN_DIR=1 ./deploy/testing/recovery-slate-av-ffmpeg-copy-ffplay.sh
+```
+
+With `STRICT_CONTINUITY=1`, the run fails on ffplay continuity/decode warnings and on recorded TS monotonic timestamp backtracks (DTS-preferred, PTS fallback).
+
 ## Comprehensive Timer Reference
 
 | Timer / Constant | Default | Config Flag / Env Var | Purpose |

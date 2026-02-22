@@ -345,6 +345,7 @@ func (p *BackgroundProber) ProbeOnce(ctx context.Context) error {
 			p.ffmpegReconnectMaxRetries,
 			p.ffmpegReconnectHTTPErrors,
 			p.ffmpegCopyRegenerateTimestamps,
+			0,
 			false,
 		)
 		if err != nil {

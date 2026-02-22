@@ -20,7 +20,12 @@ type LineupEntry struct {
 	GuideNumber string `json:"GuideNumber" xml:"GuideNumber"`
 	GuideName   string `json:"GuideName" xml:"GuideName"`
 	URL         string `json:"URL" xml:"URL"`
-	Tags        string `json:"Tags,omitempty" xml:"Tags,omitempty"`
+	Favorite    int    `json:"Favorite,omitempty" xml:"Favorite,omitempty"`
+	Subscribed  int    `json:"Subscribed,omitempty" xml:"Subscribed,omitempty"`
+	VideoCodec  string `json:"VideoCodec,omitempty" xml:"VideoCodec,omitempty"`
+	AudioCodec  string `json:"AudioCodec,omitempty" xml:"AudioCodec,omitempty"`
+	HD          int    `json:"HD" xml:"HD"`
+	DRM         int    `json:"DRM" xml:"DRM"`
 }
 
 // LineupXMLResponse is the /lineup.xml payload.

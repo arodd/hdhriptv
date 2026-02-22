@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/arodd/hdhriptv/internal/channels"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // streamDrainStatsTestMu serializes tests that assert global drain counter
@@ -2158,8 +2159,16 @@ func waitForSourceReadPauseInProgress(t *testing.T) {
 	})
 }
 
+func sourceReadPauseMetricDelta(t *testing.T, reason string, before float64) float64 {
+	t.Helper()
+	return testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(reason)) - before
+}
+
 func TestSharedRuntimeSessionRunCycleFinalizesSourceReadPauseOnContextCancel(t *testing.T) {
 	isolateStreamSourceReadPauseStatsForTest(t)
+	beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered))
+	beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit))
+	beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel))
 
 	session, writer, pumpNowUnixNano, cancel, resultCh := startRunCyclePauseTestSession(t, 1)
 	defer cancel()
@@ -2196,11 +2205,23 @@ func TestSharedRuntimeSessionRunCycleFinalizesSourceReadPauseOnContextCancel(t *
 	if got := stats.DurationUS; got == 0 {
 		t.Fatalf("source read pause duration us = %d, want > 0", got)
 	}
+	if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonContextCancel, beforeContextCancel); got != 1 {
+		t.Fatalf("ctx_cancel metric delta = %.0f, want 1", got)
+	}
+	if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonRecovered, beforeRecovered); got != 0 {
+		t.Fatalf("recovered metric delta = %.0f, want 0", got)
+	}
+	if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonPumpExit, beforePumpExit); got != 0 {
+		t.Fatalf("pump_exit metric delta = %.0f, want 0", got)
+	}
 }
 
 func TestSharedRuntimeSessionRunCycleSourceReadPauseStateMachine(t *testing.T) {
 	t.Run("pause closes when read gap recovers", func(t *testing.T) {
 		isolateStreamSourceReadPauseStatsForTest(t)
+		beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered))
+		beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit))
+		beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel))
 
 		session, writer, pumpNowUnixNano, cancel, resultCh := startRunCyclePauseTestSession(t, 1)
 		defer cancel()
@@ -2231,10 +2252,22 @@ func TestSharedRuntimeSessionRunCycleSourceReadPauseStateMachine(t *testing.T) {
 		if result.stall {
 			t.Fatal("runCycle() stallDetected = true, want false")
 		}
+		if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonRecovered, beforeRecovered); got != 1 {
+			t.Fatalf("recovered metric delta = %.0f, want 1", got)
+		}
+		if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonPumpExit, beforePumpExit); got != 0 {
+			t.Fatalf("pump_exit metric delta = %.0f, want 0", got)
+		}
+		if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonContextCancel, beforeContextCancel); got != 0 {
+			t.Fatalf("ctx_cancel metric delta = %.0f, want 0", got)
+		}
 	})
 
 	t.Run("pause closes when pump exits with error channel", func(t *testing.T) {
 		isolateStreamSourceReadPauseStatsForTest(t)
+		beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered))
+		beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit))
+		beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel))
 
 		session, writer, pumpNowUnixNano, cancel, resultCh := startRunCyclePauseTestSession(t, 1)
 		defer cancel()
@@ -2269,6 +2302,15 @@ func TestSharedRuntimeSessionRunCycleSourceReadPauseStateMachine(t *testing.T) {
 		}
 		if got := stats.DurationUS; got == 0 {
 			t.Fatalf("source read pause duration us = %d, want > 0", got)
+		}
+		if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonPumpExit, beforePumpExit); got != 1 {
+			t.Fatalf("pump_exit metric delta = %.0f, want 1", got)
+		}
+		if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonRecovered, beforeRecovered); got != 0 {
+			t.Fatalf("recovered metric delta = %.0f, want 0", got)
+		}
+		if got := sourceReadPauseMetricDelta(t, sourceReadPauseReasonContextCancel, beforeContextCancel); got != 0 {
+			t.Fatalf("ctx_cancel metric delta = %.0f, want 0", got)
 		}
 	})
 
@@ -6969,6 +7011,96 @@ func TestSharedSessionRecoveryHeartbeatSlateAVRetainedForOddProfileResolution(t 
 	}
 	if stats.RecoveryKeepaliveMode != recoveryFillerModeSlateAV {
 		t.Fatalf("RecoveryKeepaliveMode = %q, want %q", stats.RecoveryKeepaliveMode, recoveryFillerModeSlateAV)
+	}
+}
+
+func TestSharedSessionRecoveryHeartbeatSlateAVPassesPTSOffsetFromBoundaryPCR(t *testing.T) {
+	ring := NewChunkRing(64)
+	factoryCalls := make(chan slateAVFillerConfig, 1)
+	session := &sharedRuntimeSession{
+		manager: &SessionManager{
+			cfg: sessionManagerConfig{
+				recoveryFillerEnabled:  true,
+				recoveryFillerMode:     recoveryFillerModeSlateAV,
+				recoveryFillerInterval: 15 * time.Millisecond,
+				bufferChunkBytes:       mpegTSPacketSize,
+				bufferFlushPeriod:      5 * time.Millisecond,
+				recoverySlateAVFactory: func(cfg slateAVFillerConfig) (Producer, error) {
+					select {
+					case factoryCalls <- cfg:
+					default:
+					}
+					return &testRecoveryFillerStreamingProducer{
+						payload:  mpegTSNullPacketChunk(1),
+						interval: 2 * time.Millisecond,
+					}, nil
+				},
+			},
+		},
+		ring: ring,
+	}
+	session.subscribers = map[uint64]SubscriberStats{
+		1: {
+			SubscriberID: 1,
+			ClientAddr:   "127.0.0.1:12345",
+			StartedAt:    time.Now().UTC(),
+		},
+	}
+	session.mu.Lock()
+	session.recoveryBoundaryPCRSet = true
+	session.recoveryBoundaryPCRBase = mpegTSPCRClockHz
+	session.mu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stop := session.startRecoveryHeartbeat(ctx)
+	defer stop()
+
+	var cfg slateAVFillerConfig
+	waitFor(t, time.Second, func() bool {
+		select {
+		case cfg = <-factoryCalls:
+			return true
+		default:
+			return false
+		}
+	})
+
+	if got, want := cfg.PTSOffset, 2*time.Second; got != want {
+		t.Fatalf("factory PTS offset = %s, want %s", got, want)
+	}
+}
+
+func TestSharedSessionCurrentRecoveryTimelinePTSOffsetPrefersObservedPCR(t *testing.T) {
+	session := &sharedRuntimeSession{}
+	session.mu.Lock()
+	session.recoveryBoundaryPCRSet = true
+	session.recoveryBoundaryPCRBase = 5 * mpegTSPCRClockHz
+	session.recoveryObservedPCRBase = 8 * mpegTSPCRClockHz
+	session.recoveryObservedPCRAt = time.Now().UTC()
+	session.mu.Unlock()
+
+	got := session.currentRecoveryTimelinePTSOffset()
+	if got < 8*time.Second {
+		t.Fatalf("currentRecoveryTimelinePTSOffset() = %s, want >= 8s", got)
+	}
+	if got > 10*time.Second {
+		t.Fatalf("currentRecoveryTimelinePTSOffset() = %s, want <= 10s", got)
+	}
+}
+
+func TestSharedSessionCurrentRecoveryTimelinePTSOffsetFallsBackToBoundaryOnStaleObservedPCR(t *testing.T) {
+	session := &sharedRuntimeSession{}
+	session.mu.Lock()
+	session.recoveryBoundaryPCRSet = true
+	session.recoveryBoundaryPCRBase = 5 * mpegTSPCRClockHz
+	session.recoveryObservedPCRBase = 8 * mpegTSPCRClockHz
+	session.recoveryObservedPCRAt = time.Now().UTC().Add(-(3 * defaultSharedStallHardDeadline))
+	session.mu.Unlock()
+
+	if got, want := session.currentRecoveryTimelinePTSOffset(), 5*time.Second; got != want {
+		t.Fatalf("currentRecoveryTimelinePTSOffset() = %s, want %s", got, want)
 	}
 }
 

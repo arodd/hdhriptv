@@ -19,6 +19,8 @@ Pass criteria:
 - failover occurs from source_id=1 to source_id=2,
 - no fatal stream-open/session-stop errors occur,
 - ffplay does not report a fatal open error,
+- recorder capture exits successfully and emits a TS artifact,
+- recorded video packet timestamps are monotonic (no PTS/DTS backtracks),
 - transition boundary signal set (`disc,cc,pcr,psi_version`) is observed via `/api/admin/tuners`.
 - if `STRICT_CONTINUITY=1`, ffplay continuity warnings fail the run.
 
@@ -44,12 +46,19 @@ Optional env overrides:
   SUBSCRIBER_MAX_BLOCKED_WRITE=15s
   STRICT_CONTINUITY=0
   KEEPALIVE_MAX_REALTIME_MULTIPLIER=2.5
+  RECORD_DURATION_SECONDS=24
+  RECORDER_TIMEOUT=60s
   CLEANUP_PORT_WAIT_RETRIES=40
   CLEANUP_PORT_WAIT_SLEEP_SECONDS=0.1
 
 Output artifacts:
   $RUN_DIR/hdhr.out
   $RUN_DIR/ffplay.log
+  $RUN_DIR/recording-ffmpeg.log
+  $RUN_DIR/recorded.ts
+  $RUN_DIR/recorded-video-packets.json
+  $RUN_DIR/recorded-video-pts-values.txt
+  $RUN_DIR/recorded-video-pts-monotonic.txt
   $RUN_DIR/ffplay.log.norm
   $RUN_DIR/ffplay-continuity-lines.txt
   $RUN_DIR/recovery-lines.txt
@@ -105,6 +114,7 @@ ROOT_DIR="$(cd "${PROJECT_DIR}/.." && pwd)"
 
 require_cmd ffmpeg
 require_cmd ffplay
+require_cmd ffprobe
 require_cmd jq
 require_cmd curl
 require_cmd rg
@@ -131,6 +141,8 @@ STARTUP_TIMEOUT="${STARTUP_TIMEOUT:-12s}"
 SUBSCRIBER_MAX_BLOCKED_WRITE="${SUBSCRIBER_MAX_BLOCKED_WRITE:-15s}"
 STRICT_CONTINUITY="${STRICT_CONTINUITY:-0}"
 KEEPALIVE_MAX_REALTIME_MULTIPLIER="${KEEPALIVE_MAX_REALTIME_MULTIPLIER:-2.5}"
+RECORD_DURATION_SECONDS="${RECORD_DURATION_SECONDS:-24}"
+RECORDER_TIMEOUT="${RECORDER_TIMEOUT:-60s}"
 CLEANUP_PORT_WAIT_RETRIES="${CLEANUP_PORT_WAIT_RETRIES:-40}"
 CLEANUP_PORT_WAIT_SLEEP_SECONDS="${CLEANUP_PORT_WAIT_SLEEP_SECONDS:-0.1}"
 
@@ -438,6 +450,8 @@ declare -a FFPLAY_ARGS=(
   -f mpegts
 )
 FFPLAY_ARGS+=("http://127.0.0.1:${HDHR_PORT}/auto/v${GUIDE_NUMBER}")
+RECORDED_TS="${RUN_DIR}/recorded.ts"
+RECORDER_LOG="${RUN_DIR}/recording-ffmpeg.log"
 
 set +e
 setsid timeout --signal=INT "${FFPLAY_TIMEOUT}" \
@@ -445,6 +459,16 @@ setsid timeout --signal=INT "${FFPLAY_TIMEOUT}" \
   ffplay "${FFPLAY_ARGS[@]}" >"${RUN_DIR}/ffplay.log" 2>&1 &
 FFPLAY_PID=$!
 PIDS+=("${FFPLAY_PID}")
+
+setsid timeout --signal=INT "${RECORDER_TIMEOUT}" \
+  ffmpeg -hide_banner -loglevel error -y \
+  -t "${RECORD_DURATION_SECONDS}" \
+  -i "http://127.0.0.1:${HDHR_PORT}/auto/v${GUIDE_NUMBER}" \
+  -map 0 \
+  -c copy \
+  -f mpegts "${RECORDED_TS}" >"${RECORDER_LOG}" 2>&1 &
+RECORDER_PID=$!
+PIDS+=("${RECORDER_PID}")
 
 TUNER_STATUS_JSON="${RUN_DIR}/tuner-status.json"
 TUNER_STATUS_TMP="${RUN_DIR}/tuner-status.tmp.json"
@@ -464,6 +488,8 @@ done
 
 wait "${FFPLAY_PID}"
 FFPLAY_EXIT=$?
+wait "${RECORDER_PID}"
+RECORDER_EXIT=$?
 set -e
 
 sleep 1
@@ -509,6 +535,115 @@ CONTINUITY_ISSUE_COUNT="$(
 HAS_CONTINUITY_ISSUES="no"
 if [[ "${CONTINUITY_ISSUE_COUNT}" != "0" ]]; then
   HAS_CONTINUITY_ISSUES="yes"
+fi
+
+case "${RECORDER_EXIT}" in
+  0) RECORDER_EXIT_OK=yes ;;
+  *) RECORDER_EXIT_OK=no ;;
+esac
+
+HAS_RECORDING_CAPTURE="no"
+RECORDING_BYTES="0"
+if [[ -s "${RECORDED_TS}" ]]; then
+  HAS_RECORDING_CAPTURE="yes"
+  RECORDING_BYTES="$(wc -c <"${RECORDED_TS}" | awk '{print $1}')"
+fi
+
+VIDEO_PACKET_JSON="${RUN_DIR}/recorded-video-packets.json"
+VIDEO_PTS_VALUES="${RUN_DIR}/recorded-video-pts-values.txt"
+VIDEO_PTS_MONOTONIC_REPORT="${RUN_DIR}/recorded-video-pts-monotonic.txt"
+VIDEO_PTS_PACKET_COUNT="0"
+VIDEO_PTS_BACKTRACK_COUNT="0"
+VIDEO_PTS_FIRST=""
+VIDEO_PTS_LAST=""
+HAS_RECORDING_VIDEO_PTS="no"
+HAS_MONOTONIC_VIDEO_PTS="no"
+
+if [[ "${HAS_RECORDING_CAPTURE}" == "yes" ]]; then
+  if ffprobe -hide_banner -loglevel error \
+    -select_streams v:0 \
+    -show_packets \
+    -show_entries packet=pts_time,dts_time \
+    -of json \
+    "${RECORDED_TS}" >"${VIDEO_PACKET_JSON}" 2>"${RUN_DIR}/recorded-video-packets.stderr"; then
+    # Packet order can include B-frame PTS reordering; prefer DTS for
+    # monotonicity checks and fall back to PTS when DTS is absent.
+    jq -r '.packets[]? | (.dts_time // .pts_time // empty)' "${VIDEO_PACKET_JSON}" >"${VIDEO_PTS_VALUES}" || true
+    PTS_SUMMARY="$(
+      python3 - "${VIDEO_PTS_VALUES}" "${VIDEO_PTS_MONOTONIC_REPORT}" <<'PY'
+import decimal
+import sys
+
+pts_path = sys.argv[1]
+report_path = sys.argv[2]
+
+count = 0
+backtracks = 0
+first = None
+last = None
+prev = None
+
+with open(pts_path, "r", encoding="utf-8") as fh:
+    for raw in fh:
+        value = raw.strip()
+        if not value:
+            continue
+        try:
+            pts = decimal.Decimal(value)
+        except decimal.InvalidOperation:
+            continue
+        if first is None:
+            first = pts
+        if prev is not None and pts < prev:
+            backtracks += 1
+        prev = pts
+        last = pts
+        count += 1
+
+first_str = "" if first is None else format(first, "f")
+last_str = "" if last is None else format(last, "f")
+status = "pass" if count > 0 and backtracks == 0 else "fail"
+
+with open(report_path, "w", encoding="utf-8") as fh:
+    fh.write(f"status={status}\n")
+    fh.write(f"packet_count={count}\n")
+    fh.write(f"backtrack_count={backtracks}\n")
+    fh.write(f"first_pts={first_str}\n")
+    fh.write(f"last_pts={last_str}\n")
+
+print(f"{count}|{backtracks}|{first_str}|{last_str}")
+PY
+    )"
+    IFS='|' read -r VIDEO_PTS_PACKET_COUNT VIDEO_PTS_BACKTRACK_COUNT VIDEO_PTS_FIRST VIDEO_PTS_LAST <<<"${PTS_SUMMARY}"
+    if [[ "${VIDEO_PTS_PACKET_COUNT}" != "0" ]]; then
+      HAS_RECORDING_VIDEO_PTS="yes"
+      if [[ "${VIDEO_PTS_BACKTRACK_COUNT}" == "0" ]]; then
+        HAS_MONOTONIC_VIDEO_PTS="yes"
+      fi
+    fi
+  else
+    : >"${VIDEO_PACKET_JSON}"
+    : >"${VIDEO_PTS_VALUES}"
+    {
+      echo "status=fail"
+      echo "packet_count=0"
+      echo "backtrack_count=0"
+      echo "first_pts="
+      echo "last_pts="
+      echo "error=ffprobe_failed"
+    } >"${VIDEO_PTS_MONOTONIC_REPORT}"
+  fi
+else
+  : >"${VIDEO_PACKET_JSON}"
+  : >"${VIDEO_PTS_VALUES}"
+  {
+    echo "status=fail"
+    echo "packet_count=0"
+    echo "backtrack_count=0"
+    echo "first_pts="
+    echo "last_pts="
+    echo "error=no_recording"
+  } >"${VIDEO_PTS_MONOTONIC_REPORT}"
 fi
 
 HAS_BOUNDARY_SIGNAL_SET="$(
@@ -697,6 +832,18 @@ fi
 if [[ "${FFPLAY_EXIT_OK}" != "yes" ]]; then
   RESULT="FAIL"
 fi
+if [[ "${RECORDER_EXIT_OK}" != "yes" ]]; then
+  RESULT="FAIL"
+fi
+if [[ "${HAS_RECORDING_CAPTURE}" != "yes" ]]; then
+  RESULT="FAIL"
+fi
+if [[ "${HAS_RECORDING_VIDEO_PTS}" != "yes" ]]; then
+  RESULT="FAIL"
+fi
+if [[ "${HAS_MONOTONIC_VIDEO_PTS}" != "yes" ]]; then
+  RESULT="FAIL"
+fi
 if [[ "${HAS_BOUNDARY_SIGNAL_SET}" != "yes" ]]; then
   RESULT="FAIL"
 fi
@@ -728,6 +875,18 @@ fi
   echo "ffplay_exit_ok=${FFPLAY_EXIT_OK}"
   echo "ffplay_loglevel=${FFPLAY_LOGLEVEL}"
   echo "ffplay_audio_driver=${FFPLAY_AUDIO_DRIVER}"
+  echo "recorder_exit=${RECORDER_EXIT}"
+  echo "recorder_exit_ok=${RECORDER_EXIT_OK}"
+  echo "record_duration_seconds=${RECORD_DURATION_SECONDS}"
+  echo "recorder_timeout=${RECORDER_TIMEOUT}"
+  echo "recording_bytes=${RECORDING_BYTES}"
+  echo "has_recording_capture=${HAS_RECORDING_CAPTURE}"
+  echo "has_recording_video_pts=${HAS_RECORDING_VIDEO_PTS}"
+  echo "has_monotonic_video_pts=${HAS_MONOTONIC_VIDEO_PTS}"
+  echo "video_pts_packet_count=${VIDEO_PTS_PACKET_COUNT}"
+  echo "video_pts_backtrack_count=${VIDEO_PTS_BACKTRACK_COUNT}"
+  echo "video_pts_first=${VIDEO_PTS_FIRST}"
+  echo "video_pts_last=${VIDEO_PTS_LAST}"
   echo "source_pace_chunk_bytes=${SOURCE_PACE_CHUNK_BYTES}"
   echo "source_pace_sleep=${SOURCE_PACE_SLEEP}"
   echo "startup_timeout=${STARTUP_TIMEOUT}"
@@ -781,6 +940,12 @@ fi
   echo
   echo "== ffplay-continuity-lines =="
   sed -n '1,200p' "${RUN_DIR}/ffplay-continuity-lines.txt"
+  echo
+  echo "== recorded-video-pts-monotonic =="
+  sed -n '1,120p' "${VIDEO_PTS_MONOTONIC_REPORT}"
+  echo
+  echo "== recording-ffmpeg-tail =="
+  tail -n 80 "${RECORDER_LOG}" || true
   echo
   echo "== ffplay-tail =="
   tail -n 120 "${RUN_DIR}/ffplay.log.norm"

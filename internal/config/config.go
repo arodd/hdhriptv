@@ -107,6 +107,7 @@ type Config struct {
 	TuneBackoffInterval                  time.Duration
 	TuneBackoffCooldown                  time.Duration
 	EnableMetrics                        bool
+	HTTPRequestLogEnabled                bool
 	LogLevel                             string
 	CatalogSearchMaxTerms                int
 	CatalogSearchMaxDisjuncts            int
@@ -187,6 +188,7 @@ type RedactedConfig struct {
 	TuneBackoffInterval                  string   `json:"tune_backoff_interval"`
 	TuneBackoffCooldown                  string   `json:"tune_backoff_cooldown"`
 	EnableMetrics                        bool     `json:"enable_metrics"`
+	HTTPRequestLogEnabled                bool     `json:"http_request_log_enabled"`
 	LogLevel                             string   `json:"log_level"`
 	CatalogSearchMaxTerms                int      `json:"catalog_search_max_terms"`
 	CatalogSearchMaxDisjuncts            int      `json:"catalog_search_max_disjuncts"`
@@ -270,6 +272,7 @@ func (c Config) Redacted() RedactedConfig {
 		CatalogSearchMaxDisjuncts:            c.CatalogSearchMaxDisjuncts,
 		CatalogSearchMaxTermRunes:            c.CatalogSearchMaxTermRunes,
 		EnableMetrics:                        c.EnableMetrics,
+		HTTPRequestLogEnabled:                c.HTTPRequestLogEnabled,
 		LogLevel:                             c.LogLevel,
 	}
 }
@@ -363,6 +366,7 @@ func Load(args []string) (Config, error) {
 		CatalogSearchMaxDisjuncts:            getenvInt("CATALOG_SEARCH_MAX_DISJUNCTS", defaultCatalogSearchMaxDisjuncts),
 		CatalogSearchMaxTermRunes:            getenvInt("CATALOG_SEARCH_MAX_TERM_RUNES", defaultCatalogSearchMaxTermRunes),
 		EnableMetrics:                        getenvBool("ENABLE_METRICS", false),
+		HTTPRequestLogEnabled:                getenvBool("HTTP_REQUEST_LOG_ENABLED", false),
 		LogLevel:                             getenv("LOG_LEVEL", "info"),
 	}
 
@@ -442,6 +446,7 @@ func Load(args []string) (Config, error) {
 	fs.IntVar(&cfg.CatalogSearchMaxDisjuncts, "catalog-search-max-disjuncts", cfg.CatalogSearchMaxDisjuncts, "Maximum OR disjunct clauses in token-mode search (0 uses default)")
 	fs.IntVar(&cfg.CatalogSearchMaxTermRunes, "catalog-search-max-term-runes", cfg.CatalogSearchMaxTermRunes, "Maximum runes retained per token in token-mode search (0 uses default)")
 	fs.BoolVar(&cfg.EnableMetrics, "enable-metrics", cfg.EnableMetrics, "Expose Prometheus metrics endpoint at /metrics")
+	fs.BoolVar(&cfg.HTTPRequestLogEnabled, "http-request-log-enabled", cfg.HTTPRequestLogEnabled, "Enable per-request HTTP access logs")
 	fs.StringVar(&cfg.LogDir, "log-dir", cfg.LogDir, "Directory for startup timestamped log files")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: debug|info|warn|error")
 

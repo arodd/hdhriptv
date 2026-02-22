@@ -99,12 +99,130 @@ Operational behavior:
 - After startup sync reconciliation, dynamic generated guide names are refreshed
   so dynamic channel lineup names stay aligned with current playlist metadata.
 
+Transient error signatures treated as retryable during startup sync:
+
+- response status `5xx` (server-side errors)
+- `connection refused`
+- `connection reset`
+- `network is unreachable`
+- `broken pipe`
+- `deadline exceeded`
+- `timed out`
+- `timeout`
+- `temporarily unavailable`
+- `no route to host`
+- `eof`
+
 Useful fields:
 
 - `attempt` on `completed` phase events (`initial_sync_phase=completed`).
 - `attempt`, `max_attempts`, and `backoff` on retry warnings (`msg="initial playlist sync transient jellyfin lineup reload failure; retrying"`). Retry warnings are separate log records and do not carry an `initial_sync_phase` value.
 - `duration` on both `completed` and `failed` phase events, including readiness-gate failures.
 - `error` on `failed` events.
+
+## Public Mirror Publish Runbook
+
+`make publish-github` mirrors internal `main` to the public repo as squash
+commits. It is intended for controlled release publishing, not day-to-day
+development pushes.
+
+### Inputs and variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `INTERNAL_REMOTE` | `origin` | Internal source-of-truth remote. |
+| `INTERNAL_REPO_URL` | `git@gitlab.lan:arodd/hdhriptv.git` | Canonical URL enforced for `INTERNAL_REMOTE`. |
+| `PUBLIC_REMOTE` | `github` | Public publishing remote. |
+| `PUBLIC_REPO_URL` | `git@github.com:arodd/hdhriptv.git` | Canonical URL enforced for `PUBLIC_REMOTE`. |
+| `SYNC_BRANCH` | `main` | Branch to publish. |
+| `PUBLIC_SYNC_TAG` | `public-sync/latest` | Marker tag on internal remote tracking last published internal commit. |
+| `PUBLISH_GITHUB_COMMIT_MESSAGE` | empty | Optional custom squash commit subject. |
+
+### Squash-sync lifecycle
+
+1. Fetch internal/public refs and verify local `SYNC_BRANCH` exactly matches
+   `INTERNAL_REMOTE/SYNC_BRANCH`.
+2. Read `PUBLIC_SYNC_TAG` from the internal remote to determine the last
+   published internal commit.
+3. If marker tag equals current internal tip, exit with no-op.
+4. If marker tag is present but not an ancestor of current internal tip,
+   fail safe and require operator intervention.
+5. If `PUBLIC_REMOTE/SYNC_BRANCH` tree already equals internal tip tree, update
+   only `PUBLIC_SYNC_TAG` on internal remote (recovery/idempotency path).
+6. Otherwise create a squash commit from the internal tip tree:
+   - initial publish: commit has no parent,
+   - incremental publish: commit parents the current public tip.
+7. Push squash commit to `PUBLIC_REMOTE/SYNC_BRANCH`.
+8. Move and push `PUBLIC_SYNC_TAG` on internal remote to the published internal
+   tip.
+
+### Recovery procedures
+
+- **Local/internal divergence rejection**
+  - Symptom: `Refusing to publish: local main is out of sync...`
+  - Action: reconcile local checkout with internal remote (`pull --ff-only` or
+    reset to internal tip as appropriate), then rerun publish.
+- **Marker ancestor violation**
+  - Symptom: marker tag is not an ancestor of internal tip.
+  - Action: audit marker history and fix the tag manually on internal remote
+    before rerunning.
+- **Public push succeeded, marker push failed**
+  - Symptom: publish command fails during marker tag push after public branch
+    moved.
+  - Action: rerun `make publish-github` after fixing internal remote/tag push
+    permissions. The command detects tree equality and updates marker only,
+    avoiding duplicate public squash commits.
+
+## GitHub Binary Release + GitLab Tag Runbook
+
+`make release-github-sync-tag` is the release path when binaries are published
+on GitHub, while GitLab only receives a matching release tag (no GitLab release
+object or assets).
+
+### Inputs and variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `RELEASE_TAG` | empty (required) | Release tag name (`vX.Y.Z`). |
+| `RELEASE_TITLE` | empty | GitHub release title; defaults to `RELEASE_TAG`. |
+| `RELEASE_NOTES_FILE` | empty | Optional notes file for GitHub release create/edit. |
+| `RELEASE_DIST_DIR` | `dist` | Output directory for built binaries and checksums. |
+| `GITHUB_RELEASE_REPO` | empty | Optional `owner/repo` override for release publishing. |
+| `INTERNAL_REMOTE` | `origin` | Internal source-of-truth remote (GitLab). |
+| `INTERNAL_REPO_URL` | `git@gitlab.lan:arodd/hdhriptv.git` | Canonical URL for `INTERNAL_REMOTE`. |
+| `PUBLIC_REMOTE` | `github` | Public publishing remote (GitHub). |
+| `PUBLIC_REPO_URL` | `git@github.com:arodd/hdhriptv.git` | Canonical URL for `PUBLIC_REMOTE`. |
+| `SYNC_BRANCH` | `main` | Branch to mirror from internal to public before release tagging. |
+| `PUBLISH_GITHUB_COMMIT_MESSAGE` | empty | Optional squash commit subject override used by `make publish-github`. |
+
+### Lifecycle
+
+1. Verify clean tracked working tree and local/internal branch parity.
+2. Build release binaries and checksum file:
+   - `dist/hdhriptv-linux-amd64`
+   - `dist/hdhriptv-linux-arm64`
+   - `dist/SHA256SUMS`
+3. Run `make publish-github` to synchronize public mirror commit.
+4. Verify internal/public branch tree hashes match.
+5. Push `RELEASE_TAG` to internal remote at internal tip and to public remote
+   at public tip.
+6. Create/update GitHub release and upload binaries/checksums.
+
+### Recovery procedures
+
+- **Remote tag mismatch (safe-stop)**
+  - Symptom: command reports existing `RELEASE_TAG` on a remote points to a
+    different commit than expected.
+  - Action: inspect release history, then retag manually (or choose a new
+    release tag) before rerunning.
+- **Release partially published to GitHub**
+  - Symptom: release exists but assets are incomplete/outdated.
+  - Action: rerun `make release-github-sync-tag`; asset upload uses clobber and
+    converges to current local build outputs.
+- **Public mirror sync failure**
+  - Symptom: underlying `make publish-github` step fails.
+  - Action: resolve mirror/marker issue using the publish runbook above, then
+    rerun the release command.
 
 ## Stream Prometheus Metrics
 
@@ -144,6 +262,45 @@ Prometheus `/metrics` endpoint.
 | `stream_close_with_timeout_late_completions_total` | counter | none | Timed-out closes that later completed before abandon deadline. |
 | `stream_close_with_timeout_late_abandoned_total` | counter | none | Timed-out closes still blocked after abandon deadline. |
 | `stream_close_with_timeout_release_underflow_total` | counter | none | Internal worker-slot release underflow guardrail hits. |
+
+## Monitoring and Alerting Guidance
+
+Metrics are most useful when tied to clear operator actions. The baseline
+below gives a practical starting point for dashboards and alerts; tune values
+to your traffic profile after collecting at least several days of baseline.
+
+### Recommended dashboard panels
+
+| Panel | Example query | Why it matters |
+|-------|---------------|----------------|
+| Source read-pause rate by reason | `sum by (reason) (rate(stream_source_read_pause_events_total[5m]))` | Distinguishes upstream starvation (`recovered`) from expected shutdown/cancel churn (`ctx_cancel`, `pump_exit`). |
+| Source read-pause duration p95 | `histogram_quantile(0.95, sum by (le, reason) (rate(stream_source_read_pause_seconds_bucket[5m])))` | Shows whether pauses are brief blips or sustained stalls likely to drain DVR client buffers. |
+| Slow-skip event rate | `sum(rate(stream_slow_skip_events_total[5m]))` | Indicates subscribers repeatedly falling behind the publish window. |
+| Write-pressure timeout/short-write rate | `sum(rate(stream_subscriber_write_deadline_timeouts_total[5m]))` and `sum(rate(stream_subscriber_write_short_writes_total[5m]))` | Detects downstream client/network write pressure before widespread disconnects. |
+| Bounded-close timeout/suppression | `sum(rate(stream_close_with_timeout_timeouts_total[5m]))` and `sum(rate(stream_close_with_timeout_suppressed_total[5m]))` | Surfaces shutdown/cleanup pressure and worker-budget saturation. |
+| Late-abandoned / release-underflow counters | `increase(stream_close_with_timeout_late_abandoned_total[15m])`, `increase(stream_close_with_timeout_release_underflow_total[15m])` | Flags close-path invariants and potentially stuck close operations. |
+
+### Suggested alert thresholds
+
+| Severity | Condition | Action |
+|----------|-----------|--------|
+| Page | `increase(stream_close_with_timeout_late_abandoned_total[10m]) > 0` | Investigate immediately: at least one close stayed blocked past abandon window; correlate with `shared session slate AV close error` logs and stream/tuner churn. |
+| Page | `increase(stream_close_with_timeout_release_underflow_total[10m]) > 0` | Treat as invariant violation; inspect recent close suppression/timeout logs and deploy health before user impact expands. |
+| Warning | `sum(rate(stream_source_read_pause_events_total{reason="recovered"}[5m])) > 0.1` for `15m` | Upstream starvation is recurring; inspect provider/source health and failover behavior. |
+| Warning | `sum(rate(stream_subscriber_write_deadline_timeouts_total[5m])) > 0` for `10m` | Downstream write pressure is active; review subscriber network paths and lag policy settings. |
+| Warning | `sum(rate(stream_slow_skip_events_total[5m])) > 0` for `10m` | Slow-client lag compensation is frequently engaged; verify buffer and subscriber lag settings. |
+
+### Source read-pause metric migration note
+
+`stream_source_read_pause_events_total` and
+`stream_source_read_pause_seconds` are now reason-labeled vectors.
+
+- For total event rate across all reasons, use:
+  `sum(rate(stream_source_read_pause_events_total[5m]))`
+- For per-reason breakdown, use:
+  `sum by (reason) (rate(stream_source_read_pause_events_total[5m]))`
+- For duration percentiles by reason, aggregate histogram buckets by both
+  `le` and `reason` before `histogram_quantile(...)`.
 
 ## Stream Profile Probing
 
@@ -607,6 +764,14 @@ Key info-level events emitted by the service:
 - Discovery lifecycle: `discovery response sent` (debug-level).
 - Recovery filler normalization (debug-level): `shared session slate AV recovery filler profile normalized` with `original_resolution`, `normalized_resolution`, and `normalization_reason`.
 
+Key warn-level close-path events:
+
+- `closeWithTimeout worker slot release underflow`: internal close worker-slot accounting invariant warning. Correlate `close_release_underflow` with `close_timeouts`, `close_late_completions`, and `close_late_abandoned`.
+- `closeWithTimeout suppression observed`: close retry suppression under worker-budget pressure. Correlate suppression reason/counters with retry queue depth and close timeout churn.
+- `shared session slate AV close error`: bounded close failure while shutting down recovery filler readers; inspect `close_error_type` and accompanying `close_*` counters.
+
+See `docs/STREAMING.md` bounded-close telemetry guidance for detailed triage and remediation.
+
 Common correlation fields on these events include:
 
 - `channel_id`, `guide_number`, `guide_name`
@@ -620,13 +785,62 @@ Common correlation fields on these events include:
 - Catalog, channels, source mappings, and persisted device identity are stored in SQLite at `DB_PATH`.
 - Default path is `./hdhr-iptv.db`.
 - In Docker, default DB path is `/data/hdhr-iptv.db`; mount `/data` to persist.
-- Backups:
-  - stop service cleanly
-  - copy DB file to backup storage
-- Restore:
-  - stop service
-  - replace DB file
-  - start service
+
+### Backup strategies
+
+Use one of the two supported approaches:
+
+1. Cold backup (simplest and safest):
+   - stop the service cleanly
+   - copy the SQLite DB file to backup storage
+   - start the service
+2. Online backup (service remains running):
+   - use SQLite's online backup API (for example via `sqlite3` CLI `.backup`)
+   - example:
+
+```bash
+sqlite3 /data/hdhr-iptv.db ".backup '/backups/hdhr-iptv-$(date +%Y%m%d-%H%M%S).db'"
+```
+
+Prefer the online backup API for live systems. Avoid plain file copies of a
+busy database unless you are using a filesystem snapshot mechanism that can
+capture all related SQLite files atomically.
+
+### WAL and atomicity notes
+
+- hdhriptv runs SQLite with WAL mode enabled in normal operation.
+- With WAL mode, recently committed data may reside in `hdhr-iptv.db-wal`
+  until checkpointed; copying only `hdhr-iptv.db` while writes continue can
+  produce incomplete backups.
+- The SQLite backup API reads a transaction-consistent view and safely captures
+  WAL-backed state.
+- If you must restore from filesystem-level copies, keep `.db`, `.db-wal`, and
+  `.db-shm` files from the same snapshot together.
+
+### Restore procedure
+
+1. Stop the service.
+2. Restore the backup DB file to `DB_PATH`.
+3. Remove stale sidecars from previous runs if present (`*.db-wal`, `*.db-shm`)
+   unless you intentionally restored matching sidecar files from the same backup set.
+4. Start the service.
+5. Run integrity checks:
+
+```bash
+sqlite3 /data/hdhr-iptv.db "PRAGMA integrity_check;"
+sqlite3 /data/hdhr-iptv.db "PRAGMA foreign_key_check;"
+```
+
+`integrity_check` should return `ok`; `foreign_key_check` should return no rows.
+
+### Backup frequency guidance
+
+- Choose recovery point objective (RPO) based on tolerance for channel/source
+  metadata loss between backups.
+- As a practical baseline, run backups at least twice as often as the playlist
+  refresh schedule (for example, every `15m` if playlist refresh runs every `30m`).
+- Increase frequency when performing bulk channel/source edits or automation
+  rollouts that mutate mapping state rapidly.
 
 Operational recommendation:
 

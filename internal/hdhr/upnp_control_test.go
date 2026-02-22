@@ -405,6 +405,248 @@ func TestCurrentContentDirectoryUpdateIDCoalescesConcurrentRefreshes(t *testing.
 	}
 }
 
+func TestCurrentContentDirectoryUpdateIDFollowerRetriesAfterLeaderCancellation(t *testing.T) {
+	provider := &leaderCanceledThenSuccessProvider{
+		items: []channels.Channel{
+			{ChannelID: 11, GuideNumber: "101", GuideName: "Alpha", Enabled: true},
+		},
+		firstCallStarted: make(chan struct{}, 1),
+		firstCallRelease: make(chan struct{}),
+		secondCallStart:  make(chan struct{}, 1),
+	}
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, provider)
+	h.contentDirectoryUpdateIDCacheTTL = 0
+
+	type refreshResult struct {
+		updateID int
+		err      error
+	}
+
+	leaderCtx, cancelLeader := context.WithCancel(context.Background())
+	defer cancelLeader()
+
+	leaderResultCh := make(chan refreshResult, 1)
+	go func() {
+		updateID, err := h.currentContentDirectoryUpdateID(leaderCtx, "http://example.local:5004")
+		leaderResultCh <- refreshResult{updateID: updateID, err: err}
+	}()
+
+	select {
+	case <-provider.firstCallStarted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for first refresh call to start")
+	}
+
+	followerEntered := make(chan struct{})
+	followerResultCh := make(chan refreshResult, 1)
+	go func() {
+		close(followerEntered)
+		updateID, err := h.currentContentDirectoryUpdateID(context.Background(), "http://example.local:5004")
+		followerResultCh <- refreshResult{updateID: updateID, err: err}
+	}()
+
+	<-followerEntered
+
+	waitStart := time.Now()
+	for time.Since(waitStart) < 50*time.Millisecond {
+		if calls := provider.callsSnapshot(); calls > 1 {
+			t.Fatalf("ListEnabled calls before leader cancel = %d, want 1 (follower should be waiting)", calls)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	cancelLeader()
+	close(provider.firstCallRelease)
+
+	select {
+	case <-provider.secondCallStart:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for follower retry refresh")
+	}
+
+	select {
+	case followerResult := <-followerResultCh:
+		if followerResult.err != nil {
+			t.Fatalf("follower currentContentDirectoryUpdateID error = %v, want nil after retry", followerResult.err)
+		}
+		if followerResult.updateID <= 0 {
+			t.Fatalf("follower update id = %d, want > 0", followerResult.updateID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for follower result")
+	}
+
+	select {
+	case leaderResult := <-leaderResultCh:
+		if !errors.Is(leaderResult.err, context.Canceled) {
+			t.Fatalf("leader error = %v, want context canceled", leaderResult.err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader result")
+	}
+
+	if calls := provider.callsSnapshot(); calls != 2 {
+		t.Fatalf("ListEnabled calls = %d, want 2 (leader canceled + follower retry)", calls)
+	}
+}
+
+func TestCurrentContentDirectoryUpdateIDFollowerCancellationWhileWaiting(t *testing.T) {
+	provider := &blockingChannelsProvider{
+		items: []channels.Channel{
+			{ChannelID: 11, GuideNumber: "101", GuideName: "Alpha", Enabled: true},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, provider)
+	h.contentDirectoryUpdateIDCacheTTL = 0
+
+	type refreshResult struct {
+		updateID int
+		err      error
+	}
+
+	leaderResultCh := make(chan refreshResult, 1)
+	go func() {
+		updateID, err := h.currentContentDirectoryUpdateID(context.Background(), "http://example.local:5004")
+		leaderResultCh <- refreshResult{updateID: updateID, err: err}
+	}()
+
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader refresh call")
+	}
+
+	followerCtx, cancelFollower := context.WithCancel(context.Background())
+	defer cancelFollower()
+
+	followerEntered := make(chan struct{})
+	followerErrCh := make(chan error, 1)
+	go func() {
+		close(followerEntered)
+		_, err := h.currentContentDirectoryUpdateID(followerCtx, "http://example.local:5004")
+		followerErrCh <- err
+	}()
+
+	<-followerEntered
+
+	waitStart := time.Now()
+	for time.Since(waitStart) < 50*time.Millisecond {
+		if calls := provider.callsSnapshot(); calls > 1 {
+			t.Fatalf("ListEnabled calls before follower cancel = %d, want 1", calls)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	cancelFollower()
+
+	select {
+	case err := <-followerErrCh:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("follower error = %v, want context canceled", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for follower cancellation result")
+	}
+
+	if calls := provider.callsSnapshot(); calls != 1 {
+		t.Fatalf("ListEnabled calls after follower cancel = %d, want 1", calls)
+	}
+
+	close(provider.release)
+
+	select {
+	case leaderResult := <-leaderResultCh:
+		if leaderResult.err != nil {
+			t.Fatalf("leader error = %v, want nil", leaderResult.err)
+		}
+		if leaderResult.updateID <= 0 {
+			t.Fatalf("leader update id = %d, want > 0", leaderResult.updateID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader result")
+	}
+
+	if calls := provider.callsSnapshot(); calls != 1 {
+		t.Fatalf("ListEnabled total calls = %d, want 1", calls)
+	}
+}
+
+func TestCurrentContentDirectoryUpdateIDPropagatesLeaderErrorToFollowers(t *testing.T) {
+	expectedErr := errors.New("list-enabled failed")
+	provider := &blockingChannelsProvider{
+		err:     expectedErr,
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, provider)
+	h.contentDirectoryUpdateIDCacheTTL = 0
+
+	const callers = 8
+	releaseBarrier := make(chan struct{})
+	var invokeWG sync.WaitGroup
+	invokeWG.Add(callers)
+	var wg sync.WaitGroup
+	wg.Add(callers)
+
+	errs := make([]error, callers)
+	for i := 0; i < callers; i++ {
+		go func(idx int) {
+			defer wg.Done()
+			<-releaseBarrier
+			invokeWG.Done()
+			_, err := h.currentContentDirectoryUpdateID(context.Background(), "http://example.local:5004")
+			errs[idx] = err
+		}(i)
+	}
+
+	close(releaseBarrier)
+	invokeWG.Wait()
+
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader refresh call")
+	}
+
+	waitStart := time.Now()
+	for time.Since(waitStart) < 50*time.Millisecond {
+		if calls := provider.callsSnapshot(); calls > 1 {
+			t.Fatalf("ListEnabled fan-out calls before leader release = %d, want 1", calls)
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	close(provider.release)
+	wg.Wait()
+
+	if calls := provider.callsSnapshot(); calls != 1 {
+		t.Fatalf("ListEnabled calls = %d, want 1", calls)
+	}
+
+	for i, err := range errs {
+		if !errors.Is(err, expectedErr) {
+			t.Fatalf("call %d error = %v, want %v", i, err, expectedErr)
+		}
+	}
+}
+
 func TestContentDirectoryUpdateIDDeterministicOrderSensitiveAndFallback(t *testing.T) {
 	if got := contentDirectoryUpdateID(nil); got != contentDirectoryDefaultUpdateID {
 		t.Fatalf("contentDirectoryUpdateID(nil) = %d, want %d", got, contentDirectoryDefaultUpdateID)
@@ -572,6 +814,7 @@ func (p *countingChannelsProvider) updateGuideName(guideName string) {
 type blockingChannelsProvider struct {
 	mu      sync.Mutex
 	items   []channels.Channel
+	err     error
 	calls   int
 	started chan struct{}
 	release chan struct{}
@@ -589,6 +832,10 @@ func (p *blockingChannelsProvider) ListEnabled(context.Context) ([]channels.Chan
 
 	<-p.release
 
+	if p.err != nil {
+		return nil, p.err
+	}
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	out := make([]channels.Channel, len(p.items))
@@ -597,6 +844,53 @@ func (p *blockingChannelsProvider) ListEnabled(context.Context) ([]channels.Chan
 }
 
 func (p *blockingChannelsProvider) callsSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+type leaderCanceledThenSuccessProvider struct {
+	mu sync.Mutex
+
+	items []channels.Channel
+	calls int
+
+	firstCallStarted chan struct{}
+	firstCallRelease chan struct{}
+	secondCallStart  chan struct{}
+}
+
+func (p *leaderCanceledThenSuccessProvider) ListEnabled(ctx context.Context) ([]channels.Channel, error) {
+	p.mu.Lock()
+	p.calls++
+	callNumber := p.calls
+	p.mu.Unlock()
+
+	if callNumber == 1 {
+		select {
+		case p.firstCallStarted <- struct{}{}:
+		default:
+		}
+		<-p.firstCallRelease
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+	}
+	if callNumber == 2 {
+		select {
+		case p.secondCallStart <- struct{}{}:
+		default:
+		}
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]channels.Channel, len(p.items))
+	copy(out, p.items)
+	return out, nil
+}
+
+func (p *leaderCanceledThenSuccessProvider) callsSnapshot() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.calls

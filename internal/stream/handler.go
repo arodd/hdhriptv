@@ -410,8 +410,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		"subscribers", stats.Subscribers,
 	)
 
-	w.Header().Set("Content-Type", "video/MP2T")
-	w.Header().Set("Cache-Control", "no-store")
+	// Align stream response headers with physical HDHomeRun devices.
+	w.Header().Set("Server", "HDHomeRun/1.0")
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Content-Type", "video/mpeg")
 	w.WriteHeader(http.StatusOK)
 	if flusher, ok := w.(http.Flusher); ok {
 		flusher.Flush()

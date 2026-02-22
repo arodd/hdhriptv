@@ -68,6 +68,8 @@ Notes:
 
 - Stream routing also accepts `/auto/{guide}` and normalizes a leading `v`.
 - Lineup URLs are built from enabled published channels only.
+- HDHomeRun lineup endpoints (`/lineup.json`, `/lineup.xml`, `/lineup.m3u`) accept `?show=demo` and return an empty lineup for compatibility with HDHomeRun demo probing behavior.
+- HDHomeRun endpoints set `Connection: close` on responses to match physical-device behavior. Clients that poll metadata endpoints frequently should expect one TCP connection per request instead of keepalive reuse.
 - Unsupported or invalid UPnP SOAP actions return protocol-valid SOAP faults (instead of HTTP redirects).
 
 ## Admin UI and Admin API

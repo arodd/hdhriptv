@@ -143,7 +143,7 @@ func TestChannelsProviderListLineupsFromLineupsMap(t *testing.T) {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{
 				"8F07FDC6":"USA-MN22577-X",
-				"10A7ED72":"USA-OTA55369",
+					"A1B2C3D4":"USA-OTA55369",
 				"VIRTUAL":"X-VIRTUAL"
 			}`))
 		default:

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -30,6 +31,7 @@ type slateAVFillerConfig struct {
 	Profile     streamProfile
 	Text        string
 	EnableAudio bool
+	PTSOffset   time.Duration
 }
 
 type slateAVProducerFactory func(cfg slateAVFillerConfig) (Producer, error)
@@ -47,6 +49,7 @@ type slateAVFillerProducer struct {
 	profile     recoveryFillerProfile
 	text        string
 	enableAudio bool
+	ptsOffset   time.Duration
 }
 
 func defaultSlateAVProducerFactory(cfg slateAVFillerConfig) (Producer, error) {
@@ -64,11 +67,17 @@ func newSlateAVFillerProducer(cfg slateAVFillerConfig) (Producer, error) {
 		text = defaultRecoveryFillerText
 	}
 
+	ptsOffset := cfg.PTSOffset
+	if ptsOffset < 0 {
+		ptsOffset = 0
+	}
+
 	return &slateAVFillerProducer{
 		ffmpegPath:  ffmpegPath,
 		profile:     normalizeRecoveryFillerProfile(cfg.Profile, cfg.EnableAudio),
 		text:        text,
 		enableAudio: cfg.EnableAudio,
+		ptsOffset:   ptsOffset,
 	}, nil
 }
 
@@ -139,15 +148,22 @@ func (p *slateAVFillerProducer) args() []string {
 		args = append(args, "-f", "lavfi", "-i", audioInput)
 	}
 
+	videoFilters := make([]string, 0, 2)
 	filterText := strings.TrimSpace(p.text)
 	if filterText != "" {
-		args = append(
-			args,
-			"-vf",
+		videoFilters = append(
+			videoFilters,
 			"drawtext=text='"+escapeDrawtextText(filterText)+"':"+
 				"x=(w-text_w)/2:y=(h-text_h)/2:fontsize=42:fontcolor=white:"+
 				"box=1:boxcolor=black@0.45:boxborderw=12",
 		)
+	}
+	ptsOffsetExpr := recoveryFillerPTSOffsetExpression(p.ptsOffset)
+	if ptsOffsetExpr != "" {
+		videoFilters = append(videoFilters, "setpts="+ptsOffsetExpr)
+	}
+	if len(videoFilters) > 0 {
+		args = append(args, "-vf", strings.Join(videoFilters, ","))
 	}
 
 	args = append(
@@ -167,6 +183,9 @@ func (p *slateAVFillerProducer) args() []string {
 	)
 
 	if p.enableAudio && p.profile.AudioChannels > 0 {
+		if ptsOffsetExpr != "" {
+			args = append(args, "-af", "asetpts="+ptsOffsetExpr)
+		}
 		args = append(
 			args,
 			"-c:a", "aac",
@@ -324,6 +343,17 @@ func recoveryFillerAudioLayout(channels int) string {
 	default:
 		return "stereo"
 	}
+}
+
+func recoveryFillerPTSOffsetExpression(offset time.Duration) string {
+	if offset <= 0 {
+		return ""
+	}
+	offsetUS := offset.Microseconds()
+	if offsetUS <= 0 {
+		return ""
+	}
+	return "PTS+" + strconv.FormatInt(offsetUS, 10) + "/1000000/TB"
 }
 
 func escapeDrawtextText(raw string) string {

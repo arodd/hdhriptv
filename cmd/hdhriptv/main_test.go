@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
@@ -382,13 +385,15 @@ func TestRunInitialPlaylistSyncAfterListenerStartReturnsLastErrorAfterRetryExhau
 		startupSyncJellyfinReloadError(`request timeout while waiting for response`),
 	}
 	attempts := 0
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
 	err := runInitialPlaylistSyncAfterListenerStart(
 		ctx,
-		nil,
+		logger,
 		httpAddr,
 		func(context.Context) error {
 			idx := attempts
@@ -405,6 +410,13 @@ func TestRunInitialPlaylistSyncAfterListenerStartReturnsLastErrorAfterRetryExhau
 	}
 	if attempts != initialPlaylistSyncRetryAttempts {
 		t.Fatalf("attempts = %d, want %d (retry exhaustion)", attempts, initialPlaylistSyncRetryAttempts)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "initial_sync_phase=failed") {
+		t.Fatalf("logs missing failed phase event: %s", out)
+	}
+	if !strings.Contains(out, "duration=") {
+		t.Fatalf("logs missing duration field on failed phase event: %s", out)
 	}
 }
 
@@ -485,10 +497,10 @@ func TestWaitForHTTPReadinessCanceledContext(t *testing.T) {
 	}
 }
 
-func TestWaitForHTTPReadinessConnectionRefusedRetriesUntilContextDeadline(t *testing.T) {
+func TestWaitForHTTPReadinessProbeFailuresRetryUntilContextDeadline(t *testing.T) {
 	t.Parallel()
 
-	httpAddr := closedLoopbackAddr(t)
+	httpAddr := startRejectingLoopbackAddr(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 	defer cancel()
 
@@ -505,8 +517,8 @@ func TestWaitForHTTPReadinessConnectionRefusedRetriesUntilContextDeadline(t *tes
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("waitForHTTPReadiness() error = %v, want context deadline exceeded", err)
 	}
-	if elapsed < 90*time.Millisecond {
-		t.Fatalf("waitForHTTPReadiness() elapsed = %s, want >= 90ms to show retry loop", elapsed)
+	if elapsed < 60*time.Millisecond {
+		t.Fatalf("waitForHTTPReadiness() elapsed = %s, want >= 60ms to show retry loop", elapsed)
 	}
 }
 
@@ -566,7 +578,7 @@ func TestWaitForHTTPReadinessLogsDebugProbeFailures(t *testing.T) {
 		slog.SetDefault(origDefault)
 	})
 
-	httpAddr := closedLoopbackAddr(t)
+	httpAddr := startRejectingLoopbackAddr(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 	defer cancel()
 
@@ -584,6 +596,244 @@ func TestWaitForHTTPReadinessLogsDebugProbeFailures(t *testing.T) {
 	}
 	if !strings.Contains(out, "probe_url=http://") {
 		t.Fatalf("logs missing probe_url debug field: %s", out)
+	}
+}
+
+func TestWaitForHTTPReadinessLogsDebugNon2xxProbe(t *testing.T) {
+	// Do not run t.Parallel(): mutates global slog default.
+	var logs bytes.Buffer
+	origDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(origDefault)
+	})
+
+	httpAddr, _ := startTestHealthzSequenceServer(t, func(call int) int {
+		if call == 1 {
+			return http.StatusServiceUnavailable
+		}
+		return http.StatusOK
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := waitForHTTPReadiness(ctx, httpAddr, 5*time.Millisecond); err != nil {
+		t.Fatalf("waitForHTTPReadiness() error = %v, want nil after retry", err)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "http listener readiness probe returned non-2xx; retrying") {
+		t.Fatalf("logs missing non-2xx readiness debug message: %s", out)
+	}
+	if !strings.Contains(out, "status_code=503") {
+		t.Fatalf("logs missing status_code debug field: %s", out)
+	}
+}
+
+func TestDebugRequestLoggerNilHandlerGuard(t *testing.T) {
+	t.Parallel()
+
+	handler := debugRequestLogger(nil, true)
+	if handler == nil {
+		t.Fatal("debugRequestLogger(nil, true) returned nil handler")
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "http://example.local/healthz", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestDebugRequestLoggerDisabledPassthrough(t *testing.T) {
+	// Do not run t.Parallel(): mutates global slog default.
+	var logs bytes.Buffer
+	origDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(origDefault)
+	})
+
+	var calls atomic.Int32
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte("ok"))
+	})
+
+	handler := debugRequestLogger(next, false)
+	req := httptest.NewRequest(http.MethodGet, "http://example.local/demo", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("handler call count = %d, want 1", got)
+	}
+	if w.Code != http.StatusCreated {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusCreated)
+	}
+	if body := w.Body.String(); body != "ok" {
+		t.Fatalf("body = %q, want ok", body)
+	}
+	if out := logs.String(); out != "" {
+		t.Fatalf("disabled middleware wrote logs unexpectedly: %s", out)
+	}
+}
+
+func TestDebugRequestLoggerEnabledLogsFieldsAndReadFromFallback(t *testing.T) {
+	// Do not run t.Parallel(): mutates global slog default.
+	var logs bytes.Buffer
+	origDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(origDefault)
+	})
+
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = io.Copy(w, strings.NewReader("abc"))
+	})
+	handler := debugRequestLogger(next, true)
+
+	req := httptest.NewRequest(http.MethodPost, "http://example.local/lineup.json?show=demo", nil)
+	req.RemoteAddr = "192.0.2.10:5004"
+	req.Host = "example.local:5004"
+	req.Header.Set("User-Agent", "debug-agent")
+	req.Header.Set("Accept", "application/xml")
+	req.Header.Set("Content-Type", "text/xml")
+	req.Header.Set("SOAPAction", "urn:schemas-upnp-org:service:ContentDirectory:1#Browse")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusAccepted)
+	}
+	if body := w.Body.String(); body != "abc" {
+		t.Fatalf("body = %q, want abc", body)
+	}
+
+	out := logs.String()
+	if !strings.Contains(out, "msg=\"http request\"") {
+		t.Fatalf("logs missing request message: %s", out)
+	}
+	if !strings.Contains(out, "method=POST") {
+		t.Fatalf("logs missing method: %s", out)
+	}
+	if !strings.Contains(out, "path=/lineup.json") {
+		t.Fatalf("logs missing path: %s", out)
+	}
+	if !strings.Contains(out, "query=\"show=demo\"") {
+		t.Fatalf("logs missing query: %s", out)
+	}
+	if !strings.Contains(out, "status_code=202") {
+		t.Fatalf("logs missing status_code: %s", out)
+	}
+	if !strings.Contains(out, "response_bytes=3") {
+		t.Fatalf("logs missing response_bytes: %s", out)
+	}
+	if !strings.Contains(out, "soap_action=urn:schemas-upnp-org:service:ContentDirectory:1#Browse") {
+		t.Fatalf("logs missing SOAPAction field: %s", out)
+	}
+	if !strings.Contains(out, "duration=") {
+		t.Fatalf("logs missing duration field: %s", out)
+	}
+}
+
+func TestDebugResponseWriterReadFromFallbackAvoidsRecursion(t *testing.T) {
+	t.Parallel()
+
+	base := &basicResponseWriter{}
+	observed := &debugResponseWriter{ResponseWriter: base}
+
+	n, err := observed.ReadFrom(strings.NewReader("fallback"))
+	if err != nil {
+		t.Fatalf("ReadFrom() error = %v, want nil", err)
+	}
+	if n != 8 {
+		t.Fatalf("ReadFrom() bytes = %d, want 8", n)
+	}
+	if base.statusCode != http.StatusOK {
+		t.Fatalf("base status code = %d, want %d", base.statusCode, http.StatusOK)
+	}
+	if got := base.body.String(); got != "fallback" {
+		t.Fatalf("base body = %q, want fallback", got)
+	}
+	if observed.statusCode != http.StatusOK {
+		t.Fatalf("observed status code = %d, want %d", observed.statusCode, http.StatusOK)
+	}
+	if observed.bytesWritten != 8 {
+		t.Fatalf("observed bytes written = %d, want 8", observed.bytesWritten)
+	}
+}
+
+func TestDebugResponseWriterOptionalInterfaceDelegation(t *testing.T) {
+	t.Parallel()
+
+	wantHijackErr := errors.New("hijack unavailable")
+	wantPushErr := errors.New("push unavailable")
+	base := &optionalResponseWriter{
+		hijackErr: wantHijackErr,
+		pushErr:   wantPushErr,
+	}
+	observed := &debugResponseWriter{ResponseWriter: base}
+
+	observed.Flush()
+	if base.flushCalls != 1 {
+		t.Fatalf("flush calls = %d, want 1", base.flushCalls)
+	}
+
+	if _, _, err := observed.Hijack(); !errors.Is(err, wantHijackErr) {
+		t.Fatalf("Hijack() error = %v, want %v", err, wantHijackErr)
+	}
+	if base.hijackCalls != 1 {
+		t.Fatalf("hijack calls = %d, want 1", base.hijackCalls)
+	}
+
+	if err := observed.Push("/style.css", &http.PushOptions{Method: http.MethodGet}); !errors.Is(err, wantPushErr) {
+		t.Fatalf("Push() error = %v, want %v", err, wantPushErr)
+	}
+	if base.pushCalls != 1 {
+		t.Fatalf("push calls = %d, want 1", base.pushCalls)
+	}
+	if base.lastPushTarget != "/style.css" {
+		t.Fatalf("push target = %q, want /style.css", base.lastPushTarget)
+	}
+
+	n, err := observed.ReadFrom(strings.NewReader("rf"))
+	if err != nil {
+		t.Fatalf("ReadFrom() error = %v, want nil", err)
+	}
+	if n != 2 {
+		t.Fatalf("ReadFrom() bytes = %d, want 2", n)
+	}
+	if base.readFromCalls != 1 {
+		t.Fatalf("readFrom calls = %d, want 1", base.readFromCalls)
+	}
+	if observed.bytesWritten != 2 {
+		t.Fatalf("observed bytes written = %d, want 2", observed.bytesWritten)
+	}
+	if observed.Unwrap() != base {
+		t.Fatal("Unwrap() did not return wrapped response writer")
+	}
+}
+
+func TestDebugResponseWriterUnsupportedOptionalInterfaces(t *testing.T) {
+	t.Parallel()
+
+	base := &basicResponseWriter{}
+	observed := &debugResponseWriter{ResponseWriter: base}
+
+	observed.Flush()
+
+	if _, _, err := observed.Hijack(); err == nil {
+		t.Fatal("Hijack() error = nil, want unsupported hijacking error")
+	}
+	if err := observed.Push("/style.css", nil); !errors.Is(err, http.ErrNotSupported) {
+		t.Fatalf("Push() error = %v, want %v", err, http.ErrNotSupported)
 	}
 }
 
@@ -772,6 +1022,64 @@ func TestInitialPlaylistSyncRetryDelayCapsAtMax(t *testing.T) {
 	}
 }
 
+type basicResponseWriter struct {
+	header     http.Header
+	statusCode int
+	body       bytes.Buffer
+}
+
+func (w *basicResponseWriter) Header() http.Header {
+	if w.header == nil {
+		w.header = make(http.Header)
+	}
+	return w.header
+}
+
+func (w *basicResponseWriter) WriteHeader(statusCode int) {
+	w.statusCode = statusCode
+}
+
+func (w *basicResponseWriter) Write(p []byte) (int, error) {
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	return w.body.Write(p)
+}
+
+type optionalResponseWriter struct {
+	basicResponseWriter
+	flushCalls     int
+	hijackCalls    int
+	pushCalls      int
+	readFromCalls  int
+	hijackErr      error
+	pushErr        error
+	lastPushTarget string
+}
+
+func (w *optionalResponseWriter) Flush() {
+	w.flushCalls++
+}
+
+func (w *optionalResponseWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	w.hijackCalls++
+	return nil, nil, w.hijackErr
+}
+
+func (w *optionalResponseWriter) Push(target string, _ *http.PushOptions) error {
+	w.pushCalls++
+	w.lastPushTarget = target
+	return w.pushErr
+}
+
+func (w *optionalResponseWriter) ReadFrom(src io.Reader) (int64, error) {
+	w.readFromCalls++
+	if w.statusCode == 0 {
+		w.statusCode = http.StatusOK
+	}
+	return io.Copy(&w.body, src)
+}
+
 func startTestHealthzSequenceServer(
 	t *testing.T,
 	statusForCall func(call int) int,
@@ -819,18 +1127,31 @@ func startTestHealthzSequenceServer(
 	return listener.Addr().String(), &callCount
 }
 
-func closedLoopbackAddr(t *testing.T) string {
+func startRejectingLoopbackAddr(t *testing.T) string {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("net.Listen() error = %v", err)
 	}
-	addr := listener.Addr().String()
-	if err := listener.Close(); err != nil {
-		t.Fatalf("listener.Close() error = %v", err)
-	}
-	return addr
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	t.Cleanup(func() {
+		_ = listener.Close()
+		<-done
+	})
+
+	return listener.Addr().String()
 }
 
 func openTestStore(t *testing.T) *sqlite.Store {

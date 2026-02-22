@@ -3297,12 +3297,17 @@ func (s *sharedRuntimeSession) startSourceWithCandidates(
 				recoveryReason,
 				"candidate_startup_attempt",
 			)
+			startupPTSOffset := time.Duration(0)
+			if recoveryCycle > 0 {
+				startupPTSOffset = s.currentRecoveryTimelinePTSOffset()
+			}
 			reader, producer, startupProbe, startupRandomAccessReady, startupRandomAccessCodec, startupInventory, startupRetryRelaxedProbe, startupRetryReason, err := s.startSourceReader(
 				startupCtx,
 				source.SourceID,
 				streamURL,
 				startupTimeout,
 				requireRandomAccess,
+				startupPTSOffset,
 			)
 			stopStartupCtx()
 			if err != nil {
@@ -4530,12 +4535,14 @@ func (s *sharedRuntimeSession) startCurrentSourceWithBackoff(
 			recoveryReason,
 			"restart_same_startup_attempt",
 		)
+		startupPTSOffset := s.currentRecoveryTimelinePTSOffset()
 		reader, producer, startupProbe, startupRandomAccessReady, startupRandomAccessCodec, startupInventory, startupRetryRelaxedProbe, startupRetryReason, err := s.startSourceReader(
 			startupCtx,
 			source.SourceID,
 			strings.TrimSpace(source.StreamURL),
 			startupTimeout,
 			true,
+			startupPTSOffset,
 		)
 		stopStartupCtx()
 		if err != nil {
@@ -4969,6 +4976,7 @@ func (s *sharedRuntimeSession) startSourceReader(
 	streamURL string,
 	startupTimeout time.Duration,
 	requireRandomAccess bool,
+	startupPTSOffset time.Duration,
 ) (io.ReadCloser, string, startupProbeTelemetry, bool, string, startupStreamInventory, bool, string, error) {
 	streamCtx := ctx
 	if s != nil && s.ctx != nil {
@@ -4995,6 +5003,7 @@ func (s *sharedRuntimeSession) startSourceReader(
 		s.manager.cfg.ffmpegReconnectMaxRetries,
 		s.manager.cfg.ffmpegReconnectHTTPErrors,
 		s.manager.cfg.ffmpegCopyRegenerateTimestamps,
+		startupPTSOffset,
 		requireRandomAccess,
 	)
 	if err != nil {
@@ -6633,6 +6642,35 @@ func (s *sharedRuntimeSession) currentRecoveryFillerProfile() streamProfile {
 	return s.sourceProfile
 }
 
+func (s *sharedRuntimeSession) currentRecoveryTimelinePTSOffset() time.Duration {
+	if s == nil {
+		return 0
+	}
+	now := time.Now().UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if !s.recoveryObservedPCRAt.IsZero() {
+		age := now.Sub(s.recoveryObservedPCRAt)
+		if age < 0 {
+			age = 0
+		}
+		if age <= (2 * defaultSharedStallHardDeadline) {
+			pcrBase := advancePCRBase(s.recoveryObservedPCRBase, age)
+			if pcrBase > 0 {
+				return pcrBaseToDuration(pcrBase)
+			}
+		}
+	} else if s.recoveryObservedPCRBase > 0 {
+		return pcrBaseToDuration(s.recoveryObservedPCRBase)
+	}
+	if s.recoveryBoundaryPCRSet && s.recoveryBoundaryPCRBase > 0 {
+		return pcrBaseToDuration(s.recoveryBoundaryPCRBase)
+	}
+	return 0
+}
+
 func (s *sharedRuntimeSession) setRecoveryKeepaliveMode(mode string) {
 	if s == nil {
 		return
@@ -6920,6 +6958,7 @@ func (s *sharedRuntimeSession) runRecoverySlateAVKeepalive(ctx context.Context) 
 		Profile:     profile,
 		Text:        s.manager.cfg.recoveryFillerText,
 		EnableAudio: s.manager.cfg.recoveryFillerEnableAudio,
+		PTSOffset:   s.currentRecoveryTimelinePTSOffset(),
 	}
 
 	var lastErr error
@@ -8134,6 +8173,16 @@ const (
 	mpegTSPCRClockHz  = 90000
 	mpegTSPCRBaseMask = (1 << 33) - 1
 )
+
+func pcrBaseToDuration(base uint64) time.Duration {
+	if base == 0 {
+		return 0
+	}
+	seconds := base / mpegTSPCRClockHz
+	remainder := base % mpegTSPCRClockHz
+	return time.Duration(seconds)*time.Second +
+		time.Duration(remainder)*time.Second/time.Duration(mpegTSPCRClockHz)
+}
 
 func advancePCRBase(base uint64, delta time.Duration) uint64 {
 	if delta < 0 {

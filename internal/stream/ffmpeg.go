@@ -61,6 +61,7 @@ const (
 	defaultFFmpegCopyRegenerateTimestamps = true
 	ffmpegReadrateInitialBurstOption      = "-readrate_initial_burst"
 	ffmpegInputFlagsOption                = "-fflags"
+	ffmpegOutputTSOffsetOption            = "-output_ts_offset"
 	ffmpegGenPTSFlag                      = "+genpts"
 	minFFmpegStartupProbeSize             = 128_000
 	minFFmpegStartupAnalyzeDelay          = 1 * time.Second
@@ -697,6 +698,7 @@ func closeWithTimeoutFinishWorker(c io.Closer) {
 			"close_queued", stats.Queued,
 			"close_timeouts", stats.Timeouts,
 			"close_late_completions", stats.LateCompletions,
+			"close_late_abandoned", stats.LateAbandoned,
 			"close_dropped", stats.Dropped,
 		)
 	}
@@ -1261,6 +1263,7 @@ func startFFmpeg(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		defaultFFmpegCopyRegenerateTimestamps,
+		0,
 		requireRandomAccess,
 	)
 }
@@ -1298,6 +1301,7 @@ func startFFmpegWithContexts(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		defaultFFmpegCopyRegenerateTimestamps,
+		0,
 		requireRandomAccess,
 	)
 }
@@ -1317,6 +1321,7 @@ func startFFmpegWithContextsConfigured(
 	reconnectMaxRetries int,
 	reconnectHTTPErrors string,
 	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
 	requireRandomAccess bool,
 ) (*streamSession, error) {
 	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
@@ -1341,6 +1346,7 @@ func startFFmpegWithContextsConfigured(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		copyRegenerateTimestamps,
+		outputTSOffset,
 		requireRandomAccess,
 	)
 	if err != nil {
@@ -1389,6 +1395,7 @@ func startFFmpegWithContextsConfigured(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		copyRegenerateTimestamps,
+		outputTSOffset,
 		requireRandomAccess,
 	)
 	if retryErr != nil {
@@ -1442,6 +1449,7 @@ func startFFmpegOnce(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		defaultFFmpegCopyRegenerateTimestamps,
+		0,
 		requireRandomAccess,
 	)
 }
@@ -1479,6 +1487,7 @@ func startFFmpegOnceWithContexts(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		defaultFFmpegCopyRegenerateTimestamps,
+		0,
 		requireRandomAccess,
 	)
 }
@@ -1498,12 +1507,13 @@ func startFFmpegOnceWithContextsConfigured(
 	reconnectMaxRetries int,
 	reconnectHTTPErrors string,
 	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
 	requireRandomAccess bool,
 ) (*streamSession, error) {
 	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
 	startedAt := time.Now()
 
-	args := ffmpegArgsWithCopyTimestampRegeneration(
+	args := ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
 		mode,
 		upstreamURL,
 		readRate,
@@ -1515,6 +1525,7 @@ func startFFmpegOnceWithContextsConfigured(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		copyRegenerateTimestamps,
+		outputTSOffset,
 	)
 	if len(args) == 0 {
 		return nil, &streamFailure{
@@ -1590,6 +1601,7 @@ func startFFmpegOnceWithContextsConfigured(
 						reconnectMaxRetries,
 						reconnectHTTPErrors,
 						copyRegenerateTimestamps,
+						outputTSOffset,
 						requireRandomAccess,
 					)
 					if fallbackErr == nil {
@@ -2898,6 +2910,35 @@ func ffmpegArgsWithCopyTimestampRegeneration(
 	reconnectHTTPErrors string,
 	copyRegenerateTimestamps bool,
 ) []string {
+	return ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
+		mode,
+		upstreamURL,
+		readRate,
+		initialBurst,
+		startupProbeSize,
+		startupAnalyzeDuration,
+		reconnectEnabled,
+		reconnectDelayMax,
+		reconnectMaxRetries,
+		reconnectHTTPErrors,
+		copyRegenerateTimestamps,
+		0,
+	)
+}
+
+func ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
+	mode, upstreamURL string,
+	readRate float64,
+	initialBurst int,
+	startupProbeSize int,
+	startupAnalyzeDuration time.Duration,
+	reconnectEnabled bool,
+	reconnectDelayMax time.Duration,
+	reconnectMaxRetries int,
+	reconnectHTTPErrors string,
+	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
+) []string {
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
 	readRateArg := formatReadRate(readRate)
 	includeInitialBurst := true
@@ -2939,13 +2980,13 @@ func ffmpegArgsWithCopyTimestampRegeneration(
 
 	switch normalizedMode {
 	case "ffmpeg-copy":
-		return append(inputArgs,
+		outputArgs := append([]string{
 			"-c", "copy",
-			"-f", "mpegts",
-			"pipe:1",
-		)
+		}, appendFFmpegOutputTSOffsetArg(nil, outputTSOffset)...)
+		outputArgs = append(outputArgs, "-f", "mpegts", "pipe:1")
+		return append(inputArgs, outputArgs...)
 	case "ffmpeg-transcode":
-		return append(inputArgs,
+		outputArgs := []string{
 			"-map", "0:v:0?",
 			"-map", "0:a:0?",
 			"-c:v", "libx264",
@@ -2954,12 +2995,32 @@ func ffmpegArgsWithCopyTimestampRegeneration(
 			"-c:a", "aac",
 			"-ar", "48000",
 			"-ac", "2",
-			"-f", "mpegts",
-			"pipe:1",
-		)
+		}
+		outputArgs = append(outputArgs, appendFFmpegOutputTSOffsetArg(nil, outputTSOffset)...)
+		outputArgs = append(outputArgs, "-f", "mpegts", "pipe:1")
+		return append(inputArgs, outputArgs...)
 	default:
 		return nil
 	}
+}
+
+func appendFFmpegOutputTSOffsetArg(args []string, outputTSOffset time.Duration) []string {
+	formatted := formatFFmpegOutputTSOffset(outputTSOffset)
+	if formatted == "" {
+		return args
+	}
+	return append(args, ffmpegOutputTSOffsetOption, formatted)
+}
+
+func formatFFmpegOutputTSOffset(outputTSOffset time.Duration) string {
+	if outputTSOffset <= 0 {
+		return ""
+	}
+	seconds := outputTSOffset.Seconds()
+	if seconds <= 0 {
+		return ""
+	}
+	return strconv.FormatFloat(seconds, 'f', 6, 64)
 }
 
 func appendFFmpegReconnectInputArgs(args []string, enabled bool, delayMax time.Duration, maxRetries int, httpErrors string) []string {
@@ -3107,6 +3168,7 @@ func startSourceSession(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		defaultFFmpegCopyRegenerateTimestamps,
+		0,
 		requireRandomAccess,
 	)
 }
@@ -3148,6 +3210,7 @@ func startSourceSessionWithContexts(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		defaultFFmpegCopyRegenerateTimestamps,
+		0,
 		requireRandomAccess,
 	)
 }
@@ -3170,6 +3233,7 @@ func startSourceSessionWithContextsConfigured(
 	reconnectMaxRetries int,
 	reconnectHTTPErrors string,
 	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
 	requireRandomAccess bool,
 ) (*streamSession, error) {
 	switch mode {
@@ -3201,6 +3265,7 @@ func startSourceSessionWithContextsConfigured(
 			reconnectMaxRetries,
 			reconnectHTTPErrors,
 			copyRegenerateTimestamps,
+			outputTSOffset,
 			requireRandomAccess,
 		)
 	case "ffmpeg-transcode":
@@ -3221,6 +3286,7 @@ func startSourceSessionWithContextsConfigured(
 			reconnectMaxRetries,
 			reconnectHTTPErrors,
 			copyRegenerateTimestamps,
+			outputTSOffset,
 			requireRandomAccess,
 		)
 	default:

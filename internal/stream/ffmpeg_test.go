@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/arodd/hdhriptv/internal/channels"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestStartupFailureReasonDetectsUpstreamStatus(t *testing.T) {
@@ -2691,6 +2692,91 @@ func TestCloseWithTimeoutAwaitLateCompletionAfterReleaseCompletesBeforeAbandonTi
 	}
 }
 
+func TestCloseWithTimeoutRecordFunctionsIncrementPrometheusCounters(t *testing.T) {
+	resetCloseWithTimeoutStatsForTest()
+	t.Cleanup(resetCloseWithTimeoutStatsForTest)
+
+	steps := []struct {
+		name      string
+		metric    func() float64
+		record    func()
+		wantDelta float64
+	}{
+		{
+			name:      "started",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutStartedMetric) },
+			record:    closeWithTimeoutRecordStarted,
+			wantDelta: 1,
+		},
+		{
+			name:      "retried",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutRetriedMetric) },
+			record:    closeWithTimeoutRecordRetried,
+			wantDelta: 1,
+		},
+		{
+			name:      "suppressed_total",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutSuppressedMetric) },
+			record:    closeWithTimeoutRecordSuppressed,
+			wantDelta: 1,
+		},
+		{
+			name:      "suppressed_duplicate",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutSuppressedDuplicateMetric) },
+			record:    closeWithTimeoutRecordSuppressedDuplicate,
+			wantDelta: 1,
+		},
+		{
+			name:      "suppressed_budget",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutSuppressedBudgetMetric) },
+			record:    closeWithTimeoutRecordSuppressedBudget,
+			wantDelta: 1,
+		},
+		{
+			name:      "dropped",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutDroppedMetric) },
+			record:    closeWithTimeoutRecordDropped,
+			wantDelta: 1,
+		},
+		{
+			name:      "timed_out",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutTimedOutMetric) },
+			record:    closeWithTimeoutRecordTimedOut,
+			wantDelta: 1,
+		},
+		{
+			name:      "late_completion",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutLateCompletionsMetric) },
+			record:    closeWithTimeoutRecordLateCompletion,
+			wantDelta: 1,
+		},
+		{
+			name:      "late_abandoned",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutLateAbandonedMetric) },
+			record:    closeWithTimeoutRecordLateAbandoned,
+			wantDelta: 1,
+		},
+		{
+			name:      "release_underflow",
+			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutReleaseUnderflowMetric) },
+			record:    closeWithTimeoutRecordReleaseUnderflow,
+			wantDelta: 1,
+		},
+	}
+
+	for _, step := range steps {
+		step := step
+		t.Run(step.name, func(t *testing.T) {
+			before := step.metric()
+			step.record()
+			after := step.metric()
+			if got := after - before; got != step.wantDelta {
+				t.Fatalf("%s metric delta = %.0f, want %.0f", step.name, got, step.wantDelta)
+			}
+		})
+	}
+}
+
 func TestCloseWithTimeoutRecordSuppression(t *testing.T) {
 	resetCloseWithTimeoutStatsForTest()
 	t.Cleanup(resetCloseWithTimeoutStatsForTest)
@@ -2832,6 +2918,9 @@ func TestCloseWithTimeoutFinishWorkerLogsReleaseUnderflow(t *testing.T) {
 	if !strings.Contains(logText, "close_late_completions=0") {
 		t.Fatalf("logs = %q, want close_late_completions field", logText)
 	}
+	if !strings.Contains(logText, "close_late_abandoned=0") {
+		t.Fatalf("logs = %q, want close_late_abandoned field", logText)
+	}
 
 	closeWithTimeoutInFlightMu.Lock()
 	_, inFlight := closeWithTimeoutInFlightByCloser[blockedKey]
@@ -2841,6 +2930,56 @@ func TestCloseWithTimeoutFinishWorkerLogsReleaseUnderflow(t *testing.T) {
 	}
 
 	stats := closeWithTimeoutStatsSnapshot()
+	if stats.ReleaseUnderflow != 1 {
+		t.Fatalf("stats.ReleaseUnderflow = %d, want 1", stats.ReleaseUnderflow)
+	}
+}
+
+func TestCloseWithTimeoutFinishWorkerLogsUnderflowWithNonZeroTimeoutAndLateCompletion(t *testing.T) {
+	// Do not run t.Parallel(): mutates global slog default.
+	resetCloseWithTimeoutStatsForTest()
+	t.Cleanup(resetCloseWithTimeoutStatsForTest)
+
+	logs := newTestLogBuffer()
+	oldDefault := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	t.Cleanup(func() {
+		slog.SetDefault(oldDefault)
+	})
+
+	closeWithTimeoutRecordTimedOut()
+	closeWithTimeoutRecordLateCompletion()
+
+	blocked := newStartupAbortBlockingBody()
+	t.Cleanup(blocked.release)
+	blockedKey := closeWithTimeoutCloserKey(blocked)
+	closeWithTimeoutInFlightMu.Lock()
+	closeWithTimeoutInFlightByCloser[blockedKey] = struct{}{}
+	closeWithTimeoutInFlightMu.Unlock()
+
+	closeWithTimeoutFinishWorker(blocked)
+
+	logText := logs.String()
+	if !strings.Contains(logText, "closeWithTimeout worker slot release underflow") {
+		t.Fatalf("logs = %q, want underflow warning message", logText)
+	}
+	if !strings.Contains(logText, "close_timeouts=1") {
+		t.Fatalf("logs = %q, want non-zero close_timeouts field", logText)
+	}
+	if !strings.Contains(logText, "close_late_completions=1") {
+		t.Fatalf("logs = %q, want non-zero close_late_completions field", logText)
+	}
+	if !strings.Contains(logText, "close_late_abandoned=0") {
+		t.Fatalf("logs = %q, want close_late_abandoned field", logText)
+	}
+
+	stats := closeWithTimeoutStatsSnapshot()
+	if stats.Timeouts != 1 {
+		t.Fatalf("stats.Timeouts = %d, want 1", stats.Timeouts)
+	}
+	if stats.LateCompletions != 1 {
+		t.Fatalf("stats.LateCompletions = %d, want 1", stats.LateCompletions)
+	}
 	if stats.ReleaseUnderflow != 1 {
 		t.Fatalf("stats.ReleaseUnderflow = %d, want 1", stats.ReleaseUnderflow)
 	}

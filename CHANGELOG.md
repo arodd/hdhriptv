@@ -1,3 +1,21 @@
+- 2026-02-22 [feature] Added `make release-github-sync-tag` to build release binaries once, push matching release tags to internal/public remotes, and publish binaries on GitHub releases (without creating a GitLab release).
+- 2026-02-20 [docs] Documented recovery continuity handoff (`live -> slate_av -> live`), mode/filler continuity tradeoffs, and strict validation harness guidance in `docs/RECOVERY.md`.
+- 2026-02-20 [bug] Propagated recovery timeline offsets into resumed ffmpeg source startup (`-output_ts_offset`) and expanded the slate AV ffplay harness to record TS output and enforce monotonic post-failover packet timestamp validation.
+- 2026-02-20 [bug] Anchored `slate_av` recovery filler PTS/DTS to recovery transition PCR so recorded failover streams keep monotonic runtime continuity across live->filler->live boundaries.
+- 2026-02-20 [docs] Added MIT LICENSE for project distribution and reuse terms.
+- 2026-02-20 [feature] Added `make publish-github` squash-sync workflow for publishing internal `main` to a public mirror with marker-tag recovery safeguards.
+- 2026-02-20 [docs] Expanded README documentation indexing and added OPERATIONS monitoring/alerting plus backup/restore runbook guidance.
+- 2026-02-19 [docs] Reorganized README as product overview and extracted API, configuration, and operations references into dedicated doc files.
+- 2026-02-20 [docs] Added OPERATIONS warn-level close-path event cross-references for bounded-close underflow/suppression/slate-close warnings with STREAMING runbook links.
+- 2026-02-20 [bug] Extended close-worker underflow warning telemetry with `close_late_abandoned` and added non-zero timeout/late-completion regression coverage.
+- 2026-02-20 [docs] Documented HDHomeRun static firmware-version rationale and `Connection: close` metadata-endpoint behavior in code/API docs.
+- 2026-02-20 [bug] Updated lineup codec selection to prefer complete source codec pairs over earlier partial matches, with regression coverage.
+- 2026-02-20 [docs] Documented HDHomeRun lineup `?show=demo` compatibility behavior in the public API reference.
+- 2026-02-20 [bug] Fixed HDHomeRun lineup XML field tagging and added regression coverage for lineup source-list lookup failure propagation.
+- 2026-02-20 [bug] Fixed HTTP request middleware `ReadFrom` fallback recursion, exposed `http_request_log_enabled` in startup config logs, and added startup/readiness logging regression coverage.
+- 2026-02-20 [bug] Hardened UPnP ContentDirectory update-ID refresh coalescing so follower requests retry after leader cancellation, with expanded coalescing and TTL-config regression coverage.
+- 2026-02-20 [feature] Added dedicated HTTP request access-log control via `--http-request-log-enabled` / `HTTP_REQUEST_LOG_ENABLED`, decoupled from global log level.
+- 2026-02-20 [bug] HDHomeRun lineup responses now derive `VideoCodec`/`AudioCodec` from source profile metadata so codec tags (for example HEVC) match stream capabilities.
 - 2026-02-20 [docs] Added an OPERATIONS stream Prometheus metrics reference and documented source read-pause `reason` label semantics in streaming docs.
 - 2026-02-20 [bug] Added `reason`-labeled source read-pause Prometheus telemetry (`recovered`, `pump_exit`, `ctx_cancel`) and replaced run-cycle pause-state test sleeps with polling-based assertions.
 - 2026-02-20 [docs] Added nil-guard and write-pressure helper branch regression coverage in shared-session streaming tests, plus `stream_slow_skip_max_lag_chunks` runbook terminology clarification.

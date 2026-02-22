@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"hash/fnv"
 	"io"
@@ -539,40 +540,48 @@ func (h *Handler) currentContentDirectoryUpdateID(ctx context.Context, baseURL s
 	if h == nil {
 		return 0, fmt.Errorf("channels provider is not configured")
 	}
-	if cachedUpdateID, ok := h.cachedContentDirectoryUpdateID(); ok {
-		return cachedUpdateID, nil
-	}
-
-	h.contentDirectoryUpdateIDRefreshMu.Lock()
-	wait := h.contentDirectoryUpdateIDRefreshWait
-	if wait == nil {
-		wait = make(chan struct{})
-		h.contentDirectoryUpdateIDRefreshWait = wait
-		h.contentDirectoryUpdateIDRefreshMu.Unlock()
-
-		updateID, err := h.refreshContentDirectoryUpdateID(ctx, baseURL)
+	for {
+		if cachedUpdateID, ok := h.cachedContentDirectoryUpdateID(); ok {
+			return cachedUpdateID, nil
+		}
 
 		h.contentDirectoryUpdateIDRefreshMu.Lock()
-		h.contentDirectoryUpdateIDRefreshValue = updateID
-		h.contentDirectoryUpdateIDRefreshErr = err
-		close(wait)
-		h.contentDirectoryUpdateIDRefreshWait = nil
+		wait := h.contentDirectoryUpdateIDRefreshWait
+		if wait == nil {
+			wait = make(chan struct{})
+			h.contentDirectoryUpdateIDRefreshWait = wait
+			h.contentDirectoryUpdateIDRefreshMu.Unlock()
+
+			updateID, err := h.refreshContentDirectoryUpdateID(ctx, baseURL)
+
+			h.contentDirectoryUpdateIDRefreshMu.Lock()
+			h.contentDirectoryUpdateIDRefreshValue = updateID
+			h.contentDirectoryUpdateIDRefreshErr = err
+			close(wait)
+			h.contentDirectoryUpdateIDRefreshWait = nil
+			h.contentDirectoryUpdateIDRefreshMu.Unlock()
+			return updateID, err
+		}
 		h.contentDirectoryUpdateIDRefreshMu.Unlock()
+
+		select {
+		case <-wait:
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		}
+
+		h.contentDirectoryUpdateIDRefreshMu.Lock()
+		updateID := h.contentDirectoryUpdateIDRefreshValue
+		err := h.contentDirectoryUpdateIDRefreshErr
+		h.contentDirectoryUpdateIDRefreshMu.Unlock()
+
+		// If the in-flight leader refresh used a canceled/deadline-exceeded context,
+		// waiters with live contexts should retry instead of inheriting that error.
+		if err != nil && ctx.Err() == nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+			continue
+		}
 		return updateID, err
 	}
-	h.contentDirectoryUpdateIDRefreshMu.Unlock()
-
-	select {
-	case <-wait:
-	case <-ctx.Done():
-		return 0, ctx.Err()
-	}
-
-	h.contentDirectoryUpdateIDRefreshMu.Lock()
-	updateID := h.contentDirectoryUpdateIDRefreshValue
-	err := h.contentDirectoryUpdateIDRefreshErr
-	h.contentDirectoryUpdateIDRefreshMu.Unlock()
-	return updateID, err
 }
 
 func (h *Handler) refreshContentDirectoryUpdateID(ctx context.Context, baseURL string) (int, error) {
