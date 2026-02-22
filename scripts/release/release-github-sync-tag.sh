@@ -132,8 +132,8 @@ ensure_remote_url "$INTERNAL_REMOTE" "$INTERNAL_REPO_URL"
 ensure_remote_url "$PUBLIC_REMOTE" "$PUBLIC_REPO_URL"
 
 log "Fetching internal/public refs"
-git fetch "$INTERNAL_REMOTE" "$SYNC_BRANCH" --tags
-git fetch "$PUBLIC_REMOTE" --tags
+git fetch --no-tags "$INTERNAL_REMOTE" "$SYNC_BRANCH"
+git fetch --no-tags "$PUBLIC_REMOTE"
 
 if ! git show-ref --verify --quiet "refs/heads/${SYNC_BRANCH}"; then
   die "local branch ${SYNC_BRANCH} does not exist"
@@ -178,7 +178,7 @@ make publish-github \
   SYNC_BRANCH="$SYNC_BRANCH" \
   PUBLISH_GITHUB_COMMIT_MESSAGE="$PUBLISH_GITHUB_COMMIT_MESSAGE"
 
-git fetch "$PUBLIC_REMOTE" "$SYNC_BRANCH" --tags
+git fetch --no-tags "$PUBLIC_REMOTE" "$SYNC_BRANCH"
 public_tip="$(git rev-parse "${PUBLIC_REMOTE}/${SYNC_BRANCH}")"
 internal_tree="$(git rev-parse "${internal_tip}^{tree}")"
 public_tree="$(git rev-parse "${public_tip}^{tree}")"

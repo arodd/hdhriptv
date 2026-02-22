@@ -78,8 +78,8 @@ publish-github:
 		echo "Adding public remote $(PUBLIC_REMOTE) -> $(PUBLIC_REPO_URL)"; \
 		git remote add "$(PUBLIC_REMOTE)" "$(PUBLIC_REPO_URL)"; \
 	fi; \
-	git fetch "$(INTERNAL_REMOTE)" "$(SYNC_BRANCH)" --tags; \
-	git fetch "$(PUBLIC_REMOTE)" --tags; \
+	git fetch --no-tags "$(INTERNAL_REMOTE)" "$(SYNC_BRANCH)"; \
+	git fetch --no-tags "$(PUBLIC_REMOTE)"; \
 	if ! git show-ref --verify --quiet "refs/heads/$(SYNC_BRANCH)"; then \
 		echo "Local branch $(SYNC_BRANCH) does not exist."; \
 		echo "Create it and sync with $(INTERNAL_REMOTE)/$(SYNC_BRANCH) before publishing."; \
