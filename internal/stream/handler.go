@@ -51,8 +51,9 @@ type Config struct {
 	FFmpegStartupAnalyzeDelay       time.Duration
 	FFmpegCopyRegenerateTimestamps  *bool
 
-	ProducerReadRate     float64
-	ProducerInitialBurst int
+	ProducerReadRate        float64
+	ProducerReadRateCatchup float64
+	ProducerInitialBurst    int
 
 	BufferChunkBytes           int
 	BufferPublishFlushInterval time.Duration
@@ -211,6 +212,7 @@ func NewHandler(cfg Config, tuners *Pool, channelsProvider ChannelsProvider) *Ha
 		FFmpegStartupAnalyzeDelay:       cfg.FFmpegStartupAnalyzeDelay,
 		FFmpegCopyRegenerateTimestamps:  cfg.FFmpegCopyRegenerateTimestamps,
 		ProducerReadRate:                cfg.ProducerReadRate,
+		ProducerReadRateCatchup:         cfg.ProducerReadRateCatchup,
 		ProducerInitialBurst:            cfg.ProducerInitialBurst,
 		BufferChunkBytes:                cfg.BufferChunkBytes,
 		BufferPublishFlushInterval:      cfg.BufferPublishFlushInterval,

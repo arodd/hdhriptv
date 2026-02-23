@@ -69,9 +69,9 @@ Persistence is SQLite (`internal/store/sqlite/store.go`) with migrations under
 3. `internal/jobs/playlist_sync.go` executes:
    - refresh catalog via `internal/playlist/refresh.go`
    - reconcile channel sources via `internal/reconcile/reconcile.go`
-   - optional post-sync DVR lineup reload hook (`DVRLineupReloader`), with
-     active-provider fan-out and provider-aware skip semantics for incomplete
-     Jellyfin config
+   - optional post-sync DVR lineup reload hook (`DVRLineupReloader`) via
+     `ReloadLineupForPlaylistSyncOutcome(...)`, with active-provider fan-out
+     and provider-aware skip semantics for incomplete Jellyfin config
 4. Catalog refresh upserts active rows and marks unseen rows inactive in
    `internal/store/sqlite/catalog_index.go`.
    - IOERR diagnostics are enriched in `internal/store/sqlite/error_diag.go`,
@@ -116,14 +116,23 @@ Persistence is SQLite (`internal/store/sqlite/store.go`) with migrations under
    - HTTP-triggered runs are detached from request cancellation and execute
      under an internal timeout budget (`AdminHandler.dvrSyncTimeout`,
      default `2m`)
-2. `internal/dvr/service.go` loads configured mappings and provider lineup data.
-3. Service resolves station references per channel and applies provider patch
-   (dry run supported).
-4. Resolved station references are persisted back to mapping cache.
-5. Provider scope note:
-   - `channels` provider supports full forward sync operations.
-   - `jellyfin` provider mode focuses on lineup refresh orchestration and
-     returns explicit unsupported-provider errors for custom-mapping paths.
+2. `internal/dvr/service.go` executes a two-stage sync pipeline:
+   - `buildSyncPlan`: load mappings + provider lineup data, resolve station refs,
+     compute patch diff/counters/warnings.
+   - `applySyncPlan`: apply provider patch and persist resolved station refs
+     (or preview-only in dry-run mode).
+3. `SyncResult` stores the per-lineup summaries, aggregate counters, warnings,
+   and patch preview for API visibility and troubleshooting.
+4. Provider scope note:
+   - `channels` provider satisfies both `LineupReloadProvider` and
+     `MappingProvider`.
+   - `jellyfin` provider satisfies `LineupReloadProvider` only.
+   - sync/reverse-sync/test paths explicitly resolve `MappingProvider`,
+     while lineup reload paths resolve `LineupReloadProvider`.
+5. Config-shape note:
+   - DVR config normalization (provider/base-url/active-provider/sync-mode)
+     is centralized in `internal/dvr/config_normalize.go` and reused by
+     service/provider/store paths.
 
 ### 5. DVR Reverse Sync Flow (provider -> hdhriptv)
 
@@ -514,11 +523,11 @@ Behavior notes:
     `GET /api/admin/dvr` and `PUT /api/admin/dvr` responses.
   - response payloads expose `jellyfin_api_token_configured=true|false`.
 - Provider-selection and config fields accepted by `handlePutDVR`:
-  - `provider` (primary provider for sync/mapping/test workflows)
+  - `provider` (primary provider for sync/mapping/test workflows; only `channels` is accepted)
   - `active_providers` (post-playlist-sync reload fan-out target set)
   - per-provider base URLs:
     - `channels_base_url`
     - `jellyfin_base_url`
-  - legacy `base_url` (maps to selected primary provider for compatibility)
+  - legacy `base_url` (maps to Channels base URL for compatibility)
   - optional `jellyfin_api_token` (header auth token)
   - optional `jellyfin_tuner_host_id` (host targeting override)

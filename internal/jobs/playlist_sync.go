@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arodd/hdhriptv/internal/dvr"
 	"github.com/arodd/hdhriptv/internal/reconcile"
 )
 
@@ -33,15 +34,10 @@ type PlaylistReconciler interface {
 	Reconcile(ctx context.Context, onProgress func(cur, max int) error) (reconcile.Result, error)
 }
 
-// DVRLineupReloader refreshes downstream DVR lineup state after playlist sync.
+// DVRLineupReloader refreshes downstream DVR lineup state after playlist sync
+// and returns provider-aware non-fatal skip metadata.
 type DVRLineupReloader interface {
-	ReloadLineup(ctx context.Context) error
-}
-
-// DVRLineupReloaderWithStatus optionally allows provider-aware non-fatal skip
-// semantics for post-playlist-sync lineup reload paths.
-type DVRLineupReloaderWithStatus interface {
-	ReloadLineupForPlaylistSync(ctx context.Context) (reloaded bool, skipped bool, skipReason string, err error)
+	ReloadLineupForPlaylistSyncOutcome(ctx context.Context) (dvr.ReloadOutcome, error)
 }
 
 // PlaylistSyncJob runs playlist refresh then reconcile.
@@ -147,38 +143,15 @@ func (j *PlaylistSyncJob) Run(ctx context.Context, run *RunContext) error {
 	}
 
 	reloadedLineup := false
-	reloadStatus := "disabled"
+	reloadStatus := dvr.ReloadStatusDisabled
 	reloadSkipReason := "none"
 	if j.reloader != nil {
-		if statusReloader, ok := j.reloader.(DVRLineupReloaderWithStatus); ok {
-			reloaded, skipped, skipReason, err := statusReloader.ReloadLineupForPlaylistSync(ctx)
-			if err != nil {
-				return fmt.Errorf("reload dvr lineup after playlist sync: %w", err)
-			}
-			reloadedLineup = reloaded
-			switch {
-			case reloaded && skipped:
-				reloadStatus = "partial"
-				if reason := strings.TrimSpace(skipReason); reason != "" {
-					reloadSkipReason = reason
-				}
-			case skipped:
-				reloadStatus = "skipped"
-				if reason := strings.TrimSpace(skipReason); reason != "" {
-					reloadSkipReason = reason
-				}
-			case reloaded:
-				reloadStatus = "reloaded"
-			default:
-				reloadStatus = "unknown"
-			}
-		} else {
-			if err := j.reloader.ReloadLineup(ctx); err != nil {
-				return fmt.Errorf("reload dvr lineup after playlist sync: %w", err)
-			}
-			reloadedLineup = true
-			reloadStatus = "reloaded"
+		outcome, err := j.reloader.ReloadLineupForPlaylistSyncOutcome(ctx)
+		if err != nil {
+			return fmt.Errorf("reload dvr lineup after playlist sync: %w", err)
 		}
+
+		reloadedLineup, reloadStatus, reloadSkipReason = normalizeReloadOutcomeForSummary(outcome)
 	}
 
 	summary := fmt.Sprintf(
@@ -208,6 +181,58 @@ func (j *PlaylistSyncJob) Run(ctx context.Context, run *RunContext) error {
 	}
 
 	return nil
+}
+
+func normalizeReloadOutcomeForSummary(outcome dvr.ReloadOutcome) (reloaded bool, status string, skipReason string) {
+	reloaded = outcome.Reloaded
+	status = normalizeKnownReloadStatus(outcome.Status)
+	if status == "" {
+		switch {
+		case outcome.Reloaded && outcome.Skipped:
+			status = dvr.ReloadStatusPartial
+		case outcome.Skipped:
+			status = dvr.ReloadStatusSkipped
+		case outcome.Reloaded:
+			status = dvr.ReloadStatusReloaded
+		default:
+			status = dvr.ReloadStatusUnknown
+		}
+	}
+
+	skipReason = "none"
+	if len(outcome.SkipReasons) == 0 {
+		return reloaded, status, skipReason
+	}
+
+	parts := make([]string, 0, len(outcome.SkipReasons))
+	for _, reason := range outcome.SkipReasons {
+		trimmed := strings.TrimSpace(reason)
+		if trimmed == "" {
+			continue
+		}
+		parts = append(parts, trimmed)
+	}
+	if len(parts) > 0 {
+		skipReason = strings.Join(parts, ",")
+	}
+	return reloaded, status, skipReason
+}
+
+func normalizeKnownReloadStatus(status string) string {
+	switch strings.ToLower(strings.TrimSpace(status)) {
+	case dvr.ReloadStatusDisabled:
+		return dvr.ReloadStatusDisabled
+	case dvr.ReloadStatusReloaded:
+		return dvr.ReloadStatusReloaded
+	case dvr.ReloadStatusPartial:
+		return dvr.ReloadStatusPartial
+	case dvr.ReloadStatusSkipped:
+		return dvr.ReloadStatusSkipped
+	case dvr.ReloadStatusUnknown:
+		return dvr.ReloadStatusUnknown
+	default:
+		return ""
+	}
 }
 
 type progressPersistThrottle struct {

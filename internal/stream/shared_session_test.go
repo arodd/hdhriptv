@@ -7067,7 +7067,21 @@ func TestSharedSessionRecoveryHeartbeatSlateAVPassesPTSOffsetFromBoundaryPCR(t *
 		}
 	})
 
-	if got, want := cfg.PTSOffset, 2*time.Second; got != want {
+	// startRecoveryHeartbeat publishes a live->keepalive transition boundary
+	// before creating the slate AV filler. Without a recent observed PCR, that
+	// boundary path advances recoveryBoundaryPCRBase by 1s.
+	session.mu.Lock()
+	boundarySet := session.recoveryBoundaryPCRSet
+	boundaryBase := session.recoveryBoundaryPCRBase
+	session.mu.Unlock()
+	if !boundarySet {
+		t.Fatal("recoveryBoundaryPCRSet = false, want true after keepalive boundary publish")
+	}
+	if got, want := boundaryBase, uint64(2*mpegTSPCRClockHz); got != want {
+		t.Fatalf("recoveryBoundaryPCRBase = %d, want %d", got, want)
+	}
+
+	if got, want := cfg.PTSOffset, pcrBaseToDuration(boundaryBase); got != want {
 		t.Fatalf("factory PTS offset = %s, want %s", got, want)
 	}
 }
@@ -7100,6 +7114,32 @@ func TestSharedSessionCurrentRecoveryTimelinePTSOffsetFallsBackToBoundaryOnStale
 	session.mu.Unlock()
 
 	if got, want := session.currentRecoveryTimelinePTSOffset(), 5*time.Second; got != want {
+		t.Fatalf("currentRecoveryTimelinePTSOffset() = %s, want %s", got, want)
+	}
+}
+
+func TestSharedSessionCurrentRecoveryTimelinePTSOffsetCapsBoundaryPCR(t *testing.T) {
+	session := &sharedRuntimeSession{}
+	session.mu.Lock()
+	session.recoveryBoundaryPCRSet = true
+	session.recoveryBoundaryPCRBase = uint64((13 * time.Hour).Nanoseconds() * mpegTSPCRClockHz / int64(time.Second))
+	session.mu.Unlock()
+
+	if got, want := session.currentRecoveryTimelinePTSOffset(), maxRecoveryTimelinePTSOffset; got != want {
+		t.Fatalf("currentRecoveryTimelinePTSOffset() = %s, want %s", got, want)
+	}
+}
+
+func TestSharedSessionCurrentRecoveryTimelinePTSOffsetCapsObservedPCR(t *testing.T) {
+	session := &sharedRuntimeSession{}
+	session.mu.Lock()
+	session.recoveryBoundaryPCRSet = true
+	session.recoveryBoundaryPCRBase = 5 * mpegTSPCRClockHz
+	session.recoveryObservedPCRBase = uint64((13 * time.Hour).Nanoseconds() * mpegTSPCRClockHz / int64(time.Second))
+	session.recoveryObservedPCRAt = time.Now().UTC()
+	session.mu.Unlock()
+
+	if got, want := session.currentRecoveryTimelinePTSOffset(), maxRecoveryTimelinePTSOffset; got != want {
 		t.Fatalf("currentRecoveryTimelinePTSOffset() = %s, want %s", got, want)
 	}
 }
@@ -15742,6 +15782,16 @@ func TestNormalizeSessionManagerConfigRecoveryDefaults(t *testing.T) {
 	if !cfg.ffmpegCopyRegenerateTimestamps {
 		t.Fatal("ffmpegCopyRegenerateTimestamps = false, want true")
 	}
+	if cfg.producerReadRate != 1 {
+		t.Fatalf("producerReadRate = %v, want 1", cfg.producerReadRate)
+	}
+	if cfg.producerReadRateCatchup != cfg.producerReadRate {
+		t.Fatalf(
+			"producerReadRateCatchup = %v, want match producerReadRate %v",
+			cfg.producerReadRateCatchup,
+			cfg.producerReadRate,
+		)
+	}
 	if cfg.sessionDrainTimeout != boundedCloseTimeout {
 		t.Fatalf("sessionDrainTimeout = %s, want %s", cfg.sessionDrainTimeout, boundedCloseTimeout)
 	}
@@ -15771,6 +15821,33 @@ func TestNormalizeSessionManagerConfigSessionDrainTimeoutOverride(t *testing.T) 
 	})
 	if cfg.ffmpegCopyRegenerateTimestamps {
 		t.Fatal("ffmpegCopyRegenerateTimestamps = true, want false override")
+	}
+}
+
+func TestNormalizeSessionManagerConfigProducerReadRateCatchup(t *testing.T) {
+	cfg := normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:                    "ffmpeg-copy",
+		ProducerReadRate:        1.25,
+		ProducerReadRateCatchup: 2.0,
+	})
+	if cfg.producerReadRate != 1.25 {
+		t.Fatalf("producerReadRate = %v, want 1.25", cfg.producerReadRate)
+	}
+	if cfg.producerReadRateCatchup != 2.0 {
+		t.Fatalf("producerReadRateCatchup = %v, want 2.0", cfg.producerReadRateCatchup)
+	}
+
+	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:                    "ffmpeg-copy",
+		ProducerReadRate:        1.5,
+		ProducerReadRateCatchup: 1.25,
+	})
+	if cfg.producerReadRateCatchup != cfg.producerReadRate {
+		t.Fatalf(
+			"producerReadRateCatchup = %v, want clamp to producerReadRate %v",
+			cfg.producerReadRateCatchup,
+			cfg.producerReadRate,
+		)
 	}
 }
 

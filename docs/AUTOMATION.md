@@ -139,9 +139,8 @@ catalog from the upstream M3U playlist and reconciles channel sources.
    channels or every 1 second, whichever comes first).
 4. **DVR lineup reload** (optional) — if a `DVRLineupReloader` is configured
    via `SetPostSyncLineupReloader`, it is called after successful
-   refresh+reconcile. Supports both simple `ReloadLineup` and the extended
-   `DVRLineupReloaderWithStatus` interface which reports reloaded/skipped
-   status and skip reasons.
+   refresh+reconcile through `ReloadLineupForPlaylistSyncOutcome`, which
+   returns typed reload status/skip metadata (`dvr.ReloadOutcome`).
 
 ### Progress Throttling
 

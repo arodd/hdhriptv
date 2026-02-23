@@ -287,8 +287,8 @@
             <label for="provider">Primary Provider (sync/mapping)</label>
             <select id="provider">
               <option value="channels">Channels DVR</option>
-              <option value="jellyfin">Jellyfin Live TV</option>
             </select>
+            <div class="muted">Channels DVR is currently the only supported sync/mapping provider.</div>
           </div>
 
           <div class="field">
@@ -540,19 +540,10 @@
     }
 
     function updateProviderFields() {
-      const provider = (providerEl.value || "").trim().toLowerCase();
-      const supportsLineups = provider === "channels";
+      const supportsLineups = String(providerEl.value || "").toLowerCase() === "channels";
       lineupSelectEl.disabled = !supportsLineups;
       discoverLineupsButtonEl.disabled = !supportsLineups;
       useSelectedLineupButtonEl.disabled = !supportsLineups;
-
-      if (selectedActiveProviders().length === 0) {
-        if (provider === "jellyfin") {
-          activeProviderJellyfinEl.checked = true;
-        } else {
-          activeProviderChannelsEl.checked = true;
-        }
-      }
 
       if (!state.config) {
         jellyfinTokenStatusEl.textContent = "";
@@ -570,17 +561,17 @@
         return;
       }
       const instance = state.config;
-      const provider = (instance.provider || "channels").toLowerCase();
-      const activeProviders = Array.isArray(instance.active_providers) && instance.active_providers.length > 0
+      const configuredPrimaryProvider = (instance.provider || "channels").toLowerCase();
+      const activeProviders = Array.isArray(instance.active_providers)
         ? instance.active_providers.map((value) => String(value || "").toLowerCase())
-        : [provider];
+        : [];
 
-      providerEl.value = provider;
+      providerEl.value = "channels";
       activeProviderChannelsEl.checked = activeProviders.includes("channels");
       activeProviderJellyfinEl.checked = activeProviders.includes("jellyfin");
 
-      channelsBaseURLEl.value = instance.channels_base_url || (provider === "channels" ? (instance.base_url || "") : "");
-      jellyfinBaseURLEl.value = instance.jellyfin_base_url || (provider === "jellyfin" ? (instance.base_url || "") : "");
+      channelsBaseURLEl.value = instance.channels_base_url || (configuredPrimaryProvider === "channels" ? (instance.base_url || "") : "");
+      jellyfinBaseURLEl.value = instance.jellyfin_base_url || (configuredPrimaryProvider === "jellyfin" ? (instance.base_url || "") : "");
       jellyfinHostIDEl.value = instance.jellyfin_tuner_host_id || "";
       jellyfinAPITokenEl.value = "";
       defaultLineupInputEl.value = instance.default_lineup_id || "";
@@ -670,18 +661,15 @@
       const selectedLineup = lineupSelectEl.value.trim();
       const resolvedDefaultLineup = manualLineup || selectedLineup;
       const tokenValue = jellyfinAPITokenEl.value.trim();
-      const selectedProvider = (providerEl.value || "").trim().toLowerCase() || "channels";
+      const selectedProvider = "channels";
       const channelsBaseURL = channelsBaseURLEl.value.trim();
       const jellyfinBaseURL = jellyfinBaseURLEl.value.trim();
       const activeProviders = selectedActiveProviders();
-      if (activeProviders.length === 0) {
-        activeProviders.push(selectedProvider);
-      }
 
       const payload = {
         provider: selectedProvider,
         active_providers: activeProviders,
-        base_url: selectedProvider === "jellyfin" ? jellyfinBaseURL : channelsBaseURL,
+        base_url: channelsBaseURL,
         channels_base_url: channelsBaseURL,
         jellyfin_base_url: jellyfinBaseURL,
         default_lineup_id: resolvedDefaultLineup,
@@ -698,9 +686,6 @@
     }
 
     async function refreshLineupsIfNeeded() {
-      if (state.config && String(state.config.provider || "").toLowerCase() === "jellyfin") {
-        return;
-      }
       if (state.lineups.length > 0) {
         return;
       }
@@ -761,9 +746,6 @@
     }
 
     async function discoverLineups() {
-      if (String(providerEl.value || "").toLowerCase() === "jellyfin") {
-        throw new Error("lineup discovery is supported for Channels DVR provider only");
-      }
       const payload = await api("/api/admin/dvr/lineups?refresh=1");
       state.lineups = payload.lineups || [];
       state.cachedLineupsAt = Math.floor(Date.now() / 1000);

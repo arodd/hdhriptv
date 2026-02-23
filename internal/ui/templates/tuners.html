@@ -377,6 +377,7 @@
 
     .span-8 { grid-column: span 8; }
     .span-4 { grid-column: span 4; }
+    .span-12 { grid-column: 1 / -1; }
 
     .panel-toolbar {
       display: flex;
@@ -404,6 +405,41 @@
       width: 100%;
       border-collapse: collapse;
       font-size: 0.82rem;
+    }
+
+    .active-sessions-table {
+      table-layout: fixed;
+    }
+
+    .active-sessions-table col.col-tuner { width: 8rem; }
+    .active-sessions-table col.col-state { width: 9.5rem; }
+    .active-sessions-table col.col-channel { width: 16rem; }
+    .active-sessions-table col.col-source { width: auto; }
+    .active-sessions-table col.col-throughput { width: 12rem; }
+    .active-sessions-table col.col-subs { width: 4.5rem; }
+    .active-sessions-table col.col-last-push { width: 11rem; }
+    .active-sessions-table col.col-actions { width: 10.5rem; }
+
+    .active-sessions-table .channel-cell,
+    .active-sessions-table .source-cell {
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+
+    .active-sessions-table .source-cell {
+      min-width: 300px;
+      max-width: 760px;
+    }
+
+    .active-sessions-table .throughput-cell,
+    .active-sessions-table .last-push-cell,
+    .active-sessions-table .actions-cell {
+      white-space: nowrap;
+    }
+
+    .active-sessions-table .subs-cell {
+      text-align: center;
+      font-variant-numeric: tabular-nums;
     }
 
     th,
@@ -522,33 +558,6 @@
       color: var(--muted);
     }
 
-    .alert-list {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: grid;
-      gap: 8px;
-    }
-
-    .alert-list li {
-      border: 1px solid var(--border);
-      border-radius: 10px;
-      padding: 8px;
-      background: #fbfdff;
-      display: grid;
-      gap: 4px;
-    }
-
-    .alert-list li.warn {
-      border-color: #f3debc;
-      background: #fff9ef;
-    }
-
-    .alert-list li.danger {
-      border-color: #f0cbcb;
-      background: #fff3f3;
-    }
-
     .history-controls {
       display: grid;
       gap: 8px;
@@ -598,6 +607,7 @@
       gap: 5px;
       cursor: pointer;
       line-height: 1.25;
+      overflow: hidden;
       transition: border-color 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
     }
 
@@ -704,13 +714,6 @@
       letter-spacing: 0.04em;
     }
 
-    .source-cell {
-      max-width: 380px;
-      min-width: 220px;
-      white-space: normal;
-      word-break: break-word;
-    }
-
     .mono {
       font-family: "IBM Plex Mono", "SFMono-Regular", Menlo, monospace;
       letter-spacing: -0.01em;
@@ -769,7 +772,8 @@
       }
 
       .span-8,
-      .span-4 {
+      .span-4,
+      .span-12 {
         grid-column: span 12;
       }
 
@@ -1015,7 +1019,7 @@
     </section>
 
     <section class="grid-primary">
-      <section class="panel span-8" aria-labelledby="active-sessions-title">
+      <section class="panel span-12" aria-labelledby="active-sessions-title">
         <h2 id="active-sessions-title">Active Sessions</h2>
         <div class="panel-body">
           <div class="panel-toolbar">
@@ -1024,7 +1028,17 @@
           </div>
           <div id="tuners-empty" class="empty" hidden>No tuner sessions are currently in use.</div>
           <div class="table-wrap">
-            <table>
+            <table class="active-sessions-table">
+              <colgroup>
+                <col class="col-tuner">
+                <col class="col-state">
+                <col class="col-channel">
+                <col class="col-source">
+                <col class="col-throughput">
+                <col class="col-subs">
+                <col class="col-last-push">
+                <col class="col-actions">
+              </colgroup>
               <thead>
                 <tr>
                   <th>Tuner</th>
@@ -1042,13 +1056,6 @@
           </div>
         </div>
       </section>
-
-      <aside class="panel span-4" aria-labelledby="alerts-title">
-        <h2 id="alerts-title">Alerts / Health Rail</h2>
-        <div class="panel-body">
-          <ul id="alerts-list" class="alert-list"></ul>
-        </div>
-      </aside>
     </section>
 
     <section class="grid-secondary">
@@ -1149,7 +1156,6 @@
     const historyTabPanelSourcesEl = document.getElementById("history-tabpanel-sources");
     const historyTabPanelSubscribersEl = document.getElementById("history-tabpanel-subscribers");
     const historyTabPanelRecoveryEl = document.getElementById("history-tabpanel-recovery");
-    const alertsListEl = document.getElementById("alerts-list");
     const lastRefreshEl = document.getElementById("last-refresh");
     const autoRefreshEl = document.getElementById("auto-refresh");
     const activeSummaryNoteEl = document.getElementById("active-summary-note");
@@ -1936,74 +1942,6 @@
       setKpiSeverity(summaryCardMaxReselectEl, summaryMaxReselectSeverityEl, maxReselectSeverity, maxReselectSeverity === "danger" ? "Critical" : maxReselectSeverity === "warn" ? "Watch" : "Stable");
     }
 
-    function renderAlerts(payload) {
-      const churn = payload?.churn || {};
-      const recovering = toNumber(churn.recovering_session_count);
-      const overThreshold = toNumber(churn.sessions_over_reselect_threshold);
-      const maxReselect = toNumber(churn.max_same_source_reselect_count);
-      const threshold = toNumber(churn.reselect_alert_threshold);
-      const totalRecoveryCycles = toNumber(churn.total_recovery_cycles);
-      const totalReselects = toNumber(churn.total_same_source_reselect_count);
-
-      const alerts = [];
-      if (recovering > 0) {
-        alerts.push({
-          severity: recovering >= 3 ? "danger" : "warn",
-          title: "Sessions Recovering",
-          detail: `${recovering} session(s) are in recovery flow right now.`,
-        });
-      } else {
-        alerts.push({
-          severity: "ok",
-          title: "Recovery Pressure",
-          detail: "No active recovery cycles in this snapshot.",
-        });
-      }
-
-      if (overThreshold > 0) {
-        alerts.push({
-          severity: "danger",
-          title: "Reselect Churn Alert",
-          detail: `${overThreshold} session(s) are over the reselect threshold (${threshold || "n/a"}).`,
-        });
-      } else {
-        alerts.push({
-          severity: "ok",
-          title: "Reselect Churn",
-          detail: "No sessions exceeded the reselect threshold.",
-        });
-      }
-
-      alerts.push({
-        severity: maxReselect >= threshold && threshold > 0 ? "warn" : "ok",
-        title: "Peak Same-source Reselect",
-        detail: `${maxReselect} peak reselections, ${totalReselects} total.`,
-      });
-
-      alerts.push({
-        severity: totalRecoveryCycles > 0 ? "warn" : "ok",
-        title: "Recovery Cycle Volume",
-        detail: `${totalRecoveryCycles} total recovery cycles observed among active sessions.`,
-      });
-
-      alertsListEl.innerHTML = "";
-      for (const alert of alerts) {
-        const li = document.createElement("li");
-        if (alert.severity === "danger") {
-          li.classList.add("danger");
-        } else if (alert.severity === "warn") {
-          li.classList.add("warn");
-        }
-        const tagClass = alert.severity === "danger" ? "danger" : alert.severity === "warn" ? "warn" : "ok";
-        li.innerHTML = `
-          <div><span class="tag ${tagClass}">${escapeHTML(alert.severity)}</span></div>
-          <div><strong>${escapeHTML(alert.title)}</strong></div>
-          <div class="muted">${escapeHTML(alert.detail)}</div>
-        `;
-        alertsListEl.appendChild(li);
-      }
-    }
-
     function renderTuners(model) {
       const tuners = model.filteredTuners;
       const total = model.tuners.length;
@@ -2050,19 +1988,19 @@
           : `<span class="muted">-</span>`;
 
         tr.innerHTML = `
-          <td>
+          <td class="tuner-cell">
             <div><strong>#${escapeHTML(tuner.tuner_id)}</strong></div>
             <div class="muted"><span class="tag ${typeClass}">${escapeHTML(tuner.kind || "unknown")}</span></div>
           </td>
-          <td><span class="tag ${stateClass}">${escapeHTML(stateLabel)}</span></td>
-          <td>${channelText}</td>
+          <td class="state-cell"><span class="tag ${stateClass}">${escapeHTML(stateLabel)}</span></td>
+          <td class="channel-cell">${channelText}</td>
           <td class="source-cell">
             <div>${sourceText}</div>
           </td>
-          <td>${throughput}</td>
-          <td>${subscriberCount}</td>
-          <td>${formatTS(tuner.last_push_at || tuner.lease_started_at)}</td>
-          <td>${recoveryAction}</td>
+          <td class="throughput-cell">${throughput}</td>
+          <td class="subs-cell">${subscriberCount}</td>
+          <td class="last-push-cell">${formatTS(tuner.last_push_at || tuner.lease_started_at)}</td>
+          <td class="actions-cell">${recoveryAction}</td>
         `;
         tunersBodyEl.appendChild(tr);
       }
@@ -2293,17 +2231,16 @@
 
       const fragment = document.createDocumentFragment();
       for (const entry of history) {
-        const button = document.createElement("button");
-        button.type = "button";
-        button.className = "history-list-item";
+        const item = document.createElement("div");
+        item.className = "history-list-item";
         const sessionID = toNumber(entry.session_id);
-        button.dataset.historySessionId = String(sessionID);
-        button.id = `history-option-${sessionID}`;
-        button.setAttribute("role", "option");
+        item.dataset.historySessionId = String(sessionID);
+        item.id = `history-option-${sessionID}`;
+        item.setAttribute("role", "option");
 
         const selected = sessionID === uiState.selectedHistorySessionID;
-        button.setAttribute("aria-selected", selected ? "true" : "false");
-        button.tabIndex = selected ? 0 : -1;
+        item.setAttribute("aria-selected", selected ? "true" : "false");
+        item.tabIndex = selected ? 0 : -1;
 
         const statusClass = historyStatusClass(entry);
         const statusLabel = historyStatusLabel(entry);
@@ -2317,7 +2254,7 @@
         const duration = escapeHTML(formatDurationMs(historyDurationMs(entry)));
         const recoveryLabel = `${escapeHTML(entry.recovery_cycle_count || 0)} cycle(s), reselect ${escapeHTML(entry.same_source_reselect_count || 0)}`;
 
-        button.innerHTML = `
+        item.innerHTML = `
           <div class="history-list-head">
             <div class="history-list-title">${sessionLabel} <span class="muted">(${tunerLabel})</span></div>
             <span class="tag ${statusClass}">${escapeHTML(statusLabel)}</span>
@@ -2330,7 +2267,7 @@
           </div>
           <div class="history-list-terminal" title="${terminal}">Terminal: ${terminal}</div>
         `;
-        fragment.appendChild(button);
+        fragment.appendChild(item);
       }
       historyListEl.appendChild(fragment);
       historyListEl.setAttribute("aria-activedescendant", `history-option-${uiState.selectedHistorySessionID}`);
@@ -2499,7 +2436,6 @@
 
       const model = buildViewModel(payload);
       renderSummary(payload);
-      renderAlerts(payload);
       renderTuners(model);
       renderClients(model);
       renderHistoryMaster(model, payload);
@@ -2709,7 +2645,7 @@
     });
 
     historyListEl.addEventListener("click", (event) => {
-      const item = event.target.closest("button[data-history-session-id]");
+      const item = event.target.closest("[data-history-session-id]");
       if (!item) {
         return;
       }
@@ -2726,11 +2662,11 @@
       if (!["ArrowUp", "ArrowDown", "Home", "End", "Enter", " "].includes(key)) {
         return;
       }
-      const items = Array.from(historyListEl.querySelectorAll("button[data-history-session-id]"));
+      const items = Array.from(historyListEl.querySelectorAll("[data-history-session-id]"));
       if (items.length === 0) {
         return;
       }
-      const activeEl = event.target.closest("button[data-history-session-id]");
+      const activeEl = event.target.closest("[data-history-session-id]");
       const currentIdx = activeEl ? items.indexOf(activeEl) : -1;
 
       if (key === "Enter" || key === " ") {
@@ -2768,7 +2704,7 @@
       uiState.selectedHistorySessionID = sessionID;
       rerenderFromState();
       window.requestAnimationFrame(() => {
-        const selected = historyListEl.querySelector(`button[data-history-session-id="${sessionID}"]`);
+        const selected = historyListEl.querySelector(`[data-history-session-id="${sessionID}"]`);
         if (selected instanceof HTMLElement) {
           selected.focus();
         }

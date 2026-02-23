@@ -13,17 +13,26 @@ var (
 )
 
 const (
-	defaultChannelsBaseURL = "http://channels.lan:8089"
 	defaultJellyfinBaseURL = "http://jellyfin.lan:8096"
 )
 
-// DVRProvider encapsulates one provider implementation.
-type DVRProvider interface {
+// ProviderBase exposes common provider identity behavior.
+type ProviderBase interface {
 	Type() ProviderType
+}
+
+// LineupReloadProvider supports lineup reload + guide refresh flows.
+type LineupReloadProvider interface {
+	ProviderBase
 	ListLineups(ctx context.Context) ([]DVRLineup, error)
 	ReloadDeviceLineup(ctx context.Context, deviceID string) error
 	RefreshGuideStations(ctx context.Context) error
 	RedownloadGuideLineup(ctx context.Context, lineupID string) error
+}
+
+// MappingProvider supports forward/reverse mapping sync behavior.
+type MappingProvider interface {
+	ProviderBase
 	ListDeviceChannels(ctx context.Context) (map[string]DVRDeviceChannel, error)
 	ListLineupStations(ctx context.Context, lineupID string) ([]DVRStation, error)
 	GetCustomMapping(ctx context.Context, lineupID string) (map[string]string, error)
@@ -55,10 +64,13 @@ type DVRStation struct {
 	Name          string `json:"name,omitempty"`
 }
 
-func newProvider(instance InstanceConfig, httpClient *http.Client) (DVRProvider, error) {
+func newLineupReloadProvider(instance InstanceConfig, httpClient *http.Client) (LineupReloadProvider, error) {
 	configured := instanceForProvider(instance, instance.Provider)
 	switch normalizeProviderType(configured.Provider) {
 	case ProviderChannels:
+		if strings.TrimSpace(configured.BaseURL) == "" {
+			return nil, fmt.Errorf("%w: channels base url is required", ErrDVRSyncConfig)
+		}
 		return NewChannelsProvider(configured.BaseURL, httpClient), nil
 	case ProviderJellyfin:
 		return NewJellyfinProvider(configured, httpClient), nil
@@ -67,84 +79,25 @@ func newProvider(instance InstanceConfig, httpClient *http.Client) (DVRProvider,
 	}
 }
 
-func normalizeProviderType(provider ProviderType) ProviderType {
-	switch ProviderType(strings.ToLower(strings.TrimSpace(string(provider)))) {
+func newMappingProvider(instance InstanceConfig, httpClient *http.Client) (MappingProvider, error) {
+	configured := instanceForProvider(instance, instance.Provider)
+	switch normalizeProviderType(configured.Provider) {
 	case ProviderChannels:
-		return ProviderChannels
+		if strings.TrimSpace(configured.BaseURL) == "" {
+			return nil, fmt.Errorf("%w: channels base url is required", ErrDVRSyncConfig)
+		}
+		return NewChannelsProvider(configured.BaseURL, httpClient), nil
 	case ProviderJellyfin:
-		return ProviderJellyfin
+		return nil, unsupportedProviderOperationError(ProviderJellyfin, "mapping operations")
 	default:
-		return provider
+		return nil, fmt.Errorf("%w: %q", ErrUnsupportedProvider, configured.Provider)
 	}
 }
 
-func normalizeActiveProviders(primary ProviderType, configured []ProviderType) []ProviderType {
-	normalized := make([]ProviderType, 0, len(configured))
-	seen := map[ProviderType]struct{}{}
-	for _, provider := range configured {
-		value := normalizeProviderType(provider)
-		if value != ProviderChannels && value != ProviderJellyfin {
-			continue
-		}
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		normalized = append(normalized, value)
+func unsupportedProviderOperationError(provider ProviderType, operation string) error {
+	operation = strings.TrimSpace(operation)
+	if operation == "" {
+		operation = "operation"
 	}
-	if len(normalized) > 0 {
-		return normalized
-	}
-	value := normalizeProviderType(primary)
-	if value != ProviderChannels && value != ProviderJellyfin {
-		value = ProviderChannels
-	}
-	return []ProviderType{value}
-}
-
-func providerBaseURL(instance InstanceConfig, provider ProviderType) string {
-	provider = normalizeProviderType(provider)
-
-	channelsURL := strings.TrimSpace(instance.ChannelsBaseURL)
-	jellyfinURL := strings.TrimSpace(instance.JellyfinBaseURL)
-	baseURL := strings.TrimSpace(instance.BaseURL)
-
-	if channelsURL == "" && provider == ProviderChannels {
-		channelsURL = baseURL
-	}
-	if jellyfinURL == "" && provider == ProviderJellyfin {
-		jellyfinURL = baseURL
-	}
-
-	switch provider {
-	case ProviderJellyfin:
-		if jellyfinURL != "" {
-			return jellyfinURL
-		}
-		return ""
-	case ProviderChannels:
-		if channelsURL != "" {
-			return channelsURL
-		}
-		return defaultChannelsBaseURL
-	default:
-		return baseURL
-	}
-}
-
-func instanceForProvider(instance InstanceConfig, provider ProviderType) InstanceConfig {
-	configured := instance
-	configured.Provider = normalizeProviderType(provider)
-	if configured.Provider == "" {
-		configured.Provider = ProviderChannels
-	}
-	configured.ActiveProviders = normalizeActiveProviders(configured.Provider, configured.ActiveProviders)
-	configured.BaseURL = providerBaseURL(configured, configured.Provider)
-	if strings.TrimSpace(configured.ChannelsBaseURL) == "" {
-		configured.ChannelsBaseURL = providerBaseURL(configured, ProviderChannels)
-	}
-	if strings.TrimSpace(configured.JellyfinBaseURL) == "" {
-		configured.JellyfinBaseURL = providerBaseURL(configured, ProviderJellyfin)
-	}
-	return configured
+	return fmt.Errorf("%w: provider=%q does not support %s", ErrUnsupportedProvider, provider, operation)
 }

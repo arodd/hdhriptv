@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -34,15 +33,17 @@ type Store interface {
 	DeleteChannelDVRMapping(ctx context.Context, dvrInstanceID, channelID int64) error
 }
 
-type providerFactory func(instance InstanceConfig, client *http.Client) (DVRProvider, error)
+type lineupReloadProviderFactory func(instance InstanceConfig, client *http.Client) (LineupReloadProvider, error)
+type mappingProviderFactory func(instance InstanceConfig, client *http.Client) (MappingProvider, error)
 
 // Service coordinates provider access, sync operations, and mapping persistence.
 type Service struct {
-	store         Store
-	httpClient    *http.Client
-	hdhrDeviceID  string
-	providerBuild providerFactory
-	syncRunLock   sync.Mutex
+	store                Store
+	httpClient           *http.Client
+	hdhrDeviceID         string
+	lineupProviderBuild  lineupReloadProviderFactory
+	mappingProviderBuild mappingProviderFactory
+	syncRunLock          sync.Mutex
 
 	mu              sync.RWMutex
 	lastSync        *SyncResult
@@ -108,6 +109,35 @@ type SyncResult struct {
 	PatchPreview         map[string]map[string]string `json:"patch_preview,omitempty"`
 }
 
+type deviceChannelIndex struct {
+	DeviceKeys        []string
+	TunerToDeviceKeys map[string][]string
+	FilteredCount     int
+	Warnings          []string
+}
+
+type syncPlan struct {
+	Lineups           []syncLineupPlan
+	UpdatedCount      int
+	ClearedCount      int
+	UnchangedCount    int
+	MissingTunerCount int
+	UnresolvedCount   int
+	Warnings          []string
+}
+
+type syncLineupPlan struct {
+	Result              LineupSyncResult
+	ChannelsForLineup   []ChannelMapping
+	Patch               map[string]string
+	ResolvedByChannelID map[int64]string
+}
+
+type syncApplyStats struct {
+	Lineups      []LineupSyncResult
+	PatchPreview map[string]map[string]string
+}
+
 // ChannelMappingUpdate is a write payload for one published channel mapping.
 type ChannelMappingUpdate struct {
 	DVRLineupID      string `json:"dvr_lineup_id"`
@@ -121,10 +151,11 @@ func NewService(store Store, hdhrDeviceID string, client *http.Client) (*Service
 		return nil, fmt.Errorf("dvr store is required")
 	}
 	return &Service{
-		store:         store,
-		httpClient:    client,
-		hdhrDeviceID:  strings.ToUpper(strings.TrimSpace(hdhrDeviceID)),
-		providerBuild: newProvider,
+		store:                store,
+		httpClient:           client,
+		hdhrDeviceID:         strings.ToUpper(strings.TrimSpace(hdhrDeviceID)),
+		lineupProviderBuild:  newLineupReloadProvider,
+		mappingProviderBuild: newMappingProvider,
 	}, nil
 }
 
@@ -157,53 +188,12 @@ func (s *Service) UpdateConfig(ctx context.Context, instance InstanceConfig) (Co
 		return ConfigState{}, err
 	}
 
-	instance.ID = current.ID
-	instance.Provider = normalizeProviderType(instance.Provider)
-	if instance.Provider == "" {
-		instance.Provider = ProviderChannels
-	}
-	instance.BaseURL = strings.TrimSpace(instance.BaseURL)
-	instance.ChannelsBaseURL = strings.TrimSpace(instance.ChannelsBaseURL)
-	instance.JellyfinBaseURL = strings.TrimSpace(instance.JellyfinBaseURL)
-	if instance.ChannelsBaseURL == "" {
-		instance.ChannelsBaseURL = strings.TrimSpace(current.ChannelsBaseURL)
-	}
-	if instance.JellyfinBaseURL == "" {
-		instance.JellyfinBaseURL = strings.TrimSpace(current.JellyfinBaseURL)
-	}
-	if instance.BaseURL != "" {
-		switch instance.Provider {
-		case ProviderJellyfin:
-			instance.JellyfinBaseURL = instance.BaseURL
-		case ProviderChannels:
-			instance.ChannelsBaseURL = instance.BaseURL
-		}
-	}
-	if strings.TrimSpace(instance.ChannelsBaseURL) == "" {
-		instance.ChannelsBaseURL = providerBaseURL(current, ProviderChannels)
-	}
-	if strings.TrimSpace(instance.ChannelsBaseURL) == "" {
-		instance.ChannelsBaseURL = defaultChannelsBaseURL
-	}
-	if strings.TrimSpace(instance.JellyfinBaseURL) == "" {
-		instance.JellyfinBaseURL = providerBaseURL(current, ProviderJellyfin)
-	}
-	instance.ActiveProviders = normalizeActiveProviders(instance.Provider, instance.ActiveProviders)
-	instance.DefaultLineupID = strings.TrimSpace(instance.DefaultLineupID)
-	instance.SyncCron = strings.TrimSpace(instance.SyncCron)
-	if instance.SyncEnabled && instance.SyncCron == "" {
-		instance.SyncCron = defaultSyncCron
-	}
-	instance.SyncMode = normalizeSyncMode(instance.SyncMode)
-	if instance.SyncMode == "" {
-		instance.SyncMode = SyncModeConfiguredOnly
-	}
-	instance.JellyfinAPIToken = strings.TrimSpace(instance.JellyfinAPIToken)
-	instance.JellyfinTunerHostID = strings.TrimSpace(instance.JellyfinTunerHostID)
-	instance.JellyfinAPITokenConfigured = false
-	instance = instanceForProvider(instance, instance.Provider)
+	instance = NormalizeInstanceConfig(instance, current)
 
-	if _, err := newProvider(instance, s.httpClient); err != nil {
+	if _, err := s.buildLineupReloadProvider(instance); err != nil {
+		return ConfigState{}, err
+	}
+	if _, err := s.buildMappingProvider(instance); err != nil {
 		return ConfigState{}, err
 	}
 
@@ -231,7 +221,7 @@ func (s *Service) ListLineups(ctx context.Context, refresh bool) ([]DVRLineup, e
 		s.mu.RUnlock()
 	}
 
-	instance, provider, err := s.providerForCurrentConfig(ctx)
+	instance, provider, err := s.lineupProviderForCurrentConfig(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +240,7 @@ func (s *Service) ListLineups(ctx context.Context, refresh bool) ([]DVRLineup, e
 }
 
 func (s *Service) TestConnection(ctx context.Context) (TestResult, error) {
-	instance, provider, err := s.providerForCurrentConfig(ctx)
+	instance, provider, err := s.mappingProviderForCurrentConfig(ctx)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -260,26 +250,21 @@ func (s *Service) TestConnection(ctx context.Context) (TestResult, error) {
 		return TestResult{}, err
 	}
 
-	filteredCount := 0
-	for _, channel := range deviceChannels {
-		if s.matchDeviceID(channel.DeviceID) {
-			filteredCount++
-		}
-	}
+	index := s.buildDeviceChannelIndex(deviceChannels)
 
 	return TestResult{
 		Reachable:              true,
 		Provider:               string(instance.Provider),
 		BaseURL:                instance.BaseURL,
 		DeviceChannelCount:     len(deviceChannels),
-		FilteredChannelCount:   filteredCount,
+		FilteredChannelCount:   index.FilteredCount,
 		HDHRDeviceID:           s.hdhrDeviceID,
 		HDHRDeviceFilterActive: strings.TrimSpace(s.hdhrDeviceID) != "",
 	}, nil
 }
 
 func (s *Service) ReloadLineup(ctx context.Context) error {
-	instance, provider, err := s.providerForCurrentConfig(ctx)
+	instance, provider, err := s.lineupProviderForCurrentConfig(ctx)
 	if err != nil {
 		return err
 	}
@@ -287,43 +272,82 @@ func (s *Service) ReloadLineup(ctx context.Context) error {
 	return s.reloadLineup(ctx, instance, provider)
 }
 
-// ReloadLineupForPlaylistSync performs playlist-sync-triggered lineup refresh
-// with provider-aware gating and optional multi-provider fan-out. Missing
-// Jellyfin credentials are treated as explicit non-fatal skips.
-func (s *Service) ReloadLineupForPlaylistSync(ctx context.Context) (bool, bool, string, error) {
+// ReloadLineupForPlaylistSyncOutcome is the typed variant used by playlist-sync
+// orchestration paths and summary rendering.
+func (s *Service) ReloadLineupForPlaylistSyncOutcome(ctx context.Context) (ReloadOutcome, error) {
 	instance, err := s.store.GetDVRInstance(ctx)
 	if err != nil {
-		return false, false, "", err
+		return ReloadOutcome{}, err
 	}
 
-	activeProviders := normalizeActiveProviders(instance.Provider, instance.ActiveProviders)
-	skippedReasons := make([]string, 0, len(activeProviders))
-	reloadedAny := false
+	activeProviders := resolvedActiveProviders(instance)
+	if len(activeProviders) == 0 {
+		return ReloadOutcome{
+			Skipped:     true,
+			Status:      ReloadStatusSkipped,
+			SkipReasons: []string{"no_active_providers"},
+		}, nil
+	}
+
+	outcome := ReloadOutcome{
+		Status:           ReloadStatusUnknown,
+		SkippedProviders: make(map[ProviderType]string),
+	}
 	for _, providerType := range activeProviders {
 		configured := instanceForProvider(instance, providerType)
-		if providerType == ProviderJellyfin {
-			if reason := jellyfinReloadSkipReason(configured); reason != "" {
-				skippedReasons = append(skippedReasons, fmt.Sprintf("%s:%s", providerType, reason))
+		if providerType == ProviderChannels {
+			if reason := channelsReloadSkipReason(configured); reason != "" {
+				outcome.SkippedProviders[providerType] = reason
 				continue
 			}
 		}
-		provider, buildErr := s.providerBuild(configured, s.httpClient)
+		if providerType == ProviderJellyfin {
+			if reason := jellyfinReloadSkipReason(configured); reason != "" {
+				outcome.SkippedProviders[providerType] = reason
+				continue
+			}
+		}
+
+		provider, buildErr := s.buildLineupReloadProvider(configured)
 		if buildErr != nil {
-			return false, false, "", fmt.Errorf("build %s dvr provider: %w", providerType, buildErr)
+			return ReloadOutcome{}, fmt.Errorf("build %s dvr provider: %w", providerType, buildErr)
 		}
 		if err := s.reloadLineup(ctx, configured, provider); err != nil {
-			return false, false, "", fmt.Errorf("reload lineup for provider %s: %w", providerType, err)
+			return ReloadOutcome{}, fmt.Errorf("reload lineup for provider %s: %w", providerType, err)
 		}
-		reloadedAny = true
+		outcome.Reloaded = true
+		outcome.ReloadedProviders = append(outcome.ReloadedProviders, providerType)
 	}
 
-	if len(skippedReasons) == 0 {
-		return reloadedAny, false, "", nil
+	if len(outcome.SkippedProviders) > 0 {
+		outcome.Skipped = true
+		outcome.SkipReasons = make([]string, 0, len(outcome.SkippedProviders))
+		for _, providerType := range activeProviders {
+			reason, ok := outcome.SkippedProviders[providerType]
+			if !ok || strings.TrimSpace(reason) == "" {
+				continue
+			}
+			outcome.SkipReasons = append(outcome.SkipReasons, fmt.Sprintf("%s:%s", providerType, reason))
+		}
+	} else {
+		outcome.SkippedProviders = nil
 	}
-	return reloadedAny, true, strings.Join(skippedReasons, ","), nil
+
+	switch {
+	case outcome.Reloaded && outcome.Skipped:
+		outcome.Status = ReloadStatusPartial
+	case outcome.Skipped:
+		outcome.Status = ReloadStatusSkipped
+	case outcome.Reloaded:
+		outcome.Status = ReloadStatusReloaded
+	default:
+		outcome.Status = ReloadStatusUnknown
+	}
+
+	return outcome, nil
 }
 
-func (s *Service) reloadLineup(ctx context.Context, instance InstanceConfig, provider DVRProvider) error {
+func (s *Service) reloadLineup(ctx context.Context, instance InstanceConfig, provider LineupReloadProvider) error {
 	if provider == nil {
 		return fmt.Errorf("dvr provider is required")
 	}
@@ -350,7 +374,7 @@ func (s *Service) reloadLineup(ctx context.Context, instance InstanceConfig, pro
 	return nil
 }
 
-func resolveGuideRedownloadLineupIDs(ctx context.Context, instance InstanceConfig, provider DVRProvider) ([]string, error) {
+func resolveGuideRedownloadLineupIDs(ctx context.Context, instance InstanceConfig, provider LineupReloadProvider) ([]string, error) {
 	if provider == nil {
 		return nil, fmt.Errorf("dvr provider is required")
 	}
@@ -384,15 +408,25 @@ func resolveGuideRedownloadLineupIDs(ctx context.Context, instance InstanceConfi
 }
 
 func jellyfinReloadSkipReason(instance InstanceConfig) string {
-	if strings.TrimSpace(instance.BaseURL) == "" {
-		return "missing_jellyfin_base_url"
-	}
-	parsedBase, err := url.ParseRequestURI(strings.TrimSpace(instance.BaseURL))
-	if err != nil || parsedBase.Scheme == "" || parsedBase.Host == "" {
-		return "invalid_jellyfin_base_url"
+	if reason := reloadBaseURLSkipReason(instance.BaseURL, "missing_jellyfin_base_url", "invalid_jellyfin_base_url"); reason != "" {
+		return reason
 	}
 	if strings.TrimSpace(instance.JellyfinAPIToken) == "" {
 		return "missing_jellyfin_api_token"
+	}
+	return ""
+}
+
+func channelsReloadSkipReason(instance InstanceConfig) string {
+	return reloadBaseURLSkipReason(instance.BaseURL, "missing_channels_base_url", "invalid_channels_base_url")
+}
+
+func reloadBaseURLSkipReason(baseURL, missingReason, invalidReason string) string {
+	if strings.TrimSpace(baseURL) == "" {
+		return missingReason
+	}
+	if !ProviderBaseURLConfigured(baseURL) {
+		return invalidReason
 	}
 	return ""
 }
@@ -482,7 +516,7 @@ func (s *Service) ReverseSync(ctx context.Context, req ReverseSyncRequest) (Reve
 	}
 	defer s.syncRunLock.Unlock()
 
-	instance, provider, err := s.providerForCurrentConfig(ctx)
+	instance, provider, err := s.mappingProviderForCurrentConfig(ctx)
 	if err != nil {
 		return ReverseSyncResult{}, err
 	}
@@ -525,7 +559,7 @@ func (s *Service) ReverseSyncChannel(
 	}
 	defer s.syncRunLock.Unlock()
 
-	instance, provider, err := s.providerForCurrentConfig(ctx)
+	instance, provider, err := s.mappingProviderForCurrentConfig(ctx)
 	if err != nil {
 		return ReverseSyncResult{}, err
 	}
@@ -568,7 +602,7 @@ func (s *Service) ReverseSyncChannel(
 func (s *Service) reverseSyncMappings(
 	ctx context.Context,
 	instance InstanceConfig,
-	provider DVRProvider,
+	provider MappingProvider,
 	lineupID string,
 	channels []ChannelMapping,
 	dryRun bool,
@@ -591,41 +625,14 @@ func (s *Service) reverseSyncMappings(
 	}
 	result.DeviceChannelCount = len(deviceChannels)
 
-	tunerToDeviceKeys := map[string][]string{}
-	deviceKeySet := map[string]struct{}{}
-	for key, channel := range deviceChannels {
-		if !s.matchDeviceID(channel.DeviceID) {
-			continue
-		}
-
-		deviceKey := strings.TrimSpace(key)
-		if deviceKey == "" {
-			deviceKey = strings.TrimSpace(channel.Key)
-		}
-		if deviceKey == "" {
-			continue
-		}
-
-		tunerNumber := strings.TrimSpace(channel.Number)
-		if tunerNumber == "" {
-			tunerNumber = deviceKey
-		}
-
-		deviceKeySet[deviceKey] = struct{}{}
-		tunerToDeviceKeys[tunerNumber] = append(tunerToDeviceKeys[tunerNumber], deviceKey)
+	index := s.buildDeviceChannelIndex(deviceChannels)
+	result.FilteredChannelCount = index.FilteredCount
+	for _, warning := range index.Warnings {
+		appendWarning(&result.Warnings, warning)
 	}
+	tunerToDeviceKeys := index.TunerToDeviceKeys
 
-	deviceKeys := sortedKeys(deviceKeySet)
-	result.FilteredChannelCount = len(deviceKeys)
-	for tunerNumber, keys := range tunerToDeviceKeys {
-		sort.Strings(keys)
-		tunerToDeviceKeys[tunerNumber] = keys
-		if len(keys) > 1 {
-			appendWarning(&result.Warnings, fmt.Sprintf("multiple device keys for tuner %s; using %s", tunerNumber, keys[0]))
-		}
-	}
-
-	if len(deviceKeys) == 0 {
+	if len(index.DeviceKeys) == 0 {
 		return ReverseSyncResult{}, fmt.Errorf("%w: no provider device channels found for hdhr device id %q", ErrDVRSyncConfig, s.hdhrDeviceID)
 	}
 
@@ -725,7 +732,11 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 	defer s.syncRunLock.Unlock()
 
 	start := time.Now().UTC()
-	instance, provider, err := s.providerForCurrentConfig(ctx)
+	instance, mappingProvider, err := s.mappingProviderForCurrentConfig(ctx)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	lineupProvider, err := s.buildLineupReloadProvider(instance)
 	if err != nil {
 		return SyncResult{}, err
 	}
@@ -737,7 +748,6 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 		BaseURL:      instance.BaseURL,
 		HDHRDeviceID: s.hdhrDeviceID,
 		SyncMode:     normalizeSyncMode(instance.SyncMode),
-		PatchPreview: map[string]map[string]string{},
 	}
 	if result.SyncMode == "" {
 		result.SyncMode = SyncModeConfiguredOnly
@@ -747,63 +757,71 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 	if deviceID == "" {
 		return SyncResult{}, fmt.Errorf("%w: hdhr device id is required for lineup reload preflight", ErrDVRSyncConfig)
 	}
-	if err := provider.ReloadDeviceLineup(ctx, deviceID); err != nil {
+	if err := lineupProvider.ReloadDeviceLineup(ctx, deviceID); err != nil {
 		return SyncResult{}, fmt.Errorf("reload device lineup %q: %w", deviceID, err)
 	}
 
 	if instance.PreSyncRefreshDevices {
-		if err := provider.RefreshDevices(ctx); err != nil {
+		if err := mappingProvider.RefreshDevices(ctx); err != nil {
 			appendWarning(&result.Warnings, fmt.Sprintf("pre-sync refresh failed: %v", err))
 		}
 	}
 
-	deviceChannels, err := provider.ListDeviceChannels(ctx)
+	deviceChannels, err := mappingProvider.ListDeviceChannels(ctx)
 	if err != nil {
 		return SyncResult{}, err
 	}
 	result.DeviceChannelCount = len(deviceChannels)
 
-	tunerToDeviceKeys := map[string][]string{}
-	deviceKeySet := map[string]struct{}{}
-	for key, channel := range deviceChannels {
-		if !s.matchDeviceID(channel.DeviceID) {
-			continue
-		}
-
-		deviceKey := strings.TrimSpace(key)
-		if deviceKey == "" {
-			deviceKey = strings.TrimSpace(channel.Key)
-		}
-		if deviceKey == "" {
-			continue
-		}
-
-		tunerNumber := strings.TrimSpace(channel.Number)
-		if tunerNumber == "" {
-			tunerNumber = deviceKey
-		}
-
-		deviceKeySet[deviceKey] = struct{}{}
-		tunerToDeviceKeys[tunerNumber] = append(tunerToDeviceKeys[tunerNumber], deviceKey)
-	}
-
-	deviceKeys := sortedKeys(deviceKeySet)
-	result.FilteredChannelCount = len(deviceKeys)
-	for tunerNumber, keys := range tunerToDeviceKeys {
-		sort.Strings(keys)
-		tunerToDeviceKeys[tunerNumber] = keys
-		if len(keys) > 1 {
-			appendWarning(&result.Warnings, fmt.Sprintf("multiple device keys for tuner %s; using %s", tunerNumber, keys[0]))
-		}
+	index := s.buildDeviceChannelIndex(deviceChannels)
+	deviceKeys := index.DeviceKeys
+	result.FilteredChannelCount = index.FilteredCount
+	for _, warning := range index.Warnings {
+		appendWarning(&result.Warnings, warning)
 	}
 
 	if len(deviceKeys) == 0 {
 		return SyncResult{}, fmt.Errorf("%w: no provider device channels found for hdhr device id %q", ErrDVRSyncConfig, s.hdhrDeviceID)
 	}
 
-	channels, err := s.store.ListChannelsForDVRSync(ctx, instance.ID, true, req.IncludeDynamic)
+	plan, err := s.buildSyncPlan(ctx, instance, mappingProvider, req, index, result.SyncMode)
 	if err != nil {
 		return SyncResult{}, err
+	}
+	result.UpdatedCount = plan.UpdatedCount
+	result.ClearedCount = plan.ClearedCount
+	result.UnchangedCount = plan.UnchangedCount
+	result.MissingTunerCount = plan.MissingTunerCount
+	result.UnresolvedCount = plan.UnresolvedCount
+	for _, warning := range plan.Warnings {
+		appendWarning(&result.Warnings, warning)
+	}
+
+	applied, err := s.applySyncPlan(ctx, instance.ID, mappingProvider, plan, req.DryRun)
+	if err != nil {
+		return SyncResult{}, err
+	}
+	result.Lineups = applied.Lineups
+	result.PatchPreview = applied.PatchPreview
+
+	result.FinishedAt = time.Now().UTC().Unix()
+	result.DurationMS = time.Since(start).Milliseconds()
+	s.setLastSync(result)
+	return result, nil
+}
+
+func (s *Service) buildSyncPlan(
+	ctx context.Context,
+	instance InstanceConfig,
+	provider MappingProvider,
+	req SyncRequest,
+	index deviceChannelIndex,
+	syncMode SyncMode,
+) (syncPlan, error) {
+	plan := syncPlan{}
+	channels, err := s.store.ListChannelsForDVRSync(ctx, instance.ID, true, req.IncludeDynamic)
+	if err != nil {
+		return syncPlan{}, err
 	}
 
 	groupedByLineup := map[string][]ChannelMapping{}
@@ -819,9 +837,9 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 			continue
 		}
 		if lineupID == "" {
-			result.UnresolvedCount++
+			plan.UnresolvedCount++
 			appendWarning(
-				&result.Warnings,
+				&plan.Warnings,
 				fmt.Sprintf(
 					"channel %s (%s) has dvr mapping (lineup_channel=%q station_ref=%q) but no lineup id/default_lineup_id",
 					mapping.GuideNumber,
@@ -845,77 +863,66 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 
 	for _, lineupID := range lineupIDs {
 		channelsForLineup := groupedByLineup[lineupID]
-		lineupResult := LineupSyncResult{
-			LineupID:           lineupID,
-			ConfiguredChannels: len(channelsForLineup),
+		lineupPlan := syncLineupPlan{
+			Result: LineupSyncResult{
+				LineupID:           lineupID,
+				ConfiguredChannels: len(channelsForLineup),
+			},
+			ChannelsForLineup:   channelsForLineup,
+			Patch:               map[string]string{},
+			ResolvedByChannelID: map[int64]string{},
 		}
 
 		stations, err := provider.ListLineupStations(ctx, lineupID)
 		if err != nil {
-			return SyncResult{}, fmt.Errorf("fetch lineup stations %q: %w", lineupID, err)
+			return syncPlan{}, fmt.Errorf("fetch lineup stations %q: %w", lineupID, err)
 		}
 		currentMapping, err := provider.GetCustomMapping(ctx, lineupID)
 		if err != nil {
-			return SyncResult{}, fmt.Errorf("fetch lineup custom mapping %q: %w", lineupID, err)
+			return syncPlan{}, fmt.Errorf("fetch lineup custom mapping %q: %w", lineupID, err)
 		}
 
-		stationByRef := make(map[string]DVRStation, len(stations))
-		stationByLineupChannel := make(map[string][]DVRStation)
-		for _, station := range stations {
-			stationRef := strings.TrimSpace(station.StationRef)
-			if stationRef == "" {
-				continue
-			}
-			stationByRef[stationRef] = station
-
-			lineupChannel := strings.TrimSpace(station.LineupChannel)
-			if lineupChannel != "" {
-				stationByLineupChannel[lineupChannel] = append(stationByLineupChannel[lineupChannel], station)
-			}
-		}
-
+		stationByRef, stationByLineupChannel := buildStationIndex(stations)
 		desiredByDevice := map[string]string{}
-		resolvedByChannelID := map[int64]string{}
 		for _, mapping := range channelsForLineup {
-			deviceKeysForTuner := tunerToDeviceKeys[strings.TrimSpace(mapping.GuideNumber)]
+			deviceKeysForTuner := index.TunerToDeviceKeys[strings.TrimSpace(mapping.GuideNumber)]
 			if len(deviceKeysForTuner) == 0 {
-				result.MissingTunerCount++
-				appendWarning(&result.Warnings, fmt.Sprintf("missing provider tuner channel for guide_number=%s channel=%s", mapping.GuideNumber, mapping.GuideName))
+				plan.MissingTunerCount++
+				appendWarning(&plan.Warnings, fmt.Sprintf("missing provider tuner channel for guide_number=%s channel=%s", mapping.GuideNumber, mapping.GuideName))
 				continue
 			}
 
 			stationRef, warning, ok := resolveStationRef(mapping, stationByRef, stationByLineupChannel)
 			if warning != "" {
-				appendWarning(&result.Warnings, warning)
+				appendWarning(&plan.Warnings, warning)
 			}
 			if !ok {
-				result.UnresolvedCount++
+				plan.UnresolvedCount++
 				continue
 			}
 
 			deviceKey := deviceKeysForTuner[0]
 			desiredByDevice[deviceKey] = stationRef
-			resolvedByChannelID[mapping.ChannelID] = stationRef
-			lineupResult.ResolvedChannels++
+			lineupPlan.ResolvedByChannelID[mapping.ChannelID] = stationRef
+			lineupPlan.Result.ResolvedChannels++
 		}
 
-		patch := map[string]string{}
-		if result.SyncMode == SyncModeMirrorDevice {
-			for _, deviceKey := range deviceKeys {
+		if syncMode == SyncModeMirrorDevice {
+			for _, deviceKey := range index.DeviceKeys {
 				desired := strings.TrimSpace(desiredByDevice[deviceKey])
 				current := strings.TrimSpace(currentMapping[deviceKey])
 				if current == desired {
-					lineupResult.UnchangedCount++
-					result.UnchangedCount++
+					lineupPlan.Result.UnchangedCount++
+					plan.UnchangedCount++
 					continue
 				}
-				patch[deviceKey] = desired
+				lineupPlan.Patch[deviceKey] = desired
 				if desired == "" {
-					lineupResult.ClearedCount++
-					result.ClearedCount++
+					lineupPlan.Result.ClearedCount++
+					plan.ClearedCount++
 				} else {
-					lineupResult.UpdatedCount++
-					result.UpdatedCount++
+					lineupPlan.Result.UpdatedCount++
+					plan.UpdatedCount++
 				}
 			}
 		} else {
@@ -928,31 +935,57 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 				desired := strings.TrimSpace(desiredByDevice[deviceKey])
 				current := strings.TrimSpace(currentMapping[deviceKey])
 				if current == desired {
-					lineupResult.UnchangedCount++
-					result.UnchangedCount++
+					lineupPlan.Result.UnchangedCount++
+					plan.UnchangedCount++
 					continue
 				}
-				patch[deviceKey] = desired
-				lineupResult.UpdatedCount++
-				result.UpdatedCount++
+				lineupPlan.Patch[deviceKey] = desired
+				lineupPlan.Result.UpdatedCount++
+				plan.UpdatedCount++
 			}
 		}
 
-		if len(patch) > 0 {
-			result.PatchPreview[lineupID] = sortedPatchCopy(patch)
-			if !req.DryRun {
-				for _, chunk := range chunkPatch(patch, syncBatchSize) {
-					if err := provider.PutCustomMapping(ctx, lineupID, chunk); err != nil {
-						return SyncResult{}, fmt.Errorf("apply lineup patch %q: %w", lineupID, err)
+		if len(lineupPlan.Patch) == 0 {
+			lineupPlan.Patch = nil
+		}
+		if len(lineupPlan.ResolvedByChannelID) == 0 {
+			lineupPlan.ResolvedByChannelID = nil
+		}
+		plan.Lineups = append(plan.Lineups, lineupPlan)
+	}
+
+	return plan, nil
+}
+
+func (s *Service) applySyncPlan(
+	ctx context.Context,
+	instanceID int64,
+	provider MappingProvider,
+	plan syncPlan,
+	dryRun bool,
+) (syncApplyStats, error) {
+	applied := syncApplyStats{
+		Lineups:      make([]LineupSyncResult, 0, len(plan.Lineups)),
+		PatchPreview: map[string]map[string]string{},
+	}
+
+	for _, lineupPlan := range plan.Lineups {
+		lineupResult := lineupPlan.Result
+		if len(lineupPlan.Patch) > 0 {
+			applied.PatchPreview[lineupResult.LineupID] = sortedPatchCopy(lineupPlan.Patch)
+			if !dryRun {
+				for _, chunk := range chunkPatch(lineupPlan.Patch, syncBatchSize) {
+					if err := provider.PutCustomMapping(ctx, lineupResult.LineupID, chunk); err != nil {
+						return syncApplyStats{}, fmt.Errorf("apply lineup patch %q: %w", lineupResult.LineupID, err)
 					}
 					lineupResult.AppliedCount += len(chunk)
 				}
 			}
 		}
 
-		if !req.DryRun && len(resolvedByChannelID) > 0 {
-			for _, mapping := range channelsForLineup {
-				resolvedRef := strings.TrimSpace(resolvedByChannelID[mapping.ChannelID])
+		if !dryRun && len(lineupPlan.ResolvedByChannelID) > 0 {
+			for _, mapping := range lineupPlan.ChannelsForLineup {
+				resolvedRef := strings.TrimSpace(lineupPlan.ResolvedByChannelID[mapping.ChannelID])
 				if resolvedRef == "" {
 					continue
 				}
@@ -962,28 +995,89 @@ func (s *Service) Sync(ctx context.Context, req SyncRequest) (SyncResult, error)
 
 				if _, err := s.store.UpsertChannelDVRMapping(ctx, ChannelMapping{
 					ChannelID:        mapping.ChannelID,
-					DVRInstanceID:    instance.ID,
+					DVRInstanceID:    instanceID,
 					DVRLineupID:      strings.TrimSpace(mapping.DVRLineupID),
 					DVRLineupChannel: strings.TrimSpace(mapping.DVRLineupChannel),
 					DVRStationRef:    resolvedRef,
 					DVRCallsignHint:  strings.TrimSpace(mapping.DVRCallsignHint),
 				}); err != nil {
-					return SyncResult{}, fmt.Errorf("persist resolved station ref for channel_id=%d lineup=%s: %w", mapping.ChannelID, lineupID, err)
+					return syncApplyStats{}, fmt.Errorf("persist resolved station ref for channel_id=%d lineup=%s: %w", mapping.ChannelID, lineupResult.LineupID, err)
 				}
 			}
 		}
 
-		result.Lineups = append(result.Lineups, lineupResult)
+		applied.Lineups = append(applied.Lineups, lineupResult)
 	}
 
-	if len(result.PatchPreview) == 0 {
-		result.PatchPreview = nil
+	if len(applied.PatchPreview) == 0 {
+		applied.PatchPreview = nil
+	}
+	return applied, nil
+}
+
+func (s *Service) buildDeviceChannelIndex(deviceChannels map[string]DVRDeviceChannel) deviceChannelIndex {
+	index := deviceChannelIndex{TunerToDeviceKeys: map[string][]string{}}
+	deviceKeySet := map[string]struct{}{}
+
+	for key, channel := range deviceChannels {
+		if !s.matchDeviceID(channel.DeviceID) {
+			continue
+		}
+
+		deviceKey := strings.TrimSpace(key)
+		if deviceKey == "" {
+			deviceKey = strings.TrimSpace(channel.Key)
+		}
+		if deviceKey == "" {
+			continue
+		}
+
+		tunerNumber := strings.TrimSpace(channel.Number)
+		if tunerNumber == "" {
+			tunerNumber = deviceKey
+		}
+
+		deviceKeySet[deviceKey] = struct{}{}
+		index.TunerToDeviceKeys[tunerNumber] = append(index.TunerToDeviceKeys[tunerNumber], deviceKey)
 	}
 
-	result.FinishedAt = time.Now().UTC().Unix()
-	result.DurationMS = time.Since(start).Milliseconds()
-	s.setLastSync(result)
-	return result, nil
+	index.DeviceKeys = sortedKeys(deviceKeySet)
+	index.FilteredCount = len(index.DeviceKeys)
+
+	tunerNumbers := make([]string, 0, len(index.TunerToDeviceKeys))
+	for tunerNumber := range index.TunerToDeviceKeys {
+		tunerNumbers = append(tunerNumbers, tunerNumber)
+	}
+	sort.Strings(tunerNumbers)
+	for _, tunerNumber := range tunerNumbers {
+		keys := index.TunerToDeviceKeys[tunerNumber]
+		sort.Strings(keys)
+		index.TunerToDeviceKeys[tunerNumber] = keys
+		if len(keys) > 1 {
+			index.Warnings = append(index.Warnings, fmt.Sprintf("multiple device keys for tuner %s; using %s", tunerNumber, keys[0]))
+		}
+	}
+
+	return index
+}
+
+func buildStationIndex(stations []DVRStation) (map[string]DVRStation, map[string][]DVRStation) {
+	stationByRef := make(map[string]DVRStation, len(stations))
+	stationByLineupChannel := make(map[string][]DVRStation)
+	for _, station := range stations {
+		stationRef := strings.TrimSpace(station.StationRef)
+		if stationRef == "" {
+			continue
+		}
+		stationByRef[stationRef] = station
+
+		lineupChannel := strings.TrimSpace(station.LineupChannel)
+		if lineupChannel == "" {
+			continue
+		}
+		stationByLineupChannel[lineupChannel] = append(stationByLineupChannel[lineupChannel], station)
+	}
+	return stationByRef, stationByLineupChannel
 }
 
 func resolveStationRef(
@@ -1125,17 +1219,6 @@ func joinWarnings(messages ...string) string {
 	return strings.Join(out, "; ")
 }
 
-func normalizeSyncMode(mode SyncMode) SyncMode {
-	switch SyncMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
-	case SyncModeMirrorDevice:
-		return SyncModeMirrorDevice
-	case SyncModeConfiguredOnly:
-		return SyncModeConfiguredOnly
-	default:
-		return SyncModeConfiguredOnly
-	}
-}
-
 func inferLineupIDFromMappings(channels []ChannelMapping) (lineupID string, candidates []string) {
 	seen := map[string]struct{}{}
 	for _, mapping := range channels {
@@ -1168,14 +1251,54 @@ func (s *Service) matchDeviceID(deviceID string) bool {
 	return strings.EqualFold(strings.TrimSpace(deviceID), strings.TrimSpace(s.hdhrDeviceID))
 }
 
-func (s *Service) providerForCurrentConfig(ctx context.Context) (InstanceConfig, DVRProvider, error) {
+func (s *Service) currentProviderConfig(ctx context.Context) (InstanceConfig, error) {
 	instance, err := s.store.GetDVRInstance(ctx)
+	if err != nil {
+		return InstanceConfig{}, err
+	}
+	return instanceForProvider(instance, instance.Provider), nil
+}
+
+func (s *Service) buildLineupReloadProvider(instance InstanceConfig) (LineupReloadProvider, error) {
+	if s.lineupProviderBuild == nil {
+		return nil, fmt.Errorf("lineup provider factory is not configured")
+	}
+	provider, err := s.lineupProviderBuild(instance, s.httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return provider, nil
+}
+
+func (s *Service) buildMappingProvider(instance InstanceConfig) (MappingProvider, error) {
+	if s.mappingProviderBuild == nil {
+		return nil, fmt.Errorf("mapping provider factory is not configured")
+	}
+	provider, err := s.mappingProviderBuild(instance, s.httpClient)
+	if err != nil {
+		return nil, err
+	}
+	return provider, nil
+}
+
+func (s *Service) lineupProviderForCurrentConfig(ctx context.Context) (InstanceConfig, LineupReloadProvider, error) {
+	instance, err := s.currentProviderConfig(ctx)
 	if err != nil {
 		return InstanceConfig{}, nil, err
 	}
-	instance = instanceForProvider(instance, instance.Provider)
+	provider, err := s.buildLineupReloadProvider(instance)
+	if err != nil {
+		return InstanceConfig{}, nil, err
+	}
+	return instance, provider, nil
+}
 
-	provider, err := s.providerBuild(instance, s.httpClient)
+func (s *Service) mappingProviderForCurrentConfig(ctx context.Context) (InstanceConfig, MappingProvider, error) {
+	instance, err := s.currentProviderConfig(ctx)
+	if err != nil {
+		return InstanceConfig{}, nil, err
+	}
+	provider, err := s.buildMappingProvider(instance)
 	if err != nil {
 		return InstanceConfig{}, nil, err
 	}

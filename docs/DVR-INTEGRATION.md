@@ -8,23 +8,35 @@ Source: `internal/dvr/`
 
 | Provider    | Type constant | Default base URL              | Capabilities |
 |-------------|---------------|-------------------------------|--------------|
-| Channels DVR | `channels`   | `http://channels.lan:8089`    | Full: lineups, device channels, station listing, custom mapping read/write, guide refresh, device scan |
+| Channels DVR | `channels`   | empty (must be configured)    | Full: lineups, device channels, station listing, custom mapping read/write, guide refresh, device scan |
 | Jellyfin     | `jellyfin`   | `http://jellyfin.lan:8096`    | Lineup reload only (re-post tuner host to trigger channel refresh) |
 
-The primary provider is set via `InstanceConfig.Provider`. An `ActiveProviders` list enables multi-provider fan-out for playlist-sync-triggered reloads.
+`InstanceConfig.Provider` is the primary provider field used by sync/mapping workflows; current API/UI contracts enforce this as `channels` only.
+An `ActiveProviders` list enables multi-provider fan-out for playlist-sync-triggered reloads.
 `Service.Sync()` and reverse-sync paths use the primary provider only; `ActiveProviders` fan-out is specific to post-playlist-sync reload.
+For Channels, `ActiveProviders` includes `channels` only when a valid `channels_base_url` is configured.
+This can surface in `/ui/dvr` as the `Channels DVR` active-provider checkbox
+not persisting while `channels_base_url` is empty/invalid.
 
-## Provider Interface
+## Provider Interfaces
 
-Every provider implements `DVRProvider` (`provider.go`):
+Provider contracts are capability-based (`provider.go`):
 
 ```go
-type DVRProvider interface {
+type ProviderBase interface {
     Type() ProviderType
+}
+
+type LineupReloadProvider interface {
+    ProviderBase
     ListLineups(ctx context.Context) ([]DVRLineup, error)
     ReloadDeviceLineup(ctx context.Context, deviceID string) error
     RefreshGuideStations(ctx context.Context) error
     RedownloadGuideLineup(ctx context.Context, lineupID string) error
+}
+
+type MappingProvider interface {
+    ProviderBase
     ListDeviceChannels(ctx context.Context) (map[string]DVRDeviceChannel, error)
     ListLineupStations(ctx context.Context, lineupID string) ([]DVRStation, error)
     GetCustomMapping(ctx context.Context, lineupID string) (map[string]string, error)
@@ -33,9 +45,19 @@ type DVRProvider interface {
 }
 ```
 
-Provider construction is handled by `newProvider()`, which reads `InstanceConfig.Provider` and dispatches to `NewChannelsProvider` or `NewJellyfinProvider`. An `ErrUnsupportedProvider` error is returned for unknown types.
+Factory behavior:
+- `newLineupReloadProvider(...)` is used for lineup-reload paths (`ReloadLineup`, playlist-sync reload fan-out, lineup listing).
+- `newMappingProvider(...)` is used for mapping paths (`Sync`, `ReverseSync`, `ReverseSyncChannel`, `TestConnection`).
+- There is no union-provider compatibility adapter; call sites resolve the
+  exact capability they require.
 
-`instanceForProvider()` normalizes an `InstanceConfig` for a specific provider type, resolving the correct base URL from `ChannelsBaseURL` / `JellyfinBaseURL` / `BaseURL` fields.
+Provider/base-url/active-provider normalization is centralized in
+`internal/dvr/config_normalize.go`:
+- `NormalizeInstanceConfig(...)` for update payload normalization against current config
+- `NormalizeStoredInstance(...)` for read-back/store normalization
+- `NormalizeForProvider(...)` for provider-scoped views used during provider construction
+
+`instanceForProvider()` is a thin compatibility wrapper around `NormalizeForProvider(...)`.
 
 ## Channels DVR Provider
 
@@ -99,7 +121,12 @@ All requests include an `X-Emby-Token` header set to `InstanceConfig.JellyfinAPI
 
 ### Unsupported Operations
 
-`ListLineups`, `ListDeviceChannels`, `ListLineupStations`, `GetCustomMapping`, `PutCustomMapping`, and `RefreshDevices` all return `ErrUnsupportedProvider`. `RedownloadGuideLineup` is a no-op for Jellyfin because there is no lineup-scoped endpoint equivalent to Channels DVR's `/dvr/lineups/{lineupID}`. Jellyfin is used only for lineup reload orchestration, not for mapping sync.
+Jellyfin intentionally does not implement `MappingProvider`. Mapping-specific
+factory requests (`newMappingProvider(...)`) return `ErrUnsupportedProvider`.
+`ListLineups` also returns `ErrUnsupportedProvider` because Jellyfin has no
+lineup-list endpoint equivalent to Channels DVR. `RedownloadGuideLineup` is a
+no-op for Jellyfin because there is no lineup-scoped endpoint equivalent to
+Channels DVR's `/dvr/lineups/{lineupID}`.
 
 ## IncludeDynamic Parameter
 
@@ -155,13 +182,16 @@ Forward sync pushes hdhriptv channel mappings to the currently selected provider
 5. Build a `tunerNumber -> deviceKey` index from filtered channels
 6. Load configured channel mappings from the database (enabled, non-dynamic unless `IncludeDynamic`)
 7. Group mappings by lineup ID (falling back to `DefaultLineupID`)
-8. For each lineup:
+8. Build a per-lineup sync plan:
    - Fetch lineup stations and current custom mapping from the provider
    - Resolve each channel's station ref using `resolveStationRef()`
    - Compute a patch diff against the current provider mapping
+   - Compute per-lineup/global counters and warning summaries
+9. Apply the sync plan:
    - Apply the patch in batches of 75 via `PutCustomMapping`
    - Persist resolved station refs back to the local database
-9. Record the result in `lastSync` for API visibility
+   - In `dry_run`, skip provider/store writes but still emit patch preview and counters
+10. Record the result in `lastSync` for API visibility
 
 ### Station Ref Resolution
 
@@ -225,23 +255,32 @@ The composite key is `(channel_id, dvr_instance_id)`. Updates go through `Servic
 
 ## Post-Playlist-Sync Reload
 
-`ReloadLineupForPlaylistSync()` is called after playlist sync completes to refresh DVR provider lineups. It fans out across all `ActiveProviders`:
+`ReloadLineupForPlaylistSyncOutcome()` is called after playlist sync completes to refresh DVR provider lineups. It fans out across all `ActiveProviders`:
 
 1. For each active provider, build a provider instance
-2. For Jellyfin providers, check skip conditions via `jellyfinReloadSkipReason()`:
+2. For Channels providers, check skip conditions via `channelsReloadSkipReason()`:
+   - Missing or invalid Channels base URL
+   - Skips are non-fatal and recorded as reasons in the return value
+3. For Jellyfin providers, check skip conditions via `jellyfinReloadSkipReason()`:
    - Missing or invalid base URL
    - Missing API token
    - Skips are non-fatal and recorded as reasons in the return value
-3. Call `reloadLineup()` which triggers:
+4. Call `reloadLineup()` which triggers:
    - `ReloadDeviceLineup`
    - `RefreshGuideStations`
    - `RedownloadGuideLineup` for configured/discovered lineup IDs
 
-Returns `(reloadedAny, skippedAny, skipReasons, error)`.
+`ReloadLineupForPlaylistSyncOutcome()` returns `ReloadOutcome` with
+`reloaded`, `skipped`, `status`, and provider-scoped skip metadata.
 
 ## Config Persistence
 
 DVR configuration is stored as a singleton row in `dvr_instances` (keyed by `singleton_key = 1`).
+
+Singleton lifecycle:
+- startup schema/ensure paths normalize duplicate rows and explicitly ensure the singleton row exists
+- `GetDVRInstance()` is a pure read (`SELECT`) and does not create rows as a side effect
+- a missing singleton row at runtime is treated as an initialization invariant violation and returned as an error
 
 ### Instance Config Fields
 
@@ -281,7 +320,9 @@ When updating DVR config via the admin API (`handlePutDVR`), the handler:
 
 ### Connection Test
 
-`TestConnection()` builds a provider from current config and calls `ListDeviceChannels`. It returns reachability status, total device channel count, and the count filtered to the configured HDHR device ID.
+`TestConnection()` resolves a `MappingProvider` from current config and calls
+`ListDeviceChannels`. It returns reachability status, total device channel
+count, and the count filtered to the configured HDHR device ID.
 
 ### Sync Warnings
 
@@ -313,7 +354,9 @@ Sync operations accumulate warnings (capped at 200 via `maxSyncWarnings`) for no
 | Connection test (`ListDeviceChannels`) | Supported | Not supported |
 | Refresh devices (scanner scan) | Supported | Not supported |
 
-Jellyfin's `DVRProvider` implementation returns `ErrUnsupportedProvider` for every operation except `ReloadDeviceLineup`; `RefreshGuideStations` and `RedownloadGuideLineup` are silent no-ops. Jellyfin is used exclusively for triggering lineup refresh via tuner host re-post; it cannot participate in forward or reverse mapping sync.
+Jellyfin implements only lineup-reload capabilities. Sync/reverse-sync/test
+paths resolve `MappingProvider` and therefore reject Jellyfin with
+`ErrUnsupportedProvider` before any mapping API call is attempted.
 
 ## Mapping Conflict Precedence
 
@@ -385,6 +428,7 @@ The tuner host is selected via `selectTunerHost()` priority (see Tuner Host Sele
 | `syncRunLock` held | Returns `ErrSyncAlreadyRunning` (HTTP 409 Conflict) |
 | Jellyfin `GET /ScheduledTasks` fails | Silently ignored; reload is still considered successful |
 | Multi-provider reload: one provider fails | Error returned immediately; remaining providers are not attempted |
+| Multi-provider reload: Channels skip (missing/invalid base URL) | Non-fatal skip; other providers proceed; skip reasons returned |
 | Multi-provider reload: Jellyfin skip (missing token/URL) | Non-fatal skip; other providers proceed; skip reasons returned |
 
 When forward sync returns an error, the API returns that error response; partial counters are not emitted as a successful `SyncResult` payload.

@@ -12,11 +12,11 @@ import (
 )
 
 const (
-	defaultDVRBaseURL       = "http://channels.lan:8089"
+	legacyDefaultDVRBaseURL = "http://channels.lan:8089"
 	dvrInstanceSingletonKey = 1
 )
 
-func (s *Store) GetDVRInstance(ctx context.Context) (dvr.InstanceConfig, error) {
+func (s *Store) ensureDVRInstanceSingleton(ctx context.Context) error {
 	now := time.Now().UTC().Unix()
 	if _, err := s.db.ExecContext(ctx, `
 		INSERT INTO dvr_instances (
@@ -40,20 +40,23 @@ func (s *Store) GetDVRInstance(ctx context.Context) (dvr.InstanceConfig, error) 
 	`,
 		dvrInstanceSingletonKey,
 		string(dvr.ProviderChannels),
-		string(dvr.ProviderChannels),
-		defaultDVRBaseURL,
-		defaultDVRBaseURL,
+		"",
+		"",
+		"",
 		"",
 		string(dvr.SyncModeConfiguredOnly),
 		now,
 	); err != nil {
-		return dvr.InstanceConfig{}, fmt.Errorf("ensure default dvr instance: %w", err)
+		return fmt.Errorf("ensure default dvr instance: %w", err)
 	}
+	return nil
+}
 
+func (s *Store) GetDVRInstance(ctx context.Context) (dvr.InstanceConfig, error) {
 	instance, err := s.getDVRInstanceByID(ctx, 0)
 	if err != nil {
 		if err == sql.ErrNoRows {
-			return dvr.InstanceConfig{}, fmt.Errorf("query canonical dvr instance: %w", err)
+			return dvr.InstanceConfig{}, fmt.Errorf("query canonical dvr instance (singleton missing): %w", err)
 		}
 		return dvr.InstanceConfig{}, fmt.Errorf("query dvr instance: %w", err)
 	}
@@ -61,32 +64,7 @@ func (s *Store) GetDVRInstance(ctx context.Context) (dvr.InstanceConfig, error) 
 }
 
 func (s *Store) UpsertDVRInstance(ctx context.Context, instance dvr.InstanceConfig) (dvr.InstanceConfig, error) {
-	instance.Provider = normalizeDVRProvider(instance.Provider)
-	instance.ActiveProviders = normalizeDVRActiveProviders(instance.Provider, instance.ActiveProviders)
-	instance.BaseURL = strings.TrimSpace(instance.BaseURL)
-	instance.ChannelsBaseURL = strings.TrimSpace(instance.ChannelsBaseURL)
-	instance.JellyfinBaseURL = strings.TrimSpace(instance.JellyfinBaseURL)
-	if instance.BaseURL != "" {
-		switch instance.Provider {
-		case dvr.ProviderJellyfin:
-			instance.JellyfinBaseURL = instance.BaseURL
-		case dvr.ProviderChannels:
-			instance.ChannelsBaseURL = instance.BaseURL
-		}
-	}
-	if instance.ChannelsBaseURL == "" {
-		instance.ChannelsBaseURL = defaultDVRBaseURL
-	}
-	if instance.BaseURL == "" {
-		instance.BaseURL = baseURLForDVRProvider(instance.Provider, instance.ChannelsBaseURL, instance.JellyfinBaseURL)
-	}
-	instance.DefaultLineupID = strings.TrimSpace(instance.DefaultLineupID)
-	instance.SyncCron = strings.TrimSpace(instance.SyncCron)
-	instance.SyncMode = normalizeSyncMode(instance.SyncMode)
-	instance.JellyfinAPIToken = strings.TrimSpace(instance.JellyfinAPIToken)
-	instance.JellyfinTunerHostID = strings.TrimSpace(instance.JellyfinTunerHostID)
-	instance.JellyfinAPITokenConfigured = false
-	instance.ActiveProviders = normalizeDVRActiveProviders(instance.Provider, instance.ActiveProviders)
+	instance = dvr.NormalizeStoredInstance(instance)
 
 	now := time.Now().UTC().Unix()
 	if _, err := s.db.ExecContext(ctx, `
@@ -489,34 +467,30 @@ func (s *Store) getDVRInstanceByID(ctx context.Context, instanceID int64) (dvr.I
 		return dvr.InstanceConfig{}, err
 	}
 
-	instance.Provider = normalizeDVRProvider(dvr.ProviderType(providerRaw))
-	instance.ActiveProviders = normalizeDVRActiveProviders(instance.Provider, parseDVRProvidersCSV(activeRaw))
-	instance.SyncMode = normalizeSyncMode(dvr.SyncMode(syncModeRaw))
+	instance.Provider = dvr.NormalizeProviderType(dvr.ProviderType(providerRaw))
+	parsedActiveProviders := parseDVRProvidersCSV(activeRaw)
+	instance.ActiveProviders = parsedActiveProviders
+	instance.SyncMode = dvr.SyncMode(syncModeRaw)
 	instance.SyncEnabled = syncEnabled != 0
 	instance.PreSyncRefreshDevices = preSyncEnable != 0
-	instance.BaseURL = strings.TrimSpace(instance.BaseURL)
-	instance.ChannelsBaseURL = strings.TrimSpace(instance.ChannelsBaseURL)
-	instance.JellyfinBaseURL = strings.TrimSpace(instance.JellyfinBaseURL)
-	instance.DefaultLineupID = strings.TrimSpace(instance.DefaultLineupID)
-	instance.SyncCron = strings.TrimSpace(instance.SyncCron)
-	instance.JellyfinAPIToken = strings.TrimSpace(instance.JellyfinAPIToken)
-	instance.JellyfinTunerHostID = strings.TrimSpace(instance.JellyfinTunerHostID)
-	instance.JellyfinAPITokenConfigured = strings.TrimSpace(instance.JellyfinAPIToken) != ""
 
-	if instance.ChannelsBaseURL == "" {
-		if instance.Provider == dvr.ProviderChannels && instance.BaseURL != "" {
-			instance.ChannelsBaseURL = instance.BaseURL
-		}
+	// Legacy cleanup: older builds persisted channels.lan as a default sentinel.
+	// Keep trimming that placeholder when the row still looks untouched while
+	// avoiding configured rows that explicitly selected active providers.
+	if instance.Provider == dvr.ProviderChannels &&
+		len(parsedActiveProviders) == 0 &&
+		instance.BaseURL == legacyDefaultDVRBaseURL &&
+		instance.ChannelsBaseURL == legacyDefaultDVRBaseURL &&
+		!instance.SyncEnabled &&
+		strings.TrimSpace(instance.SyncCron) == "" &&
+		!instance.PreSyncRefreshDevices &&
+		instance.DefaultLineupID == "" &&
+		instance.JellyfinBaseURL == "" &&
+		instance.JellyfinAPIToken == "" {
+		instance.BaseURL = ""
+		instance.ChannelsBaseURL = ""
 	}
-	if instance.ChannelsBaseURL == "" {
-		instance.ChannelsBaseURL = defaultDVRBaseURL
-	}
-	if instance.JellyfinBaseURL == "" {
-		if instance.Provider == dvr.ProviderJellyfin && instance.BaseURL != "" {
-			instance.JellyfinBaseURL = instance.BaseURL
-		}
-	}
-	instance.BaseURL = baseURLForDVRProvider(instance.Provider, instance.ChannelsBaseURL, instance.JellyfinBaseURL)
+	instance = dvr.NormalizeStoredInstance(instance)
 	return instance, nil
 }
 
@@ -549,35 +523,6 @@ func (s *Store) listDVRSyncChannelTotal(ctx context.Context, filterSQL string, f
 	return total, nil
 }
 
-func normalizeDVRProvider(provider dvr.ProviderType) dvr.ProviderType {
-	switch dvr.ProviderType(strings.ToLower(strings.TrimSpace(string(provider)))) {
-	case dvr.ProviderChannels:
-		return dvr.ProviderChannels
-	case dvr.ProviderJellyfin:
-		return dvr.ProviderJellyfin
-	default:
-		return dvr.ProviderChannels
-	}
-}
-
-func normalizeDVRActiveProviders(primary dvr.ProviderType, providers []dvr.ProviderType) []dvr.ProviderType {
-	primary = normalizeDVRProvider(primary)
-	normalized := make([]dvr.ProviderType, 0, len(providers))
-	seen := map[dvr.ProviderType]struct{}{}
-	for _, provider := range providers {
-		value := normalizeDVRProvider(provider)
-		if _, exists := seen[value]; exists {
-			continue
-		}
-		seen[value] = struct{}{}
-		normalized = append(normalized, value)
-	}
-	if len(normalized) > 0 {
-		return normalized
-	}
-	return []dvr.ProviderType{primary}
-}
-
 func parseDVRProvidersCSV(raw string) []dvr.ProviderType {
 	parts := strings.Split(strings.TrimSpace(raw), ",")
 	out := make([]dvr.ProviderType, 0, len(parts))
@@ -586,7 +531,7 @@ func parseDVRProvidersCSV(raw string) []dvr.ProviderType {
 		if value == "" {
 			continue
 		}
-		out = append(out, normalizeDVRProvider(dvr.ProviderType(value)))
+		out = append(out, dvr.NormalizeProviderType(dvr.ProviderType(value)))
 	}
 	return out
 }
@@ -597,35 +542,7 @@ func joinDVRProvidersCSV(providers []dvr.ProviderType) string {
 	}
 	values := make([]string, 0, len(providers))
 	for _, provider := range providers {
-		values = append(values, string(normalizeDVRProvider(provider)))
+		values = append(values, string(dvr.NormalizeProviderType(provider)))
 	}
 	return strings.Join(values, ",")
-}
-
-func baseURLForDVRProvider(provider dvr.ProviderType, channelsURL, jellyfinURL string) string {
-	provider = normalizeDVRProvider(provider)
-	channelsURL = strings.TrimSpace(channelsURL)
-	jellyfinURL = strings.TrimSpace(jellyfinURL)
-	if channelsURL == "" {
-		channelsURL = defaultDVRBaseURL
-	}
-	switch provider {
-	case dvr.ProviderJellyfin:
-		return jellyfinURL
-	case dvr.ProviderChannels:
-		return channelsURL
-	default:
-		return channelsURL
-	}
-}
-
-func normalizeSyncMode(mode dvr.SyncMode) dvr.SyncMode {
-	switch dvr.SyncMode(strings.ToLower(strings.TrimSpace(string(mode)))) {
-	case dvr.SyncModeMirrorDevice:
-		return dvr.SyncModeMirrorDevice
-	case dvr.SyncModeConfiguredOnly:
-		return dvr.SyncModeConfiguredOnly
-	default:
-		return dvr.SyncModeConfiguredOnly
-	}
 }

@@ -185,15 +185,26 @@ object or assets).
 |----------|---------|---------|
 | `RELEASE_TAG` | empty (required) | Release tag name (`vX.Y.Z`). |
 | `RELEASE_TITLE` | empty | GitHub release title; defaults to `RELEASE_TAG`. |
-| `RELEASE_NOTES_FILE` | empty | Optional notes file for GitHub release create/edit. |
+| `RELEASE_NOTES_FILE` | empty | Optional notes preface merged ahead of auto-generated changelog highlights. |
 | `RELEASE_DIST_DIR` | `dist` | Output directory for built binaries and checksums. |
 | `GITHUB_RELEASE_REPO` | empty | Optional `owner/repo` override for release publishing. |
+| `RELEASE_IMAGE` | `arodd/hdhriptv` | Container image repository pushed during release; publishes `<repo>:<RELEASE_TAG>` and `<repo>:latest` (set full registry/repo, for example `ghcr.io/<owner>/hdhriptv`, when not publishing to Docker Hub). |
+| `BINFMT_IMAGE` | `tonistiigi/binfmt:qemu-v10.0.4` | Pinned `binfmt` helper image used for multi-arch emulation bootstrap; must be an explicit version tag or digest (floating `:latest` is rejected). |
+| `BUILDX_BUILDER` | `hdhriptv-multiarch` | Docker Buildx builder name used for multi-arch container publishing. |
 | `INTERNAL_REMOTE` | `origin` | Internal source-of-truth remote (GitLab). |
 | `INTERNAL_REPO_URL` | `git@gitlab.lan:arodd/hdhriptv.git` | Canonical URL for `INTERNAL_REMOTE`. |
 | `PUBLIC_REMOTE` | `github` | Public publishing remote (GitHub). |
 | `PUBLIC_REPO_URL` | `git@github.com:arodd/hdhriptv.git` | Canonical URL for `PUBLIC_REMOTE`. |
 | `SYNC_BRANCH` | `main` | Branch to mirror from internal to public before release tagging. |
-| `PUBLISH_GITHUB_COMMIT_MESSAGE` | empty | Optional squash commit subject override used by `make publish-github`. |
+| `PUBLISH_GITHUB_COMMIT_MESSAGE` | empty | Optional squash commit subject override used by `make publish-github`; default is `public(<SYNC_BRANCH>): release <RELEASE_TAG>` during `release-github-sync-tag`. |
+
+Before running the release command:
+
+- Authenticate Docker to the registry backing `RELEASE_IMAGE` (for example
+  `docker login`, or `docker login ghcr.io` when using GHCR).
+- Confirm `RELEASE_IMAGE` resolves to the intended registry/repository because
+  the release publishes both `<RELEASE_IMAGE>:<RELEASE_TAG>` and
+  `<RELEASE_IMAGE>:latest`.
 
 ### Lifecycle
 
@@ -205,10 +216,17 @@ object or assets).
    - `dist/hdhriptv-darwin-arm64`
    - `dist/SHA256SUMS`
 3. Run `make publish-github` to synchronize public mirror commit.
+   - Default squash commit subject is `public(<SYNC_BRANCH>): release <RELEASE_TAG>` unless overridden.
 4. Verify internal/public branch tree hashes match.
 5. Push `RELEASE_TAG` to internal remote at internal tip and to public remote
    at public tip.
-6. Create/update GitHub release and upload binaries/checksums.
+6. Build and push multi-arch container image tags:
+   - `<RELEASE_IMAGE>:<RELEASE_TAG>`
+   - `<RELEASE_IMAGE>:latest`
+7. Generate release notes from `CHANGELOG.md` entries added since the previous
+   internal release tag (grouped by type), then merge optional
+   `RELEASE_NOTES_FILE` content as a preface.
+8. Create/update GitHub release and upload binaries/checksums.
 
 ### Recovery procedures
 
@@ -221,6 +239,12 @@ object or assets).
   - Symptom: release exists but assets are incomplete/outdated.
   - Action: rerun `make release-github-sync-tag`; asset upload uses clobber and
     converges to current local build outputs.
+- **Container push/auth failure**
+  - Symptom: tag push succeeds but container publish fails (for example auth or
+    registry reachability).
+  - Action: fix registry auth/config and rerun `make release-github-sync-tag`;
+    tag push is idempotent and container push retries the same
+    `<RELEASE_IMAGE>:<RELEASE_TAG>` and `<RELEASE_IMAGE>:latest` targets.
 - **Public mirror sync failure**
   - Symptom: underlying `make publish-github` step fails.
   - Action: resolve mirror/marker issue using the publish runbook above, then
@@ -666,12 +690,12 @@ valid font for the family Sans`.
 
 ### Jellyfin DVR Provider Notes
 
-- Configure primary provider workflows with `provider`, and configure
-  post-playlist-sync reload fan-out with `active_providers`.
+- Configure primary sync/mapping workflows with `provider=channels`, and
+  configure post-playlist-sync reload fan-out with `active_providers`.
 - Use per-provider base URLs:
   - `channels_base_url` for Channels DVR.
   - `jellyfin_base_url` for Jellyfin API root.
-  - legacy `base_url` still maps to the selected primary provider.
+  - legacy `base_url` maps to Channels DVR base URL.
 - Jellyfin post-sync reload requires both `jellyfin_base_url` and
   `jellyfin_api_token`.
 - hdhriptv Jellyfin requests use header auth only:
@@ -717,6 +741,29 @@ valid font for the family Sans`.
 - Stall recovery is policy-driven (`STALL_POLICY`); default behavior fails over to alternate sources (`failover_source`), with optional same-source retry (`restart_same`) or immediate session close (`close_session`) when configured.
 - In `failover_source`, when no startup-eligible alternates are available in the current recovery pass, recovery automatically downgrades to restart-like same-source retry behavior (`restart_same` parity) while recovery filler keepalive remains active until startup succeeds or recovery deadline is reached.
 - Repeated same-source `source_eof` recoveries are paced with bounded inter-cycle backoff (`250ms` -> `2s`) so retry loops do not burn recovery-cycle budget in millisecond bursts. Recovery burst accounting is time-aware (`recovery_burst_budget_count` / `recovery_burst_pace_window`), and repetitive `shared session recovery triggered` warnings are coalesced (`recovery_trigger_logs_coalesced`).
+
+### FFmpeg Readrate Tuning
+
+`ffmpeg-copy` and `ffmpeg-transcode` startup paths pass producer pacing flags
+before `-i`:
+
+- `PRODUCER_READRATE` -> `-readrate`
+- `PRODUCER_READRATE_CATCHUP` -> `-readrate_catchup`
+- `PRODUCER_INITIAL_BURST` -> `-readrate_initial_burst`
+
+Practical guidance:
+
+- Start with `PRODUCER_READRATE=1` and `PRODUCER_READRATE_CATCHUP=1` for stable
+  realtime pacing.
+- Increase `PRODUCER_READRATE_CATCHUP` first (for example `1.1` to `1.25`) when
+  recovering from transient upstream stalls causes prolonged lag.
+- Keep `PRODUCER_READRATE` near `1` unless you intentionally want sustained
+  faster-than-realtime source ingestion.
+- `PRODUCER_INITIAL_BURST` controls startup fill aggressiveness only; prefer
+  small values (`1` to `2`) to reduce startup underruns without large burst
+  overshoot.
+- Config validation rejects `PRODUCER_READRATE_CATCHUP` values below
+  `PRODUCER_READRATE` to avoid contradictory pacing inputs.
 
 ## Observability and Hardening
 
@@ -876,6 +923,7 @@ Operational recommendation:
 - High random-access cutover (>=75% dropped from startup probe) emits `shared session startup probe cutover warning` log events with bounded coalescing metadata (`source_startup_probe_cutover_warn_logs_coalesced`) to reduce repetitive log spam under rapid recovery churn.
 - The runtime automatically retries once with relaxed startup probe/analyze settings (`source_startup_retry_relaxed_probe=true`) when startup detection initially appears component-incomplete. Startup is accepted only when inventory reaches `video_audio`; if the relaxed retry fails or still reports incomplete inventory, startup fails and failover continues.
 - If DVR logs show disconnects after no data for several seconds, reduce `BUFFER_PUBLISH_FLUSH_INTERVAL`, confirm producer pacing (`PRODUCER_READRATE=1`), and confirm recovery keepalive remains enabled (`RECOVERY_FILLER_ENABLED=true`, default). For picky clients, try `RECOVERY_FILLER_MODE=slate_av` (decodable filler) or `RECOVERY_FILLER_MODE=psi` before `null`.
+- For ffmpeg source pacing, start with `PRODUCER_READRATE=1` and `PRODUCER_READRATE_CATCHUP=1.15` to `1.5`. Increase catch-up gradually when post-stall lag persists. Keep `PRODUCER_READRATE_CATCHUP >= PRODUCER_READRATE`; avoid very high catch-up rates unless needed because aggressive catch-up can amplify downstream burst pressure.
 - For `RECOVERY_FILLER_MODE=slate_av`, odd source resolutions (for example `853x480`) are normalized to even dimensions for `libx264`/`yuv420p` encoder safety. Use debug logs to confirm normalization and watch `/api/admin/tuners` keepalive fallback counters if the session still degrades to `psi`/`null`.
 - If recovery resumes cleanly but playback is far behind live edge, inspect `/api/admin/tuners` keepalive telemetry:
   - sustained high `recovery_keepalive_rate_bytes_per_second` relative to `recovery_keepalive_expected_rate_bytes_per_second`,

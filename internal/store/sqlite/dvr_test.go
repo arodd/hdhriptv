@@ -36,14 +36,14 @@ func TestDVRInstanceDefaultsAndUpdate(t *testing.T) {
 	if instance.Provider != dvr.ProviderChannels {
 		t.Fatalf("instance.Provider = %q, want %q", instance.Provider, dvr.ProviderChannels)
 	}
-	if got, want := instance.ActiveProviders, []dvr.ProviderType{dvr.ProviderChannels}; len(got) != len(want) || got[0] != want[0] {
-		t.Fatalf("instance.ActiveProviders = %v, want %v", got, want)
+	if len(instance.ActiveProviders) != 0 {
+		t.Fatalf("instance.ActiveProviders = %v, want empty by default", instance.ActiveProviders)
 	}
-	if instance.BaseURL != "http://channels.lan:8089" {
-		t.Fatalf("instance.BaseURL = %q, want http://channels.lan:8089", instance.BaseURL)
+	if instance.BaseURL != "" {
+		t.Fatalf("instance.BaseURL = %q, want empty default", instance.BaseURL)
 	}
-	if instance.ChannelsBaseURL != "http://channels.lan:8089" {
-		t.Fatalf("instance.ChannelsBaseURL = %q, want http://channels.lan:8089", instance.ChannelsBaseURL)
+	if instance.ChannelsBaseURL != "" {
+		t.Fatalf("instance.ChannelsBaseURL = %q, want empty default", instance.ChannelsBaseURL)
 	}
 	if instance.JellyfinBaseURL != "" {
 		t.Fatalf("instance.JellyfinBaseURL = %q, want empty", instance.JellyfinBaseURL)
@@ -102,6 +102,108 @@ func TestDVRInstanceDefaultsAndUpdate(t *testing.T) {
 	}
 	if reloaded.SyncCron != "*/15 * * * *" {
 		t.Fatalf("reloaded.SyncCron = %q, want */15 * * * *", reloaded.SyncCron)
+	}
+}
+
+func TestGetDVRInstancePreservesConfiguredLegacyDefaultBaseURL(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	instance, err := store.GetDVRInstance(ctx)
+	if err != nil {
+		t.Fatalf("GetDVRInstance() error = %v", err)
+	}
+	instance.Provider = dvr.ProviderChannels
+	instance.ActiveProviders = []dvr.ProviderType{dvr.ProviderChannels}
+	instance.BaseURL = legacyDefaultDVRBaseURL
+	instance.ChannelsBaseURL = legacyDefaultDVRBaseURL
+	instance.DefaultLineupID = ""
+	instance.SyncEnabled = false
+	instance.SyncCron = ""
+	instance.PreSyncRefreshDevices = false
+	instance.JellyfinBaseURL = ""
+	instance.JellyfinAPIToken = ""
+	instance.JellyfinTunerHostID = ""
+
+	updated, err := store.UpsertDVRInstance(ctx, instance)
+	if err != nil {
+		t.Fatalf("UpsertDVRInstance() error = %v", err)
+	}
+	if got, want := updated.BaseURL, legacyDefaultDVRBaseURL; got != want {
+		t.Fatalf("updated.BaseURL = %q, want %q", got, want)
+	}
+	if got, want := updated.ChannelsBaseURL, legacyDefaultDVRBaseURL; got != want {
+		t.Fatalf("updated.ChannelsBaseURL = %q, want %q", got, want)
+	}
+
+	reloaded, err := store.GetDVRInstance(ctx)
+	if err != nil {
+		t.Fatalf("GetDVRInstance(reloaded) error = %v", err)
+	}
+	if got, want := reloaded.BaseURL, legacyDefaultDVRBaseURL; got != want {
+		t.Fatalf("reloaded.BaseURL = %q, want %q", got, want)
+	}
+	if got, want := reloaded.ChannelsBaseURL, legacyDefaultDVRBaseURL; got != want {
+		t.Fatalf("reloaded.ChannelsBaseURL = %q, want %q", got, want)
+	}
+	if got, want := reloaded.ActiveProviders, []dvr.ProviderType{dvr.ProviderChannels}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("reloaded.ActiveProviders = %v, want %v", got, want)
+	}
+}
+
+func TestGetDVRInstanceCleansLegacyPlaceholderWhenUnconfigured(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.ExecContext(
+		ctx,
+		`
+		UPDATE dvr_instances
+		SET provider = ?,
+		    active_providers = '',
+		    base_url = ?,
+		    channels_base_url = ?,
+		    default_lineup_id = '',
+		    sync_enabled = 0,
+		    sync_cron = '',
+		    sync_mode = ?,
+		    pre_sync_refresh_devices = 0,
+		    jellyfin_base_url = '',
+		    jellyfin_api_token = '',
+		    jellyfin_tuner_host_id = ''
+		WHERE singleton_key = ?
+	`,
+		string(dvr.ProviderChannels),
+		legacyDefaultDVRBaseURL,
+		legacyDefaultDVRBaseURL,
+		string(dvr.SyncModeConfiguredOnly),
+		dvrInstanceSingletonKey,
+	); err != nil {
+		t.Fatalf("seed legacy placeholder dvr row error = %v", err)
+	}
+
+	instance, err := store.GetDVRInstance(ctx)
+	if err != nil {
+		t.Fatalf("GetDVRInstance() error = %v", err)
+	}
+	if got := instance.BaseURL; got != "" {
+		t.Fatalf("instance.BaseURL = %q, want empty after legacy cleanup", got)
+	}
+	if got := instance.ChannelsBaseURL; got != "" {
+		t.Fatalf("instance.ChannelsBaseURL = %q, want empty after legacy cleanup", got)
+	}
+	if len(instance.ActiveProviders) != 0 {
+		t.Fatalf("instance.ActiveProviders = %v, want empty when no provider URL is configured", instance.ActiveProviders)
 	}
 }
 
@@ -263,6 +365,36 @@ func TestDVRInstanceConcurrentInitializationSingleton(t *testing.T) {
 	}
 	if rowCount != 1 {
 		t.Fatalf("dvr_instances row count = %d, want 1", rowCount)
+	}
+}
+
+func TestGetDVRInstanceMissingSingletonReturnsErrorWithoutRecreate(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if _, err := store.db.ExecContext(ctx, `DELETE FROM dvr_instances`); err != nil {
+		t.Fatalf("DELETE dvr_instances error = %v", err)
+	}
+
+	_, err = store.GetDVRInstance(ctx)
+	if err == nil {
+		t.Fatal("GetDVRInstance() error = nil, want non-nil when singleton row is missing")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "singleton missing") {
+		t.Fatalf("GetDVRInstance() error = %q, want singleton-missing context", err.Error())
+	}
+
+	rowCount, err := countDVRInstanceRows(ctx, store.db)
+	if err != nil {
+		t.Fatalf("count dvr_instances rows error = %v", err)
+	}
+	if rowCount != 0 {
+		t.Fatalf("dvr_instances row count after GetDVRInstance() = %d, want 0", rowCount)
 	}
 }
 

@@ -9,6 +9,15 @@ import (
 	"testing"
 )
 
+func setServiceProvider(svc *Service, provider *fakeProvider) {
+	svc.lineupProviderBuild = func(_ InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		return provider, nil
+	}
+	svc.mappingProviderBuild = func(_ InstanceConfig, _ *http.Client) (MappingProvider, error) {
+		return provider, nil
+	}
+}
+
 func TestServiceSyncConfiguredOnlyReorderPatch(t *testing.T) {
 	t.Parallel()
 
@@ -64,9 +73,7 @@ func TestServiceSyncConfiguredOnlyReorderPatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.Sync(context.Background(), SyncRequest{DryRun: true})
 	if err != nil {
@@ -146,9 +153,7 @@ func TestServiceSyncFailsWhenReloadLineupPreflightFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	_, err = svc.Sync(context.Background(), SyncRequest{DryRun: true})
 	if err == nil {
@@ -176,9 +181,7 @@ func TestServiceReloadLineupRefreshesGuideStationsAndRedownloadsGuide(t *testing
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	if err := svc.ReloadLineup(context.Background()); err != nil {
 		t.Fatalf("ReloadLineup() error = %v", err)
@@ -215,9 +218,7 @@ func TestServiceReloadLineupReturnsGuideRefreshError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	if err := svc.ReloadLineup(context.Background()); err == nil {
 		t.Fatal("ReloadLineup() error = nil, want non-nil")
@@ -252,9 +253,7 @@ func TestServiceReloadLineupReturnsGuideRedownloadError(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	if err := svc.ReloadLineup(context.Background()); err == nil {
 		t.Fatal("ReloadLineup() error = nil, want non-nil")
@@ -293,9 +292,7 @@ func TestServiceReloadLineupRedownloadsGuideForDiscoveredLineups(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	if err := svc.ReloadLineup(context.Background()); err != nil {
 		t.Fatalf("ReloadLineup() error = %v", err)
@@ -305,7 +302,7 @@ func TestServiceReloadLineupRedownloadsGuideForDiscoveredLineups(t *testing.T) {
 	}
 }
 
-func TestServiceReloadLineupForPlaylistSyncSkipsIncompleteJellyfinConfig(t *testing.T) {
+func TestServiceReloadLineupForPlaylistSyncOutcomeSkipsIncompleteJellyfinConfig(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeStore{
@@ -322,29 +319,210 @@ func TestServiceReloadLineupForPlaylistSyncSkipsIncompleteJellyfinConfig(t *test
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
-	reloaded, skipped, skipReason, err := svc.ReloadLineupForPlaylistSync(context.Background())
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
 	if err != nil {
-		t.Fatalf("ReloadLineupForPlaylistSync() error = %v", err)
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
 	}
-	if !skipped {
-		t.Fatalf("skipped = %v, want true", skipped)
+	if !outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want true", outcome.Skipped)
 	}
-	if reloaded {
-		t.Fatalf("reloaded = %v, want false", reloaded)
+	if outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want false", outcome.Reloaded)
 	}
-	if skipReason != "jellyfin:missing_jellyfin_api_token" {
-		t.Fatalf("skipReason = %q, want jellyfin:missing_jellyfin_api_token", skipReason)
+	if got, want := outcome.Status, ReloadStatusSkipped; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.SkipReasons, []string{"jellyfin:missing_jellyfin_api_token"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkipReasons = %#v, want %#v", got, want)
 	}
 	if len(provider.reloadCalls) != 0 {
 		t.Fatalf("len(provider.reloadCalls) = %d, want 0 on skipped run", len(provider.reloadCalls))
 	}
 }
 
-func TestServiceReloadLineupForPlaylistSyncReloadsConfiguredJellyfin(t *testing.T) {
+func TestServiceReloadLineupForPlaylistSyncOutcomeSkipsWhenConfiguredJellyfinProviderIsNotActive(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:               1,
+			Provider:         ProviderJellyfin,
+			ActiveProviders:  []ProviderType{ProviderJellyfin},
+			JellyfinBaseURL:  "",
+			JellyfinAPIToken: "token-abc",
+		},
+	}
+	provider := &fakeProvider{providerType: ProviderJellyfin}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	setServiceProvider(svc, provider)
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+	if outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want false", outcome.Reloaded)
+	}
+	if !outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want true", outcome.Skipped)
+	}
+	if got, want := outcome.Status, ReloadStatusSkipped; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.SkipReasons, []string{"no_active_providers"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkipReasons = %#v, want %#v", got, want)
+	}
+	if len(provider.reloadCalls) != 0 {
+		t.Fatalf("len(provider.reloadCalls) = %d, want 0 on skipped run", len(provider.reloadCalls))
+	}
+}
+
+func TestChannelsReloadSkipReasonUsesCanonicalBaseURLValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		baseURL string
+		want    string
+	}{
+		{name: "missing", baseURL: "", want: "missing_channels_base_url"},
+		{name: "missing_trimmed", baseURL: "   ", want: "missing_channels_base_url"},
+		{name: "invalid_relative", baseURL: "/channels", want: "invalid_channels_base_url"},
+		{name: "invalid_host_only", baseURL: "channels.example.invalid:8089", want: "invalid_channels_base_url"},
+		{name: "valid_http", baseURL: "http://channels.example.invalid:8089", want: ""},
+		{name: "valid_https_trimmed", baseURL: "  https://channels.example.invalid  ", want: ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := channelsReloadSkipReason(InstanceConfig{BaseURL: tc.baseURL})
+			if got != tc.want {
+				t.Fatalf("channelsReloadSkipReason(%q) = %q, want %q", tc.baseURL, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestJellyfinReloadSkipReasonUsesCanonicalBaseURLValidation(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		baseURL string
+		token   string
+		want    string
+	}{
+		{name: "missing_base_url", baseURL: "", token: "token", want: "missing_jellyfin_base_url"},
+		{name: "invalid_base_url", baseURL: "jellyfin.example.invalid:8096", token: "token", want: "invalid_jellyfin_base_url"},
+		{name: "invalid_base_url_precedes_missing_token", baseURL: "/jellyfin", token: "", want: "invalid_jellyfin_base_url"},
+		{name: "missing_token", baseURL: "http://jellyfin.example.invalid:8096", token: "", want: "missing_jellyfin_api_token"},
+		{name: "configured", baseURL: "http://jellyfin.example.invalid:8096", token: "token", want: ""},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := jellyfinReloadSkipReason(InstanceConfig{
+				BaseURL:          tc.baseURL,
+				JellyfinAPIToken: tc.token,
+			})
+			if got != tc.want {
+				t.Fatalf("jellyfinReloadSkipReason(base_url=%q, token=%q) = %q, want %q", tc.baseURL, tc.token, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestServiceReloadLineupForPlaylistSyncOutcomeSkipsWhenConfiguredProviderIsNotActive(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:              1,
+			Provider:        ProviderChannels,
+			ActiveProviders: []ProviderType{ProviderChannels},
+		},
+	}
+	provider := &fakeProvider{providerType: ProviderChannels}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	setServiceProvider(svc, provider)
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+	if outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want false", outcome.Reloaded)
+	}
+	if !outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want true", outcome.Skipped)
+	}
+	if got, want := outcome.Status, ReloadStatusSkipped; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.SkipReasons, []string{"no_active_providers"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkipReasons = %#v, want %#v", got, want)
+	}
+	if len(provider.reloadCalls) != 0 {
+		t.Fatalf("len(provider.reloadCalls) = %d, want 0 on skipped run", len(provider.reloadCalls))
+	}
+}
+
+func TestServiceReloadLineupForPlaylistSyncOutcomeUsesConfiguredPrimaryChannelsWhenActiveProvidersUnset(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:              1,
+			Provider:        ProviderChannels,
+			ChannelsBaseURL: "http://channels.example.invalid:8089",
+		},
+	}
+	provider := &fakeProvider{providerType: ProviderChannels}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	setServiceProvider(svc, provider)
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+	if !outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want true", outcome.Reloaded)
+	}
+	if outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want false", outcome.Skipped)
+	}
+	if got, want := outcome.Status, ReloadStatusReloaded; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if len(outcome.SkipReasons) != 0 {
+		t.Fatalf("outcome.SkipReasons = %#v, want empty", outcome.SkipReasons)
+	}
+	if got, want := len(provider.reloadCalls), 1; got != want {
+		t.Fatalf("len(provider.reloadCalls) = %d, want %d", got, want)
+	}
+}
+
+func TestServiceReloadLineupForPlaylistSyncOutcomeReloadsConfiguredJellyfin(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeStore{
@@ -361,29 +539,30 @@ func TestServiceReloadLineupForPlaylistSyncReloadsConfiguredJellyfin(t *testing.
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
-	reloaded, skipped, skipReason, err := svc.ReloadLineupForPlaylistSync(context.Background())
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
 	if err != nil {
-		t.Fatalf("ReloadLineupForPlaylistSync() error = %v", err)
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
 	}
-	if skipped {
-		t.Fatalf("skipped = %v, want false", skipped)
+	if outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want false", outcome.Skipped)
 	}
-	if !reloaded {
-		t.Fatalf("reloaded = %v, want true", reloaded)
+	if !outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want true", outcome.Reloaded)
 	}
-	if skipReason != "" {
-		t.Fatalf("skipReason = %q, want empty", skipReason)
+	if got, want := outcome.Status, ReloadStatusReloaded; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if len(outcome.SkipReasons) != 0 {
+		t.Fatalf("outcome.SkipReasons = %#v, want empty", outcome.SkipReasons)
 	}
 	if got, want := len(provider.reloadCalls), 1; got != want {
 		t.Fatalf("len(provider.reloadCalls) = %d, want %d", got, want)
 	}
 }
 
-func TestServiceReloadLineupForPlaylistSyncReloadsAllActiveProviders(t *testing.T) {
+func TestServiceReloadLineupForPlaylistSyncOutcomeReloadsAllActiveProviders(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeStore{
@@ -404,7 +583,18 @@ func TestServiceReloadLineupForPlaylistSyncReloadsAllActiveProviders(t *testing.
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(instance InstanceConfig, _ *http.Client) (DVRProvider, error) {
+	svc.lineupProviderBuild = func(instance InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		builtBaseURLByProvider[instance.Provider] = instance.BaseURL
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return jellyfinProvider, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+	svc.mappingProviderBuild = func(instance InstanceConfig, _ *http.Client) (MappingProvider, error) {
 		builtBaseURLByProvider[instance.Provider] = instance.BaseURL
 		switch instance.Provider {
 		case ProviderChannels:
@@ -416,18 +606,21 @@ func TestServiceReloadLineupForPlaylistSyncReloadsAllActiveProviders(t *testing.
 		}
 	}
 
-	reloaded, skipped, skipReason, err := svc.ReloadLineupForPlaylistSync(context.Background())
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
 	if err != nil {
-		t.Fatalf("ReloadLineupForPlaylistSync() error = %v", err)
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
 	}
-	if !reloaded {
-		t.Fatalf("reloaded = %v, want true", reloaded)
+	if !outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want true", outcome.Reloaded)
 	}
-	if skipped {
-		t.Fatalf("skipped = %v, want false", skipped)
+	if outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want false", outcome.Skipped)
 	}
-	if skipReason != "" {
-		t.Fatalf("skipReason = %q, want empty", skipReason)
+	if got, want := outcome.Status, ReloadStatusReloaded; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if len(outcome.SkipReasons) != 0 {
+		t.Fatalf("outcome.SkipReasons = %#v, want empty", outcome.SkipReasons)
 	}
 	if got, want := len(channelsProvider.reloadCalls), 1; got != want {
 		t.Fatalf("len(channelsProvider.reloadCalls) = %d, want %d", got, want)
@@ -443,7 +636,7 @@ func TestServiceReloadLineupForPlaylistSyncReloadsAllActiveProviders(t *testing.
 	}
 }
 
-func TestServiceReloadLineupForPlaylistSyncSkipsIncompleteActiveProvidersAndReloadsRest(t *testing.T) {
+func TestServiceReloadLineupForPlaylistSyncOutcomeSkipsIncompleteActiveProvidersAndReloadsRest(t *testing.T) {
 	t.Parallel()
 
 	store := &fakeStore{
@@ -462,7 +655,17 @@ func TestServiceReloadLineupForPlaylistSyncSkipsIncompleteActiveProvidersAndRelo
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(instance InstanceConfig, _ *http.Client) (DVRProvider, error) {
+	svc.lineupProviderBuild = func(instance InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return &fakeProvider{providerType: ProviderJellyfin}, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+	svc.mappingProviderBuild = func(instance InstanceConfig, _ *http.Client) (MappingProvider, error) {
 		switch instance.Provider {
 		case ProviderChannels:
 			return channelsProvider, nil
@@ -473,18 +676,21 @@ func TestServiceReloadLineupForPlaylistSyncSkipsIncompleteActiveProvidersAndRelo
 		}
 	}
 
-	reloaded, skipped, skipReason, err := svc.ReloadLineupForPlaylistSync(context.Background())
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
 	if err != nil {
-		t.Fatalf("ReloadLineupForPlaylistSync() error = %v", err)
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
 	}
-	if !reloaded {
-		t.Fatalf("reloaded = %v, want true", reloaded)
+	if !outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want true", outcome.Reloaded)
 	}
-	if !skipped {
-		t.Fatalf("skipped = %v, want true", skipped)
+	if !outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want true", outcome.Skipped)
 	}
-	if skipReason != "jellyfin:missing_jellyfin_api_token" {
-		t.Fatalf("skipReason = %q, want jellyfin:missing_jellyfin_api_token", skipReason)
+	if got, want := outcome.Status, ReloadStatusPartial; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.SkipReasons, []string{"jellyfin:missing_jellyfin_api_token"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkipReasons = %#v, want %#v", got, want)
 	}
 	if got, want := len(channelsProvider.reloadCalls), 1; got != want {
 		t.Fatalf("len(channelsProvider.reloadCalls) = %d, want %d", got, want)
@@ -518,6 +724,90 @@ func TestServiceGetStateIncludesStoredJellyfinToken(t *testing.T) {
 	}
 	if !state.Instance.JellyfinAPITokenConfigured {
 		t.Fatal("GetState() jellyfin_api_token_configured = false, want true")
+	}
+}
+
+func TestServiceUpdateConfigStopsOnLineupProviderBuildError(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingFakeStore{
+		fakeStore: fakeStore{
+			instance: InstanceConfig{
+				ID:       1,
+				Provider: ProviderChannels,
+				BaseURL:  "http://channels.lan:8089",
+			},
+		},
+	}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	var mappingProviderBuildCalls int
+	svc.lineupProviderBuild = func(_ InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		return nil, fmt.Errorf("lineup provider error")
+	}
+	svc.mappingProviderBuild = func(_ InstanceConfig, _ *http.Client) (MappingProvider, error) {
+		mappingProviderBuildCalls++
+		return &fakeProvider{providerType: ProviderChannels}, nil
+	}
+
+	_, err = svc.UpdateConfig(context.Background(), store.instance)
+	if err == nil || !strings.Contains(err.Error(), "lineup provider error") {
+		t.Fatalf("UpdateConfig() error = %v, want lineup provider error", err)
+	}
+	if mappingProviderBuildCalls != 0 {
+		t.Fatalf("mappingProviderBuildCalls = %d, want 0", mappingProviderBuildCalls)
+	}
+	if got := len(store.configUpsertCalls); got != 0 {
+		t.Fatalf("len(store.configUpsertCalls) = %d, want 0", got)
+	}
+}
+
+func TestServiceUpdateConfigStopsOnMappingProviderBuildError(t *testing.T) {
+	t.Parallel()
+
+	store := &recordingFakeStore{
+		fakeStore: fakeStore{
+			instance: InstanceConfig{
+				ID:       1,
+				Provider: ProviderChannels,
+				BaseURL:  "http://channels.lan:8089",
+			},
+		},
+	}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	var lineupProviderBuildCalls int
+	svc.lineupProviderBuild = func(_ InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		lineupProviderBuildCalls++
+		return &fakeProvider{providerType: ProviderChannels}, nil
+	}
+
+	var mappingProviderBuildCalls int
+	svc.mappingProviderBuild = func(_ InstanceConfig, _ *http.Client) (MappingProvider, error) {
+		mappingProviderBuildCalls++
+		return nil, fmt.Errorf("mapping provider error")
+	}
+
+	_, err = svc.UpdateConfig(context.Background(), store.instance)
+	if err == nil || !strings.Contains(err.Error(), "mapping provider error") {
+		t.Fatalf("UpdateConfig() error = %v, want mapping provider error", err)
+	}
+	if lineupProviderBuildCalls != 1 {
+		t.Fatalf("lineupProviderBuildCalls = %d, want 1", lineupProviderBuildCalls)
+	}
+	if mappingProviderBuildCalls != 1 {
+		t.Fatalf("mappingProviderBuildCalls = %d, want 1", mappingProviderBuildCalls)
+	}
+	if got := len(store.configUpsertCalls); got != 0 {
+		t.Fatalf("len(store.configUpsertCalls) = %d, want 0", got)
 	}
 }
 
@@ -566,9 +856,7 @@ func TestServiceSyncMirrorDeviceClearsUnconfigured(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.Sync(context.Background(), SyncRequest{DryRun: false})
 	if err != nil {
@@ -641,9 +929,7 @@ func TestServiceSyncDryRunDoesNotPersistResolvedStationRef(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.Sync(context.Background(), SyncRequest{DryRun: true})
 	if err != nil {
@@ -654,6 +940,256 @@ func TestServiceSyncDryRunDoesNotPersistResolvedStationRef(t *testing.T) {
 	}
 	if len(store.upsertCalls) != 0 {
 		t.Fatalf("len(store.upsertCalls) = %d, want 0 during dry-run", len(store.upsertCalls))
+	}
+}
+
+func TestServiceBuildSyncPlanComputesCountersAndPatch(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:       1,
+			Provider: ProviderChannels,
+			BaseURL:  "http://channels.lan:8089",
+			SyncMode: SyncModeConfiguredOnly,
+		},
+		channels: []ChannelMapping{
+			{
+				ChannelID:        1,
+				GuideNumber:      "100",
+				GuideName:        "CBS",
+				Enabled:          true,
+				DVRInstanceID:    1,
+				DVRLineupID:      "USA-TEST",
+				DVRLineupChannel: "2",
+			},
+			{
+				ChannelID:        2,
+				GuideNumber:      "101",
+				GuideName:        "FOX",
+				Enabled:          true,
+				DVRInstanceID:    1,
+				DVRLineupID:      "USA-TEST",
+				DVRLineupChannel: "3",
+			},
+		},
+	}
+
+	provider := &fakeProvider{
+		deviceChannels: map[string]DVRDeviceChannel{
+			"A100": {Key: "A100", DeviceID: "8F07FDC6", Number: "100"},
+			"A101": {Key: "A101", DeviceID: "8F07FDC6", Number: "101"},
+		},
+		stationsByLineup: map[string][]DVRStation{
+			"USA-TEST": {
+				{StationRef: "21234", LineupChannel: "2", CallSign: "WCCO"},
+				{StationRef: "24504", LineupChannel: "3", CallSign: "KMSP"},
+			},
+		},
+		customByLineup: map[string]map[string]string{
+			"USA-TEST": {
+				"A100": "99999",
+				"A101": "24504",
+			},
+		},
+	}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	index := svc.buildDeviceChannelIndex(provider.deviceChannels)
+	plan, err := svc.buildSyncPlan(
+		context.Background(),
+		store.instance,
+		provider,
+		SyncRequest{DryRun: true},
+		index,
+		normalizeSyncMode(store.instance.SyncMode),
+	)
+	if err != nil {
+		t.Fatalf("buildSyncPlan() error = %v", err)
+	}
+
+	if got, want := plan.UpdatedCount, 1; got != want {
+		t.Fatalf("plan.UpdatedCount = %d, want %d", got, want)
+	}
+	if got, want := plan.ClearedCount, 0; got != want {
+		t.Fatalf("plan.ClearedCount = %d, want %d", got, want)
+	}
+	if got, want := plan.UnchangedCount, 1; got != want {
+		t.Fatalf("plan.UnchangedCount = %d, want %d", got, want)
+	}
+	if got, want := plan.MissingTunerCount, 0; got != want {
+		t.Fatalf("plan.MissingTunerCount = %d, want %d", got, want)
+	}
+	if got, want := plan.UnresolvedCount, 0; got != want {
+		t.Fatalf("plan.UnresolvedCount = %d, want %d", got, want)
+	}
+	if len(plan.Warnings) != 0 {
+		t.Fatalf("plan.Warnings = %#v, want empty", plan.Warnings)
+	}
+	if got, want := len(plan.Lineups), 1; got != want {
+		t.Fatalf("len(plan.Lineups) = %d, want %d", got, want)
+	}
+
+	lineup := plan.Lineups[0]
+	if got, want := lineup.Result.LineupID, "USA-TEST"; got != want {
+		t.Fatalf("lineup.Result.LineupID = %q, want %q", got, want)
+	}
+	if got, want := lineup.Result.ConfiguredChannels, 2; got != want {
+		t.Fatalf("lineup.Result.ConfiguredChannels = %d, want %d", got, want)
+	}
+	if got, want := lineup.Result.ResolvedChannels, 2; got != want {
+		t.Fatalf("lineup.Result.ResolvedChannels = %d, want %d", got, want)
+	}
+	if got, want := lineup.Result.UpdatedCount, 1; got != want {
+		t.Fatalf("lineup.Result.UpdatedCount = %d, want %d", got, want)
+	}
+	if got, want := lineup.Result.UnchangedCount, 1; got != want {
+		t.Fatalf("lineup.Result.UnchangedCount = %d, want %d", got, want)
+	}
+	if got, want := lineup.Result.ClearedCount, 0; got != want {
+		t.Fatalf("lineup.Result.ClearedCount = %d, want %d", got, want)
+	}
+	if got, want := lineup.Patch, map[string]string{"A100": "21234"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("lineup.Patch = %#v, want %#v", got, want)
+	}
+	if got, want := lineup.ResolvedByChannelID, map[int64]string{1: "21234", 2: "24504"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("lineup.ResolvedByChannelID = %#v, want %#v", got, want)
+	}
+	if len(provider.putCalls) != 0 {
+		t.Fatalf("len(provider.putCalls) = %d, want 0 for planning stage", len(provider.putCalls))
+	}
+	if len(store.upsertCalls) != 0 {
+		t.Fatalf("len(store.upsertCalls) = %d, want 0 for planning stage", len(store.upsertCalls))
+	}
+}
+
+func TestServiceApplySyncPlanDryRunOnlyBuildsPreview(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{}
+	provider := &fakeProvider{}
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	plan := syncPlan{
+		Lineups: []syncLineupPlan{
+			{
+				Result: LineupSyncResult{
+					LineupID:           "USA-TEST",
+					ConfiguredChannels: 1,
+					ResolvedChannels:   1,
+					UpdatedCount:       1,
+				},
+				ChannelsForLineup: []ChannelMapping{
+					{
+						ChannelID:        1,
+						DVRLineupID:      "USA-TEST",
+						DVRLineupChannel: "2",
+						DVRStationRef:    "",
+					},
+				},
+				Patch:               map[string]string{"A100": "21234"},
+				ResolvedByChannelID: map[int64]string{1: "21234"},
+			},
+		},
+	}
+
+	applied, err := svc.applySyncPlan(context.Background(), 1, provider, plan, true)
+	if err != nil {
+		t.Fatalf("applySyncPlan() error = %v", err)
+	}
+	if got, want := applied.PatchPreview, map[string]map[string]string{"USA-TEST": {"A100": "21234"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("applied.PatchPreview = %#v, want %#v", got, want)
+	}
+	if got, want := len(applied.Lineups), 1; got != want {
+		t.Fatalf("len(applied.Lineups) = %d, want %d", got, want)
+	}
+	if got, want := applied.Lineups[0].AppliedCount, 0; got != want {
+		t.Fatalf("applied.Lineups[0].AppliedCount = %d, want %d", got, want)
+	}
+	if got, want := len(provider.putCalls), 0; got != want {
+		t.Fatalf("len(provider.putCalls) = %d, want %d for dry-run", got, want)
+	}
+	if got, want := len(store.upsertCalls), 0; got != want {
+		t.Fatalf("len(store.upsertCalls) = %d, want %d for dry-run", got, want)
+	}
+}
+
+func TestServiceApplySyncPlanPersistsPatchAndStationRefs(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{}
+	provider := &fakeProvider{
+		customByLineup: map[string]map[string]string{},
+	}
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	plan := syncPlan{
+		Lineups: []syncLineupPlan{
+			{
+				Result: LineupSyncResult{
+					LineupID:           "USA-TEST",
+					ConfiguredChannels: 1,
+					ResolvedChannels:   1,
+					UpdatedCount:       1,
+				},
+				ChannelsForLineup: []ChannelMapping{
+					{
+						ChannelID:        1,
+						DVRLineupID:      "USA-TEST",
+						DVRLineupChannel: "2",
+						DVRStationRef:    "",
+						DVRCallsignHint:  "WCCO",
+					},
+				},
+				Patch:               map[string]string{"A100": "21234"},
+				ResolvedByChannelID: map[int64]string{1: "21234"},
+			},
+		},
+	}
+
+	applied, err := svc.applySyncPlan(context.Background(), 77, provider, plan, false)
+	if err != nil {
+		t.Fatalf("applySyncPlan() error = %v", err)
+	}
+	if got, want := len(provider.putCalls), 1; got != want {
+		t.Fatalf("len(provider.putCalls) = %d, want %d", got, want)
+	}
+	if got, want := provider.putCalls[0].lineupID, "USA-TEST"; got != want {
+		t.Fatalf("provider.putCalls[0].lineupID = %q, want %q", got, want)
+	}
+	if got, want := provider.putCalls[0].patch, map[string]string{"A100": "21234"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("provider.putCalls[0].patch = %#v, want %#v", got, want)
+	}
+	if got, want := len(store.upsertCalls), 1; got != want {
+		t.Fatalf("len(store.upsertCalls) = %d, want %d", got, want)
+	}
+	if got, want := store.upsertCalls[0].DVRInstanceID, int64(77); got != want {
+		t.Fatalf("store.upsertCalls[0].DVRInstanceID = %d, want %d", got, want)
+	}
+	if got, want := store.upsertCalls[0].DVRStationRef, "21234"; got != want {
+		t.Fatalf("store.upsertCalls[0].DVRStationRef = %q, want %q", got, want)
+	}
+	if got, want := store.upsertCalls[0].DVRLineupID, "USA-TEST"; got != want {
+		t.Fatalf("store.upsertCalls[0].DVRLineupID = %q, want %q", got, want)
+	}
+	if got, want := applied.PatchPreview, map[string]map[string]string{"USA-TEST": {"A100": "21234"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("applied.PatchPreview = %#v, want %#v", got, want)
+	}
+	if got, want := len(applied.Lineups), 1; got != want {
+		t.Fatalf("len(applied.Lineups) = %d, want %d", got, want)
+	}
+	if got, want := applied.Lineups[0].AppliedCount, 1; got != want {
+		t.Fatalf("applied.Lineups[0].AppliedCount = %d, want %d", got, want)
 	}
 }
 
@@ -706,9 +1242,7 @@ func TestServiceReverseSyncImportsMappings(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.ReverseSync(context.Background(), ReverseSyncRequest{})
 	if err != nil {
@@ -796,9 +1330,7 @@ func TestServiceReverseSyncInfersLineupWhenDefaultUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.ReverseSync(context.Background(), ReverseSyncRequest{DryRun: true})
 	if err != nil {
@@ -864,9 +1396,7 @@ func TestServiceReverseSyncChannelImportsOnlyTarget(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.ReverseSyncChannel(context.Background(), 11, ReverseSyncRequest{})
 	if err != nil {
@@ -940,9 +1470,7 @@ func TestServiceReverseSyncChannelInfersLineupWhenUnset(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.ReverseSyncChannel(context.Background(), 10, ReverseSyncRequest{DryRun: true})
 	if err != nil {
@@ -994,9 +1522,7 @@ func TestServiceReverseSyncImportsStationRefOnlyWhenLineupChannelMissing(t *test
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.ReverseSync(context.Background(), ReverseSyncRequest{})
 	if err != nil {
@@ -1058,9 +1584,7 @@ func TestServiceSyncUsesStationRefOnlyMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService() error = %v", err)
 	}
-	svc.providerBuild = func(_ InstanceConfig, _ *http.Client) (DVRProvider, error) {
-		return provider, nil
-	}
+	setServiceProvider(svc, provider)
 
 	result, err := svc.Sync(context.Background(), SyncRequest{DryRun: true})
 	if err != nil {
@@ -1212,11 +1736,226 @@ func TestServiceGetStateLastSyncReturnsDeepCopy(t *testing.T) {
 	}
 }
 
+func TestServiceBuildDeviceChannelIndex(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name                 string
+		hdhrDeviceID         string
+		deviceChannels       map[string]DVRDeviceChannel
+		wantDeviceKeys       []string
+		wantTunerToDeviceKey map[string][]string
+		wantFilteredCount    int
+		wantWarnings         []string
+	}{
+		{
+			name:                 "empty map",
+			hdhrDeviceID:         "8F07FDC6",
+			deviceChannels:       map[string]DVRDeviceChannel{},
+			wantDeviceKeys:       []string{},
+			wantTunerToDeviceKey: map[string][]string{},
+			wantFilteredCount:    0,
+			wantWarnings:         nil,
+		},
+		{
+			name:         "missing map key uses channel key fallback",
+			hdhrDeviceID: "8F07FDC6",
+			deviceChannels: map[string]DVRDeviceChannel{
+				"": {Key: "A100", DeviceID: "8F07FDC6", Number: "100"},
+			},
+			wantDeviceKeys: []string{"A100"},
+			wantTunerToDeviceKey: map[string][]string{
+				"100": {"A100"},
+			},
+			wantFilteredCount: 1,
+			wantWarnings:      nil,
+		},
+		{
+			name:         "duplicate tuner numbers emit warning",
+			hdhrDeviceID: "8F07FDC6",
+			deviceChannels: map[string]DVRDeviceChannel{
+				"A101": {Key: "A101", DeviceID: "8F07FDC6", Number: "100"},
+				"A100": {Key: "A100", DeviceID: "8F07FDC6", Number: "100"},
+			},
+			wantDeviceKeys: []string{"A100", "A101"},
+			wantTunerToDeviceKey: map[string][]string{
+				"100": {"A100", "A101"},
+			},
+			wantFilteredCount: 2,
+			wantWarnings: []string{
+				"multiple device keys for tuner 100; using A100",
+			},
+		},
+		{
+			name:         "device id filter on",
+			hdhrDeviceID: "8F07FDC6",
+			deviceChannels: map[string]DVRDeviceChannel{
+				"A100": {Key: "A100", DeviceID: "8F07FDC6", Number: "100"},
+				"A200": {Key: "A200", DeviceID: "ABCDEF01", Number: "200"},
+			},
+			wantDeviceKeys: []string{"A100"},
+			wantTunerToDeviceKey: map[string][]string{
+				"100": {"A100"},
+			},
+			wantFilteredCount: 1,
+			wantWarnings:      nil,
+		},
+		{
+			name:         "device id filter off",
+			hdhrDeviceID: "",
+			deviceChannels: map[string]DVRDeviceChannel{
+				"A100": {Key: "A100", DeviceID: "8F07FDC6", Number: "100"},
+				"A200": {Key: "A200", DeviceID: "ABCDEF01", Number: "200"},
+			},
+			wantDeviceKeys: []string{"A100", "A200"},
+			wantTunerToDeviceKey: map[string][]string{
+				"100": {"A100"},
+				"200": {"A200"},
+			},
+			wantFilteredCount: 2,
+			wantWarnings:      nil,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			svc, err := NewService(&fakeStore{}, tc.hdhrDeviceID, nil)
+			if err != nil {
+				t.Fatalf("NewService() error = %v", err)
+			}
+
+			got := svc.buildDeviceChannelIndex(tc.deviceChannels)
+			if !reflect.DeepEqual(got.DeviceKeys, tc.wantDeviceKeys) {
+				t.Fatalf("got.DeviceKeys = %#v, want %#v", got.DeviceKeys, tc.wantDeviceKeys)
+			}
+			if !reflect.DeepEqual(got.TunerToDeviceKeys, tc.wantTunerToDeviceKey) {
+				t.Fatalf("got.TunerToDeviceKeys = %#v, want %#v", got.TunerToDeviceKeys, tc.wantTunerToDeviceKey)
+			}
+			if got.FilteredCount != tc.wantFilteredCount {
+				t.Fatalf("got.FilteredCount = %d, want %d", got.FilteredCount, tc.wantFilteredCount)
+			}
+			if !reflect.DeepEqual(got.Warnings, tc.wantWarnings) {
+				t.Fatalf("got.Warnings = %#v, want %#v", got.Warnings, tc.wantWarnings)
+			}
+		})
+	}
+}
+
+func TestServiceReloadLineupForPlaylistSyncOutcomeIncludesProviderScopedSkips(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:               1,
+			Provider:         ProviderChannels,
+			ActiveProviders:  []ProviderType{ProviderChannels, ProviderJellyfin},
+			ChannelsBaseURL:  "http://channels.example.invalid:8089",
+			JellyfinBaseURL:  "http://jellyfin.example.invalid:8096",
+			JellyfinAPIToken: "",
+		},
+	}
+	channelsProvider := &fakeProvider{providerType: ProviderChannels}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.lineupProviderBuild = func(instance InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return &fakeProvider{providerType: ProviderJellyfin}, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+	svc.mappingProviderBuild = func(instance InstanceConfig, _ *http.Client) (MappingProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return &fakeProvider{providerType: ProviderJellyfin}, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+
+	if !outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want true", outcome.Reloaded)
+	}
+	if !outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want true", outcome.Skipped)
+	}
+	if got, want := outcome.Status, ReloadStatusPartial; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.SkipReasons, []string{"jellyfin:missing_jellyfin_api_token"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkipReasons = %#v, want %#v", got, want)
+	}
+	if got, want := outcome.ReloadedProviders, []ProviderType{ProviderChannels}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.ReloadedProviders = %#v, want %#v", got, want)
+	}
+	if got, want := outcome.SkippedProviders, map[ProviderType]string{ProviderJellyfin: "missing_jellyfin_api_token"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkippedProviders = %#v, want %#v", got, want)
+	}
+	if got, want := len(channelsProvider.reloadCalls), 1; got != want {
+		t.Fatalf("len(channelsProvider.reloadCalls) = %d, want %d", got, want)
+	}
+}
+
+func TestServiceReloadLineupForPlaylistSyncOutcomeSkipsWhenNoActiveProvidersConfigured(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:              1,
+			Provider:        ProviderChannels,
+			ActiveProviders: []ProviderType{ProviderChannels},
+		},
+	}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+	if outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want false", outcome.Reloaded)
+	}
+	if !outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want true", outcome.Skipped)
+	}
+	if got, want := outcome.Status, ReloadStatusSkipped; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.SkipReasons, []string{"no_active_providers"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.SkipReasons = %#v, want %#v", got, want)
+	}
+}
+
 type fakeStore struct {
 	instance      InstanceConfig
 	channels      []ChannelMapping
 	upsertCalls   []ChannelMapping
 	mappingByChan map[int64]ChannelMapping
+}
+
+type recordingFakeStore struct {
+	fakeStore
+	configUpsertCalls []InstanceConfig
 }
 
 func (s *fakeStore) GetDVRInstance(context.Context) (InstanceConfig, error) {
@@ -1225,6 +1964,11 @@ func (s *fakeStore) GetDVRInstance(context.Context) (InstanceConfig, error) {
 
 func (s *fakeStore) UpsertDVRInstance(context.Context, InstanceConfig) (InstanceConfig, error) {
 	return InstanceConfig{}, fmt.Errorf("not implemented")
+}
+
+func (s *recordingFakeStore) UpsertDVRInstance(_ context.Context, instance InstanceConfig) (InstanceConfig, error) {
+	s.configUpsertCalls = append(s.configUpsertCalls, instance)
+	return instance, nil
 }
 
 func (s *fakeStore) ListChannelsForDVRSync(_ context.Context, _ int64, _ bool, _ bool) ([]ChannelMapping, error) {

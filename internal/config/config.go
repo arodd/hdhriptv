@@ -67,6 +67,7 @@ type Config struct {
 	FFmpegStartupAnalyzeDuration         time.Duration
 	FFmpegCopyRegenerateTimestamps       bool
 	ProducerReadRate                     float64
+	ProducerReadRateCatchup              float64
 	ProducerInitialBurst                 int
 	BufferChunkBytes                     int
 	BufferFlushInterval                  time.Duration
@@ -148,6 +149,7 @@ type RedactedConfig struct {
 	FFmpegStartupAnalyzeDuration         string   `json:"ffmpeg_startup_analyzeduration"`
 	FFmpegCopyRegenerateTimestamps       bool     `json:"ffmpeg_copy_regenerate_timestamps"`
 	ProducerReadRate                     string   `json:"producer_readrate"`
+	ProducerReadRateCatchup              string   `json:"producer_readrate_catchup"`
 	ProducerInitialBurst                 int      `json:"producer_initial_burst"`
 	BufferChunkBytes                     int      `json:"buffer_chunk_bytes"`
 	BufferFlushInterval                  string   `json:"buffer_flush_interval"`
@@ -229,6 +231,7 @@ func (c Config) Redacted() RedactedConfig {
 		FFmpegStartupAnalyzeDuration:         c.FFmpegStartupAnalyzeDuration.String(),
 		FFmpegCopyRegenerateTimestamps:       c.FFmpegCopyRegenerateTimestamps,
 		ProducerReadRate:                     strconv.FormatFloat(c.ProducerReadRate, 'f', -1, 64),
+		ProducerReadRateCatchup:              strconv.FormatFloat(c.ProducerReadRateCatchup, 'f', -1, 64),
 		ProducerInitialBurst:                 c.ProducerInitialBurst,
 		BufferChunkBytes:                     c.BufferChunkBytes,
 		BufferFlushInterval:                  c.BufferFlushInterval.String(),
@@ -323,6 +326,7 @@ func Load(args []string) (Config, error) {
 		FFmpegStartupAnalyzeDuration:         getenvDuration("FFMPEG_STARTUP_ANALYZEDURATION", defaultFFmpegStartupAnalyzeDuration),
 		FFmpegCopyRegenerateTimestamps:       getenvBool("FFMPEG_COPY_REGENERATE_TIMESTAMPS", true),
 		ProducerReadRate:                     getenvFloat("PRODUCER_READRATE", 1),
+		ProducerReadRateCatchup:              getenvFloat("PRODUCER_READRATE_CATCHUP", 1),
 		ProducerInitialBurst:                 getenvInt("PRODUCER_INITIAL_BURST", 1),
 		BufferChunkBytes:                     getenvInt("BUFFER_CHUNK_BYTES", 64*1024),
 		BufferFlushInterval:                  getenvDuration("BUFFER_PUBLISH_FLUSH_INTERVAL", 100*time.Millisecond),
@@ -403,6 +407,7 @@ func Load(args []string) (Config, error) {
 	fs.DurationVar(&cfg.FFmpegStartupAnalyzeDuration, "ffmpeg-startup-analyzeduration", cfg.FFmpegStartupAnalyzeDuration, "FFmpeg input analyzeduration during startup for ffmpeg stream modes (runtime floor applies)")
 	fs.BoolVar(&cfg.FFmpegCopyRegenerateTimestamps, "ffmpeg-copy-regenerate-timestamps", cfg.FFmpegCopyRegenerateTimestamps, "Enable ffmpeg-copy timestamp regeneration using -fflags +genpts")
 	fs.Float64Var(&cfg.ProducerReadRate, "producer-readrate", cfg.ProducerReadRate, "FFmpeg producer readrate value for shared sessions")
+	fs.Float64Var(&cfg.ProducerReadRateCatchup, "producer-readrate-catchup", cfg.ProducerReadRateCatchup, "FFmpeg producer catch-up readrate value for shared sessions (-readrate_catchup)")
 	fs.IntVar(&cfg.ProducerInitialBurst, "producer-initial-burst", cfg.ProducerInitialBurst, "FFmpeg producer initial burst seconds for shared sessions")
 	fs.IntVar(&cfg.BufferChunkBytes, "buffer-chunk-bytes", cfg.BufferChunkBytes, "Shared stream chunk publish size in bytes")
 	fs.DurationVar(&cfg.BufferFlushInterval, "buffer-publish-flush-interval", cfg.BufferFlushInterval, "Shared stream chunk flush interval")
@@ -580,6 +585,12 @@ func (c *Config) normalize() error {
 	}
 	if c.ProducerReadRate <= 0 {
 		return fmt.Errorf("producer-readrate must be positive")
+	}
+	if c.ProducerReadRateCatchup <= 0 {
+		return fmt.Errorf("producer-readrate-catchup must be positive")
+	}
+	if c.ProducerReadRateCatchup < c.ProducerReadRate {
+		return fmt.Errorf("producer-readrate-catchup must be greater than or equal to producer-readrate")
 	}
 	if c.ProducerInitialBurst < 0 {
 		return fmt.Errorf("producer-initial-burst must be zero or positive")

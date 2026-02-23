@@ -101,7 +101,7 @@ CREATE TABLE IF NOT EXISTS dvr_instances (
   singleton_key            INTEGER NOT NULL DEFAULT 1,
   provider                 TEXT NOT NULL,
   active_providers         TEXT NOT NULL DEFAULT '',
-  base_url                 TEXT NOT NULL,
+  base_url                 TEXT NOT NULL DEFAULT '',
   channels_base_url        TEXT NOT NULL DEFAULT '',
   jellyfin_base_url        TEXT NOT NULL DEFAULT '',
   default_lineup_id        TEXT,

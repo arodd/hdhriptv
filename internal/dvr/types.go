@@ -75,3 +75,21 @@ type ReverseSyncResult struct {
 	MissingStationRefCount int      `json:"missing_station_ref_count"`
 	Warnings               []string `json:"warnings,omitempty"`
 }
+
+const (
+	ReloadStatusDisabled = "disabled"
+	ReloadStatusReloaded = "reloaded"
+	ReloadStatusPartial  = "partial"
+	ReloadStatusSkipped  = "skipped"
+	ReloadStatusUnknown  = "unknown"
+)
+
+// ReloadOutcome captures provider-aware DVR lineup reload state.
+type ReloadOutcome struct {
+	Reloaded          bool                    `json:"reloaded"`
+	Skipped           bool                    `json:"skipped"`
+	Status            string                  `json:"status"`
+	SkipReasons       []string                `json:"skip_reasons,omitempty"`
+	ReloadedProviders []ProviderType          `json:"reloaded_providers,omitempty"`
+	SkippedProviders  map[ProviderType]string `json:"skipped_providers,omitempty"`
+}

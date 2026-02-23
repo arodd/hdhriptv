@@ -490,6 +490,7 @@ type SessionManagerConfig struct {
 	FFmpegStartupAnalyzeDelay       time.Duration
 	FFmpegCopyRegenerateTimestamps  *bool
 	ProducerReadRate                float64
+	ProducerReadRateCatchup         float64
 	ProducerInitialBurst            int
 
 	BufferChunkBytes           int
@@ -539,6 +540,7 @@ type sessionManagerConfig struct {
 	ffmpegStartupAnalyzeDelay       time.Duration
 	ffmpegCopyRegenerateTimestamps  bool
 	producerReadRate                float64
+	producerReadRateCatchup         float64
 	producerInitialBurst            int
 
 	bufferChunkBytes  int
@@ -4995,6 +4997,7 @@ func (s *sharedRuntimeSession) startSourceReader(
 		startupTimeout,
 		s.manager.cfg.minProbe,
 		s.manager.cfg.producerReadRate,
+		s.manager.cfg.producerReadRateCatchup,
 		s.manager.cfg.producerInitialBurst,
 		s.manager.cfg.ffmpegStartupProbeSize,
 		s.manager.cfg.ffmpegStartupAnalyzeDelay,
@@ -5016,6 +5019,15 @@ func (s *sharedRuntimeSession) startSourceReader(
 			"source_url", sanitizeStreamURLForLog(streamURL),
 			"ffmpeg_path", strings.TrimSpace(s.manager.cfg.ffmpegPath),
 			"unsupported_option", ffmpegReadrateInitialBurstOption,
+		)
+	}
+	if session.startupNoReadrateCatchupFallback && s.manager != nil && s.manager.logger != nil {
+		s.manager.logger.Warn(
+			"ffmpeg startup option unsupported; continuing without producer readrate catchup",
+			"source_id", sourceID,
+			"source_url", sanitizeStreamURLForLog(streamURL),
+			"ffmpeg_path", strings.TrimSpace(s.manager.cfg.ffmpegPath),
+			"unsupported_option", ffmpegReadrateCatchupOption,
 		)
 	}
 	producer := fmt.Sprintf(
@@ -6659,14 +6671,14 @@ func (s *sharedRuntimeSession) currentRecoveryTimelinePTSOffset() time.Duration 
 		if age <= (2 * defaultSharedStallHardDeadline) {
 			pcrBase := advancePCRBase(s.recoveryObservedPCRBase, age)
 			if pcrBase > 0 {
-				return pcrBaseToDuration(pcrBase)
+				return clampRecoveryTimelinePTSOffset(pcrBaseToDuration(pcrBase))
 			}
 		}
 	} else if s.recoveryObservedPCRBase > 0 {
-		return pcrBaseToDuration(s.recoveryObservedPCRBase)
+		return clampRecoveryTimelinePTSOffset(pcrBaseToDuration(s.recoveryObservedPCRBase))
 	}
 	if s.recoveryBoundaryPCRSet && s.recoveryBoundaryPCRBase > 0 {
-		return pcrBaseToDuration(s.recoveryBoundaryPCRBase)
+		return clampRecoveryTimelinePTSOffset(pcrBaseToDuration(s.recoveryBoundaryPCRBase))
 	}
 	return 0
 }
@@ -7776,6 +7788,13 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 	if producerReadRate <= 0 {
 		producerReadRate = defaultProducerReadRate
 	}
+	producerReadRateCatchup := cfg.ProducerReadRateCatchup
+	if producerReadRateCatchup <= 0 {
+		producerReadRateCatchup = producerReadRate
+	}
+	if producerReadRateCatchup < producerReadRate {
+		producerReadRateCatchup = producerReadRate
+	}
 
 	producerInitialBurst := cfg.ProducerInitialBurst
 	if producerInitialBurst <= 0 {
@@ -7953,6 +7972,7 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 		ffmpegStartupAnalyzeDelay:       ffmpegStartupAnalyzeDelay,
 		ffmpegCopyRegenerateTimestamps:  ffmpegCopyRegenerateTimestamps,
 		producerReadRate:                producerReadRate,
+		producerReadRateCatchup:         producerReadRateCatchup,
 		producerInitialBurst:            producerInitialBurst,
 		bufferChunkBytes:                bufferChunkBytes,
 		bufferFlushPeriod:               bufferFlushPeriod,
@@ -8172,7 +8192,20 @@ func mpegTSWithDiscontinuityIndicator(chunk []byte) []byte {
 const (
 	mpegTSPCRClockHz  = 90000
 	mpegTSPCRBaseMask = (1 << 33) - 1
+	// Keep ffmpeg timeline rebasing bounded well below the 33-bit PCR wrap
+	// window (~26.5h) to avoid pathological near-wrap offsets.
+	maxRecoveryTimelinePTSOffset = 12 * time.Hour
 )
+
+func clampRecoveryTimelinePTSOffset(offset time.Duration) time.Duration {
+	if offset <= 0 {
+		return 0
+	}
+	if offset > maxRecoveryTimelinePTSOffset {
+		return maxRecoveryTimelinePTSOffset
+	}
+	return offset
+}
 
 func pcrBaseToDuration(base uint64) time.Duration {
 	if base == 0 {

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/arodd/hdhriptv/internal/dvr"
 	"github.com/arodd/hdhriptv/internal/reconcile"
 )
 
@@ -61,34 +62,24 @@ func (f *fakeReconciler) Reconcile(_ context.Context, onProgress func(cur, max i
 }
 
 type fakeLineupReloader struct {
-	calls int
-	err   error
-}
-
-func (f *fakeLineupReloader) ReloadLineup(context.Context) error {
-	f.calls++
-	return f.err
-}
-
-type fakeLineupReloaderWithStatus struct {
 	calls      int
 	err        error
-	reloaded   bool
-	skipped    bool
-	skipReason string
+	outcome    dvr.ReloadOutcome
+	hasOutcome bool
 }
 
-func (f *fakeLineupReloaderWithStatus) ReloadLineup(context.Context) error {
-	f.calls++
-	return f.err
-}
-
-func (f *fakeLineupReloaderWithStatus) ReloadLineupForPlaylistSync(context.Context) (bool, bool, string, error) {
+func (f *fakeLineupReloader) ReloadLineupForPlaylistSyncOutcome(context.Context) (dvr.ReloadOutcome, error) {
 	f.calls++
 	if f.err != nil {
-		return false, false, "", f.err
+		return dvr.ReloadOutcome{}, f.err
 	}
-	return f.reloaded, f.skipped, f.skipReason, nil
+	if !f.hasOutcome {
+		return dvr.ReloadOutcome{
+			Reloaded: true,
+			Status:   dvr.ReloadStatusReloaded,
+		}, nil
+	}
+	return f.outcome, nil
 }
 
 func TestPlaylistSyncJobRunSuccess(t *testing.T) {
@@ -239,10 +230,14 @@ func TestPlaylistSyncJobRunSkipsDVRLineupReloadWhenReloaderReportsSkipped(t *tes
 	if err != nil {
 		t.Fatalf("NewPlaylistSyncJob() error = %v", err)
 	}
-	reloader := &fakeLineupReloaderWithStatus{
-		reloaded:   false,
-		skipped:    true,
-		skipReason: "missing_jellyfin_api_token",
+	reloader := &fakeLineupReloader{
+		hasOutcome: true,
+		outcome: dvr.ReloadOutcome{
+			Reloaded:    false,
+			Skipped:     true,
+			Status:      dvr.ReloadStatusSkipped,
+			SkipReasons: []string{"missing_jellyfin_api_token"},
+		},
 	}
 	job.SetPostSyncLineupReloader(reloader)
 
@@ -286,10 +281,14 @@ func TestPlaylistSyncJobRunMarksPartialDVRLineupReloadStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewPlaylistSyncJob() error = %v", err)
 	}
-	reloader := &fakeLineupReloaderWithStatus{
-		reloaded:   true,
-		skipped:    true,
-		skipReason: "jellyfin:missing_jellyfin_api_token",
+	reloader := &fakeLineupReloader{
+		hasOutcome: true,
+		outcome: dvr.ReloadOutcome{
+			Reloaded:    true,
+			Skipped:     true,
+			Status:      dvr.ReloadStatusPartial,
+			SkipReasons: []string{"jellyfin:missing_jellyfin_api_token"},
+		},
 	}
 	job.SetPostSyncLineupReloader(reloader)
 
@@ -313,6 +312,117 @@ func TestPlaylistSyncJobRunMarksPartialDVRLineupReloadStatus(t *testing.T) {
 	}
 	if !strings.Contains(run.Summary, "dvr_lineup_reload_skip_reason=jellyfin:missing_jellyfin_api_token") {
 		t.Fatalf("run summary = %q, expected jellyfin skip reason", run.Summary)
+	}
+}
+
+func TestPlaylistSyncJobRunUsesTypedDVRLineupReloadOutcome(t *testing.T) {
+	store := newMemoryStore()
+	runner, err := NewRunner(store)
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	settings := &fakePlaylistSettings{value: "http://example.com/playlist.m3u"}
+	refresher := &fakeRefresher{count: 11}
+	reconciler := &fakeReconciler{
+		count:  1,
+		result: reconcile.Result{ChannelsTotal: 1, ChannelsProcessed: 1},
+	}
+	job, err := NewPlaylistSyncJob(settings, refresher, reconciler)
+	if err != nil {
+		t.Fatalf("NewPlaylistSyncJob() error = %v", err)
+	}
+	reloader := &fakeLineupReloader{
+		hasOutcome: true,
+		outcome: dvr.ReloadOutcome{
+			Reloaded:    true,
+			Skipped:     true,
+			Status:      dvr.ReloadStatusPartial,
+			SkipReasons: []string{"jellyfin:missing_jellyfin_api_token", "channels:missing_channels_base_url"},
+		},
+	}
+	job.SetPostSyncLineupReloader(reloader)
+
+	runID, err := runner.Start(context.Background(), JobPlaylistSync, TriggerManual, job.Run)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+
+	run := waitForRunDone(t, runner, runID)
+	if run.Status != StatusSuccess {
+		t.Fatalf("run status = %q, want %q", run.Status, StatusSuccess)
+	}
+	if reloader.calls != 1 {
+		t.Fatalf("reloader.calls = %d, want 1", reloader.calls)
+	}
+	if !strings.Contains(run.Summary, "dvr_lineup_reloaded=true") {
+		t.Fatalf("run summary = %q, expected dvr_lineup_reloaded=true", run.Summary)
+	}
+	if !strings.Contains(run.Summary, "dvr_lineup_reload_status=partial") {
+		t.Fatalf("run summary = %q, expected dvr_lineup_reload_status=partial", run.Summary)
+	}
+	if !strings.Contains(run.Summary, "dvr_lineup_reload_skip_reason=jellyfin:missing_jellyfin_api_token,channels:missing_channels_base_url") {
+		t.Fatalf("run summary = %q, expected joined skip reasons", run.Summary)
+	}
+}
+
+func TestNormalizeReloadOutcomeForSummaryDefaultsStatusAndSkipReason(t *testing.T) {
+	t.Parallel()
+
+	outcome := dvr.ReloadOutcome{
+		Reloaded:    false,
+		Skipped:     true,
+		SkipReasons: []string{"  missing_jellyfin_api_token  "},
+	}
+	reloaded, status, skipReason := normalizeReloadOutcomeForSummary(outcome)
+	if reloaded {
+		t.Fatalf("reloaded = %v, want false", reloaded)
+	}
+	if got, want := status, dvr.ReloadStatusSkipped; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := skipReason, "missing_jellyfin_api_token"; got != want {
+		t.Fatalf("skipReason = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeReloadOutcomeForSummaryNormalizesKnownStatus(t *testing.T) {
+	t.Parallel()
+
+	outcome := dvr.ReloadOutcome{
+		Reloaded:    true,
+		Skipped:     true,
+		Status:      "  PARTIAL  ",
+		SkipReasons: []string{"  channels:missing_channels_base_url  "},
+	}
+	reloaded, status, skipReason := normalizeReloadOutcomeForSummary(outcome)
+	if !reloaded {
+		t.Fatalf("reloaded = %v, want true", reloaded)
+	}
+	if got, want := status, dvr.ReloadStatusPartial; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := skipReason, "channels:missing_channels_base_url"; got != want {
+		t.Fatalf("skipReason = %q, want %q", got, want)
+	}
+}
+
+func TestNormalizeReloadOutcomeForSummaryFallsBackForUnknownStatus(t *testing.T) {
+	t.Parallel()
+
+	outcome := dvr.ReloadOutcome{
+		Reloaded: true,
+		Status:   "not_a_real_status",
+	}
+	reloaded, status, skipReason := normalizeReloadOutcomeForSummary(outcome)
+	if !reloaded {
+		t.Fatalf("reloaded = %v, want true", reloaded)
+	}
+	if got, want := status, dvr.ReloadStatusReloaded; got != want {
+		t.Fatalf("status = %q, want %q", got, want)
+	}
+	if got, want := skipReason, "none"; got != want {
+		t.Fatalf("skipReason = %q, want %q", got, want)
 	}
 }
 

@@ -350,9 +350,6 @@ func recoveryFillerPTSOffsetExpression(offset time.Duration) string {
 		return ""
 	}
 	offsetUS := offset.Microseconds()
-	if offsetUS <= 0 {
-		return ""
-	}
 	return "PTS+" + strconv.FormatInt(offsetUS, 10) + "/1000000/TB"
 }
 

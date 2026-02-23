@@ -1537,7 +1537,7 @@ func (s *Store) ensureDVRSchema(ctx context.Context) error {
 		  singleton_key            INTEGER NOT NULL DEFAULT 1,
 		  provider                 TEXT NOT NULL,
 		  active_providers         TEXT NOT NULL DEFAULT '',
-		  base_url                 TEXT NOT NULL,
+		  base_url                 TEXT NOT NULL DEFAULT '',
 		  channels_base_url        TEXT NOT NULL DEFAULT '',
 		  jellyfin_base_url        TEXT NOT NULL DEFAULT '',
 		  default_lineup_id        TEXT,
@@ -1561,7 +1561,7 @@ func (s *Store) ensureDVRSchema(ctx context.Context) error {
 	if err := s.addColumnIfMissing(ctx, "dvr_instances", "singleton_key", `ALTER TABLE dvr_instances ADD COLUMN singleton_key INTEGER NOT NULL DEFAULT 1`); err != nil {
 		return err
 	}
-	if err := s.addColumnIfMissing(ctx, "dvr_instances", "base_url", `ALTER TABLE dvr_instances ADD COLUMN base_url TEXT NOT NULL DEFAULT 'http://channels.lan:8089'`); err != nil {
+	if err := s.addColumnIfMissing(ctx, "dvr_instances", "base_url", `ALTER TABLE dvr_instances ADD COLUMN base_url TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
 	if err := s.addColumnIfMissing(ctx, "dvr_instances", "channels_base_url", `ALTER TABLE dvr_instances ADD COLUMN channels_base_url TEXT NOT NULL DEFAULT ''`); err != nil {
@@ -1602,13 +1602,13 @@ func (s *Store) ensureDVRSchema(ctx context.Context) error {
 			ELSE 'channels'
 		END,
 		    active_providers = CASE
-			WHEN TRIM(COALESCE(active_providers, '')) = '' THEN LOWER(TRIM(COALESCE(provider, 'channels')))
+			WHEN TRIM(COALESCE(active_providers, '')) = '' THEN ''
 			ELSE TRIM(COALESCE(active_providers, ''))
 		END,
 		    channels_base_url = CASE
 			WHEN TRIM(COALESCE(channels_base_url, '')) <> '' THEN TRIM(channels_base_url)
 			WHEN LOWER(TRIM(COALESCE(provider, ''))) = 'channels' AND TRIM(COALESCE(base_url, '')) <> '' THEN TRIM(base_url)
-			ELSE 'http://channels.lan:8089'
+			ELSE ''
 		END,
 		    jellyfin_base_url = CASE
 			WHEN TRIM(COALESCE(jellyfin_base_url, '')) <> '' THEN TRIM(jellyfin_base_url)
@@ -1616,8 +1616,10 @@ func (s *Store) ensureDVRSchema(ctx context.Context) error {
 			ELSE ''
 		END,
 		    base_url = CASE
-			WHEN TRIM(COALESCE(base_url, '')) = '' THEN 'http://channels.lan:8089'
-			ELSE TRIM(base_url)
+			WHEN TRIM(COALESCE(base_url, '')) <> '' THEN TRIM(base_url)
+			WHEN LOWER(TRIM(COALESCE(provider, ''))) = 'channels' THEN TRIM(COALESCE(channels_base_url, ''))
+			WHEN LOWER(TRIM(COALESCE(provider, ''))) = 'jellyfin' THEN TRIM(COALESCE(jellyfin_base_url, ''))
+			ELSE ''
 		END,
 		    default_lineup_id = TRIM(COALESCE(default_lineup_id, '')),
 		    sync_enabled = COALESCE(sync_enabled, 0),
@@ -1674,6 +1676,9 @@ func (s *Store) ensureDVRSchema(ctx context.Context) error {
 		  ON dvr_instances(singleton_key)
 	`); err != nil {
 		return fmt.Errorf("create idx_dvr_instances_singleton_key: %w", err)
+	}
+	if err := s.ensureDVRInstanceSingleton(ctx); err != nil {
+		return err
 	}
 	if _, err := s.db.ExecContext(ctx, `
 		CREATE INDEX IF NOT EXISTS idx_channel_dvr_map_instance_lineup

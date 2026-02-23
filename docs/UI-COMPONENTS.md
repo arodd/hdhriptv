@@ -230,15 +230,13 @@ Route registration happens in `admin_routes.go:259-274`.
    - Each card has: label, value, severity badge (ok/warn/danger), and help tooltip
    - Card border/background changes based on severity (`severity-ok`, `severity-warn`, `severity-danger` CSS classes)
 
-3. **Active Sessions** (8/12 grid) — Table with columns: Tuner, State (with colored tags), Channel, Source, Throughput, Subscribers, Last Push, Actions (Trigger Recovery button). Rows are selectable — clicking a row populates the "Selected Active Session" detail aside.
+3. **Active Sessions** (full-width) — Table with columns: Tuner, State (with colored tags), Channel, Source, Throughput, Subscribers, Last Push, Actions (Trigger Recovery button). Rows are selectable — clicking a row populates the "Selected Active Session" detail aside.
 
-4. **Alerts / Health Rail** (4/12 grid aside) — List of alert items with warn/danger severity styling.
+4. **Client Streams** (8/12 grid) — Grouped by session using collapsible `<details>` elements. Each group shows subscriber count and a table of client connections.
 
-5. **Client Streams** (8/12 grid) — Grouped by session using collapsible `<details>` elements. Each group shows subscriber count and a table of client connections.
+5. **Selected Active Session** (4/12 grid aside) — Detail card grid showing full metrics for the clicked session row.
 
-6. **Selected Active Session** (4/12 grid aside) — Detail card grid showing full metrics for the clicked session row.
-
-7. **Shared Session History** (full-width) — Master-detail layout:
+6. **Shared Session History** (full-width) — Master-detail layout:
    - Left pane: Filterable/searchable list of historical sessions with status/errors/recovery filters. Each item shows channel, source, status tag, timestamps, and terminal reason.
    - Right pane: Tabbed detail view (Summary/Sources/Clients/Alerts tabs) for the selected history entry with full session lifecycle data.
 
@@ -263,11 +261,17 @@ Route registration happens in `admin_routes.go:259-274`.
 **Sections:**
 
 1. **DVR Connection** — Form grid with:
-   - Primary provider selector (Channels DVR / Jellyfin Live TV)
+   - Primary provider selector (Channels DVR only; sync/mapping provider)
    - Active providers for post-sync reload (checkboxes)
    - Channels DVR base URL, Jellyfin base URL, HDHR Device ID (read-only), Default Lineup ID
    - Jellyfin-specific panel: API token (write-only password field), tuner host ID override, token status display
    - Save Configuration / Test Connection buttons
+
+   Migration note:
+   The `Channels DVR` active-provider checkbox is URL-gated by backend
+   normalization. If `channels_base_url` is blank/invalid, save/reload drops
+   `channels` from `active_providers`; set a valid Channels base URL first when
+   enabling post-sync reload fan-out.
 
 2. **Lineups** — Lineup discovery: select dropdown for discovered lineups, Discover Lineups / Use Selected as Default buttons.
 

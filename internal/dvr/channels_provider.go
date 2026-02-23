@@ -15,7 +15,8 @@ import (
 	"time"
 )
 
-// ChannelsProvider implements DVRProvider against Channels DVR server APIs.
+// ChannelsProvider implements LineupReloadProvider and MappingProvider against
+// Channels DVR server APIs.
 type ChannelsProvider struct {
 	baseURL string
 	client  *http.Client
@@ -23,9 +24,6 @@ type ChannelsProvider struct {
 
 func NewChannelsProvider(baseURL string, client *http.Client) *ChannelsProvider {
 	baseURL = strings.TrimSpace(baseURL)
-	if baseURL == "" {
-		baseURL = defaultChannelsBaseURL
-	}
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	if client == nil {
 		client = &http.Client{Timeout: 10 * time.Second}

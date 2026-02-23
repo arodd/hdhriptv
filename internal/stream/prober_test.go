@@ -762,6 +762,43 @@ func TestBackgroundProberCopyTimestampRegenerationDefaultsAndOverride(t *testing
 	}
 }
 
+func TestBackgroundProberNormalizesProducerReadRateCatchup(t *testing.T) {
+	prober := NewBackgroundProber(ProberConfig{
+		Mode:                    "ffmpeg-copy",
+		ProducerReadRate:        1.25,
+		ProducerReadRateCatchup: 2.0,
+		MinProbeBytes:           1,
+		ProbeTimeout:            time.Second,
+	}, &fakeProbeProvider{})
+	t.Cleanup(func() {
+		prober.Close()
+	})
+	if prober.readRate != 1.25 {
+		t.Fatalf("readRate = %v, want 1.25", prober.readRate)
+	}
+	if prober.readRateCatchup != 2.0 {
+		t.Fatalf("readRateCatchup = %v, want 2.0", prober.readRateCatchup)
+	}
+
+	clamped := NewBackgroundProber(ProberConfig{
+		Mode:                    "ffmpeg-copy",
+		ProducerReadRate:        1.5,
+		ProducerReadRateCatchup: 1.25,
+		MinProbeBytes:           1,
+		ProbeTimeout:            time.Second,
+	}, &fakeProbeProvider{})
+	t.Cleanup(func() {
+		clamped.Close()
+	})
+	if clamped.readRateCatchup != clamped.readRate {
+		t.Fatalf(
+			"readRateCatchup = %v, want clamp to readRate %v",
+			clamped.readRateCatchup,
+			clamped.readRate,
+		)
+	}
+}
+
 func TestBackgroundProberCloseWaitsForQueuedSessionDrain(t *testing.T) {
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:          "direct",

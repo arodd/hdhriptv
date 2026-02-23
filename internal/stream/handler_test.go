@@ -892,7 +892,7 @@ func TestHandlerTuneBackoffRejectsRepeatedStartupFailuresPerChannel(t *testing.T
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 		},
-		NewPool(1),
+		NewPool(2),
 		&fakeChannelsProvider{
 			channelsByGuide: map[string]channels.Channel{
 				"101": {ChannelID: 1, GuideNumber: "101", GuideName: "Flaky", Enabled: true},
@@ -950,6 +950,13 @@ func TestHandlerTuneBackoffRejectsRepeatedStartupFailuresPerChannel(t *testing.T
 		t.Fatalf("second body = %q, want channel tune backoff message", body)
 	}
 
+	// The first failing startup may still be draining async teardown even after the
+	// HTTP response returns. Wait for session/tuner release so this assertion
+	// isolates tune-backoff scope behavior rather than transient tuner contention.
+	waitFor(t, time.Second, func() bool {
+		return !handler.sessions.HasActiveOrPendingSession(1)
+	})
+
 	thirdCtx, thirdCancel := context.WithTimeout(context.Background(), 220*time.Millisecond)
 	defer thirdCancel()
 	thirdReq := httptest.NewRequest(http.MethodGet, "http://example.local/auto/v102", nil).WithContext(thirdCtx)
@@ -957,7 +964,13 @@ func TestHandlerTuneBackoffRejectsRepeatedStartupFailuresPerChannel(t *testing.T
 	third := newDeadlineResponseRecorder()
 	mux.ServeHTTP(third, thirdReq)
 	if third.Code != http.StatusOK {
-		t.Fatalf("third status = %d, want %d (unrelated channel should not be backoff-blocked)", third.Code, http.StatusOK)
+		t.Fatalf(
+			"third status = %d, want %d (unrelated channel should not be backoff-blocked): body=%q retry_after=%q",
+			third.Code,
+			http.StatusOK,
+			third.Body.String(),
+			strings.TrimSpace(third.Header().Get("Retry-After")),
+		)
 	}
 
 	text := logs.String()
@@ -2235,12 +2248,19 @@ func TestFFmpegArgs(t *testing.T) {
 	if !ok || copyReadRateValue != "1" {
 		t.Fatalf("ffmpeg-copy args missing -readrate 1: %#v", copyArgs)
 	}
+	copyReadRateCatchupIndex, copyReadRateCatchupValue, ok := findArg(copyArgs, ffmpegReadrateCatchupOption)
+	if !ok || copyReadRateCatchupValue != "1" {
+		t.Fatalf("ffmpeg-copy args missing %s 1: %#v", ffmpegReadrateCatchupOption, copyArgs)
+	}
 	copyInputIndex, _, ok := findArg(copyArgs, "-i")
 	if !ok {
 		t.Fatalf("ffmpeg-copy args missing -i: %#v", copyArgs)
 	}
 	if copyReadRateIndex > copyInputIndex {
 		t.Fatalf("ffmpeg-copy args place -readrate after -i: %#v", copyArgs)
+	}
+	if copyReadRateCatchupIndex > copyInputIndex {
+		t.Fatalf("ffmpeg-copy args place %s after -i: %#v", ffmpegReadrateCatchupOption, copyArgs)
 	}
 	copyProbeSizeIndex, copyProbeSizeValue, ok := findArg(copyArgs, "-probesize")
 	if !ok || copyProbeSizeValue != "128000" {
@@ -2361,9 +2381,16 @@ func TestFFmpegArgs(t *testing.T) {
 	if !ok || transcodeReadRateValue != "1" {
 		t.Fatalf("ffmpeg-transcode args missing -readrate 1: %#v", transcodeArgs)
 	}
+	transcodeReadRateCatchupIndex, transcodeReadRateCatchupValue, ok := findArg(transcodeArgs, ffmpegReadrateCatchupOption)
+	if !ok || transcodeReadRateCatchupValue != "1" {
+		t.Fatalf("ffmpeg-transcode args missing %s 1: %#v", ffmpegReadrateCatchupOption, transcodeArgs)
+	}
 	transcodeInputIndex, _, ok := findArg(transcodeArgs, "-i")
 	if !ok {
 		t.Fatalf("ffmpeg-transcode args missing -i: %#v", transcodeArgs)
+	}
+	if transcodeReadRateCatchupIndex > transcodeInputIndex {
+		t.Fatalf("ffmpeg-transcode args place %s after -i: %#v", ffmpegReadrateCatchupOption, transcodeArgs)
 	}
 	transcodeReconnectIndex, transcodeReconnectValue, ok := findArg(transcodeArgs, "-reconnect")
 	if !ok || transcodeReconnectValue != "1" {

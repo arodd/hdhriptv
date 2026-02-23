@@ -94,6 +94,21 @@ func (h *AdminHandler) handlePutDVR(w http.ResponseWriter, r *http.Request) {
 		next.JellyfinTunerHostID = strings.TrimSpace(*req.JellyfinTunerHostID)
 	}
 
+	normalizedPrimaryProvider := dvr.NormalizeProviderType(next.Provider)
+	if normalizedPrimaryProvider != dvr.ProviderChannels {
+		http.Error(
+			w,
+			fmt.Sprintf(
+				`invalid primary provider %q: only %q is supported for sync/mapping`,
+				strings.TrimSpace(string(next.Provider)),
+				dvr.ProviderChannels,
+			),
+			http.StatusBadRequest,
+		)
+		return
+	}
+	next.Provider = normalizedPrimaryProvider
+
 	// Fail fast on invalid cron before persisting config to avoid partial updates
 	// where the request errors but DVR config has already been mutated.
 	if h.dvrScheduler != nil && next.SyncEnabled {

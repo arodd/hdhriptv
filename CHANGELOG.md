@@ -1,3 +1,42 @@
+- 2026-02-23 [feature] Tuned full-width Active Sessions table sizing so Source gets more horizontal room while compact columns (Subs, Last Push, Actions) use tighter fixed widths.
+- 2026-02-23 [feature] Simplified the Tuners dashboard by removing the redundant Alerts/Health rail and expanding the Active Sessions panel to full width.
+- 2026-02-23 [bug] Hardened `/api/admin/dvr` to reject non-`channels` primary providers server-side while keeping Jellyfin available for post-sync reload fan-out configuration.
+- 2026-02-23 [bug] DVR UI now limits primary sync/mapping provider selection to Channels DVR while keeping Jellyfin available in active-provider post-sync reload options.
+- 2026-02-23 [bug] Ensured DVR `UpdateConfig` validates through configured lineup/mapping provider factory hooks before persisting config, preserving fail-fast ordering and factory override semantics.
+- 2026-02-23 [docs] Revalidated DVR cleanup refactor on the current baseline and closed the prior race-suite environment gap by installing CGO toolchain dependencies before rerunning race/full regression tests.
+- 2026-02-23 [feature] Removed legacy playlist-sync DVR lineup reload fallback wiring and standardized post-sync reload hooks on typed `ReloadLineupForPlaylistSyncOutcome`/`ReloadOutcome` semantics.
+- 2026-02-23 [bug] Bounded recovery timeline rebase offsets to 12h to avoid pathological near-PCR-wrap `-output_ts_offset` values, with focused shared-session clamp regression coverage.
+- 2026-02-23 [bug] Added negative `slate_av` filler PTS-offset clamp regression coverage and simplified redundant recovery filler offset-expression guard logic.
+- 2026-02-23 [docs] Clarified recovery timeline PTS-offset test expectations by asserting boundary-PCR advancement semantics before slate keepalive filler startup.
+- 2026-02-23 [bug] Optimized HDHR lineup handling by skipping unused source-codec lookups for `lineup.json`/`lineup.m3u` and short-circuiting `show=demo` before lineup construction.
+- 2026-02-23 [docs] Expanded OPERATIONS FFmpeg readrate tuning guidance with concrete `PRODUCER_READRATE`/`PRODUCER_READRATE_CATCHUP`/`PRODUCER_INITIAL_BURST` recommendations and interaction notes.
+- 2026-02-23 [bug] Removed runtime silent `readrate_catchup` clamp-to-base behavior so stream arg building stays consistent with strict config validation.
+- 2026-02-23 [docs] Added DVR migration notes explaining that Channels active-provider selection is URL-gated and will not persist without a valid `channels_base_url`.
+- 2026-02-23 [docs] Expanded the GitHub release runbook with container registry/tag configuration guidance, pinned `BINFMT_IMAGE` input documentation, and updated tag-before-image lifecycle/recovery notes.
+- 2026-02-23 [bug] Hardened `release-github-sync-tag` by requiring a pinned `BINFMT_IMAGE` reference and pushing internal/public release tags before container publish.
+- 2026-02-23 [docs] Clarified duplicate-close suppression test timeout intent and switched in-flight assertions to a helper to avoid direct map/mutex coupling in stream tests.
+- 2026-02-23 [bug] Tightened DVR legacy placeholder cleanup so explicit `channels.lan:8089` configs are preserved while untouched default sentinel rows are still normalized away.
+- 2026-02-23 [bug] Unified DVR provider URL-configuration gating by filtering unconfigured Jellyfin from active providers during normalization, with playlist-sync reload skip regression coverage.
+- 2026-02-23 [bug] Removed a redundant dead assignment in DVR update-payload normalization (`NormalizeInstanceConfig`) to simplify config-path coherence.
+- 2026-02-23 [bug] Added mapping-provider validation in DVR `UpdateConfig` preflight and removed redundant double normalization on DVR singleton read-back.
+- 2026-02-23 [docs] Stabilized `TestCloseWithTimeoutConcurrentDuplicateCallsCloseOnce` by validating duplicate-close behavior via local closer lifecycle signals instead of exact global close-timeout counters.
+- 2026-02-23 [bug] Normalized playlist-sync DVR reload status tokens to canonical values and added fallback handling/tests for unknown typed-outcome statuses.
+- 2026-02-23 [bug] Aligned DVR playlist-sync reload skip-reason URL validation with canonical provider base-URL normalization and added focused regression coverage.
+- 2026-02-23 [docs] Hardened intermittent `internal/stream` test determinism for full-suite runs by isolating tune-backoff capacity assertions and using local close-timeout dedupe/worker-bounds assertions.
+- 2026-02-23 [feature] Removed the temporary DVR provider compatibility shim (`DVRProvider` union, `newProvider`, and service `providerBuild` fallback) and standardized capability-specific factory wiring.
+- 2026-02-23 [feature] Split DVR provider contracts into lineup-reload and mapping capabilities with capability-specific factories, preventing Jellyfin from entering mapping sync/reverse-sync/test paths.
+- 2026-02-23 [feature] Centralized DVR config normalization across service/provider/store and moved DVR singleton initialization to startup so `GetDVRInstance` is read-only.
+- 2026-02-23 [feature] Refactored DVR forward sync into explicit `buildSyncPlan` and `applySyncPlan` stages with new unit coverage for planning and dry-run/apply behaviors.
+- 2026-02-23 [feature] Removed legacy tuple-based DVR playlist-sync lineup reload adapters and standardized post-sync reload handling on typed `ReloadOutcome` semantics.
+- 2026-02-23 [feature] Refactored DVR playlist-sync lineup reload reporting to a typed `ReloadOutcome` contract and centralized shared device-channel indexing across DVR sync/test/reverse-sync paths.
+- 2026-02-23 [feature] `make release-github-sync-tag` now builds and pushes multi-arch container images to `arodd/hdhriptv:<RELEASE_TAG>` and `arodd/hdhriptv:latest` during release publishing.
+- 2026-02-23 [bug] Fixed `/ui/tuners` shared-session history row rendering artifacts by using explicit listbox option rows and clipping row overflow.
+- 2026-02-22 [bug] DVR active-provider normalization now excludes `channels` until a valid Channels base URL is configured, and post-sync reload reports `no_active_providers` when nothing is configured.
+- 2026-02-22 [bug] Default DVR config now leaves `channels_base_url` unset and post-playlist-sync reload skips Channels provider work until a valid Channels URL is configured.
+- 2026-02-22 [docs] Added OPERATIONS tuning guidance for ffmpeg source pacing (`PRODUCER_READRATE` / `PRODUCER_READRATE_CATCHUP`) with practical starting ranges and escalation notes.
+- 2026-02-22 [bug] Added configurable ffmpeg source catch-up pacing (`--producer-readrate-catchup` / `-readrate_catchup`) with startup fallback for ffmpeg builds that do not support `-readrate_catchup`.
+- 2026-02-22 [feature] `make release-github-sync-tag` now auto-generates pretty GitHub release notes from `CHANGELOG.md` entries since the previous release tag (with optional notes preface support).
+- 2026-02-22 [feature] Updated `make release-github-sync-tag` to default public mirror squash commits to `public(main): release <tag>` (unless `PUBLISH_GITHUB_COMMIT_MESSAGE` override is set).
 - 2026-02-22 [feature] Expanded `make release-github-sync-tag` artifacts to include `darwin` (`amd64`/`arm64`) binaries in GitHub releases with checksum coverage.
 - 2026-02-22 [feature] Added `make release-github-sync-tag` to build release binaries once, push matching release tags to internal/public remotes, and publish binaries on GitHub releases (without creating a GitLab release).
 - 2026-02-20 [docs] Documented recovery continuity handoff (`live -> slate_av -> live`), mode/filler continuity tradeoffs, and strict validation harness guidance in `docs/RECOVERY.md`.

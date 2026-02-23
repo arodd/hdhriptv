@@ -746,6 +746,9 @@ func TestLoadFailoverSettings(t *testing.T) {
 	if cfg.ProducerReadRate != 1 {
 		t.Fatalf("ProducerReadRate = %v, want 1", cfg.ProducerReadRate)
 	}
+	if cfg.ProducerReadRateCatchup != 1 {
+		t.Fatalf("ProducerReadRateCatchup = %v, want 1", cfg.ProducerReadRateCatchup)
+	}
 	if cfg.BufferChunkBytes != 64*1024 {
 		t.Fatalf("BufferChunkBytes = %d, want 65536", cfg.BufferChunkBytes)
 	}
@@ -1042,6 +1045,7 @@ func TestLoadSharedSessionSettings(t *testing.T) {
 		"--device-id=1234ABCD",
 		"--device-auth=test-token",
 		"--producer-readrate=1.25",
+		"--producer-readrate-catchup=1.75",
 		"--producer-initial-burst=2",
 		"--startup-random-access-recovery-only=true",
 		"--buffer-chunk-bytes=32768",
@@ -1077,6 +1081,9 @@ func TestLoadSharedSessionSettings(t *testing.T) {
 
 	if cfg.ProducerReadRate != 1.25 {
 		t.Fatalf("ProducerReadRate = %v, want 1.25", cfg.ProducerReadRate)
+	}
+	if cfg.ProducerReadRateCatchup != 1.75 {
+		t.Fatalf("ProducerReadRateCatchup = %v, want 1.75", cfg.ProducerReadRateCatchup)
 	}
 	if cfg.ProducerInitialBurst != 2 {
 		t.Fatalf("ProducerInitialBurst = %d, want 2", cfg.ProducerInitialBurst)
@@ -1363,6 +1370,25 @@ func TestLoadRejectsInvalidSharedSessionSettings(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for ffmpeg-reconnect-max-retries below -1")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--producer-readrate-catchup=0",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-positive producer-readrate-catchup")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--producer-readrate=1.5",
+		"--producer-readrate-catchup=1.25",
+	})
+	if err == nil {
+		t.Fatal("expected error when producer-readrate-catchup is below producer-readrate")
 	}
 
 	_, err = Load([]string{

@@ -66,6 +66,7 @@ as env-only or internal-only. Flag values override environment variables.
 | `--ffmpeg-startup-analyzeduration` | `FFMPEG_STARTUP_ANALYZEDURATION` | `1.5s` | No | FFmpeg input `-analyzeduration` used during startup stream detection in ffmpeg modes. Values below `1s` are normalized up to this floor to avoid startup stream-detection regressions. |
 | `--ffmpeg-copy-regenerate-timestamps` | `FFMPEG_COPY_REGENERATE_TIMESTAMPS` | `true` | No | Enables ffmpeg-copy timestamp regeneration (`-fflags +genpts`) to smooth sources with missing/non-monotonic timestamps. |
 | `--producer-readrate` | `PRODUCER_READRATE` | `1` | No | FFmpeg producer pacing (`-readrate`). Shared sessions use this before buffering. |
+| `--producer-readrate-catchup` | `PRODUCER_READRATE_CATCHUP` | `1` | No | FFmpeg producer catch-up pacing (`-readrate_catchup`) used when input falls behind realtime. Must be greater than or equal to `--producer-readrate`. |
 | `--producer-initial-burst` | `PRODUCER_INITIAL_BURST` | `1` | No | FFmpeg producer initial burst seconds (`-readrate_initial_burst`). |
 
 ## Shared Session Buffering

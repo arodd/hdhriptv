@@ -193,6 +193,42 @@ func TestSlateAVFillerProducerArgsApplyPTSOffsetToVideoAndAudio(t *testing.T) {
 	assertArgContains(t, args, "asetpts=PTS+1500000/1000000/TB")
 }
 
+func TestSlateAVFillerProducerNegativePTSOffsetClampsToZero(t *testing.T) {
+	producer, err := newSlateAVFillerProducer(slateAVFillerConfig{
+		FFmpegPath: "ffmpeg",
+		Profile: streamProfile{
+			Width:           1280,
+			Height:          720,
+			FrameRate:       30000.0 / 1001.0,
+			AudioSampleRate: 48000,
+			AudioChannels:   2,
+		},
+		Text:        "Recovering",
+		EnableAudio: true,
+		PTSOffset:   -500 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("newSlateAVFillerProducer() error = %v", err)
+	}
+
+	typed, ok := producer.(*slateAVFillerProducer)
+	if !ok {
+		t.Fatalf("producer type = %T, want *slateAVFillerProducer", producer)
+	}
+	if typed.ptsOffset != 0 {
+		t.Fatalf("ptsOffset = %s, want 0", typed.ptsOffset)
+	}
+
+	args := typed.args()
+	joined := strings.Join(args, " ")
+	if strings.Contains(joined, "setpts=") {
+		t.Fatalf("args unexpectedly contained pts offset filters: %s", joined)
+	}
+	if containsArg(args, "-af") {
+		t.Fatalf("args unexpectedly contained -af for zero pts offset: %#v", args)
+	}
+}
+
 func TestSlateAVFillerProducerArgsInputPacingBeforeInput(t *testing.T) {
 	producer, err := newSlateAVFillerProducer(slateAVFillerConfig{
 		FFmpegPath: "ffmpeg",

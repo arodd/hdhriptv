@@ -60,6 +60,7 @@ const (
 	defaultFFmpegReconnectHTTPErrors      = ""
 	defaultFFmpegCopyRegenerateTimestamps = true
 	ffmpegReadrateInitialBurstOption      = "-readrate_initial_burst"
+	ffmpegReadrateCatchupOption           = "-readrate_catchup"
 	ffmpegInputFlagsOption                = "-fflags"
 	ffmpegOutputTSOffsetOption            = "-output_ts_offset"
 	ffmpegGenPTSFlag                      = "+genpts"
@@ -686,6 +687,17 @@ func closeWithTimeoutClearInFlight(c io.Closer) {
 	closeWithTimeoutInFlightMu.Unlock()
 }
 
+func closeWithTimeoutIsInFlight(c io.Closer) bool {
+	closerKey := closeWithTimeoutCloserKey(c)
+	if closerKey == 0 {
+		return false
+	}
+	closeWithTimeoutInFlightMu.Lock()
+	_, exists := closeWithTimeoutInFlightByCloser[closerKey]
+	closeWithTimeoutInFlightMu.Unlock()
+	return exists
+}
+
 func closeWithTimeoutFinishWorker(c io.Closer) {
 	if released := closeWithTimeoutReleaseWorkerSlot(); !released {
 		stats := closeWithTimeoutStatsSnapshot()
@@ -783,22 +795,23 @@ func nextPreviewRetryBackoff(delay time.Duration) time.Duration {
 }
 
 type streamSession struct {
-	reader                        io.Reader
-	startupProbeBytes             int
-	startupProbeRawBytes          int
-	startupProbeTrimmedBytes      int
-	startupProbeCutoverOffset     int
-	startupProbeDroppedBytes      int
-	startupProbeTelemetry         startupProbeTelemetry
-	startupProbeRA                bool
-	startupProbeCodec             string
-	startupInventory              startupStreamInventory
-	startupNoInitialBurstFallback bool
-	startupRetryRelaxedProbe      bool
-	startupRetryRelaxedProbeToken string
-	abortFn                       func()
-	waitFn                        func() error
-	closeFn                       func() error
+	reader                           io.Reader
+	startupProbeBytes                int
+	startupProbeRawBytes             int
+	startupProbeTrimmedBytes         int
+	startupProbeCutoverOffset        int
+	startupProbeDroppedBytes         int
+	startupProbeTelemetry            startupProbeTelemetry
+	startupProbeRA                   bool
+	startupProbeCodec                string
+	startupInventory                 startupStreamInventory
+	startupNoInitialBurstFallback    bool
+	startupNoReadrateCatchupFallback bool
+	startupRetryRelaxedProbe         bool
+	startupRetryRelaxedProbeToken    string
+	abortFn                          func()
+	waitFn                           func() error
+	closeFn                          func() error
 }
 
 type startupProbeTelemetry struct {
@@ -1324,12 +1337,7 @@ func startFFmpegWithContextsConfigured(
 	outputTSOffset time.Duration,
 	requireRandomAccess bool,
 ) (*streamSession, error) {
-	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
-
-	startupProbeSize, startupAnalyzeDuration = normalizeFFmpegStartupDetection(startupProbeSize, startupAnalyzeDuration)
-
-	startedAt := time.Now()
-	session, err := startFFmpegOnceWithContextsConfigured(
+	return startFFmpegWithContextsConfiguredReadrateCatchup(
 		startupCtx,
 		streamCtx,
 		ffmpegPath,
@@ -1338,6 +1346,54 @@ func startFFmpegWithContextsConfigured(
 		startupTimeout,
 		minProbeBytes,
 		readRate,
+		readRate,
+		initialBurst,
+		startupProbeSize,
+		startupAnalyzeDuration,
+		reconnectEnabled,
+		reconnectDelayMax,
+		reconnectMaxRetries,
+		reconnectHTTPErrors,
+		copyRegenerateTimestamps,
+		outputTSOffset,
+		requireRandomAccess,
+	)
+}
+
+func startFFmpegWithContextsConfiguredReadrateCatchup(
+	startupCtx context.Context,
+	streamCtx context.Context,
+	ffmpegPath, upstreamURL, mode string,
+	startupTimeout time.Duration,
+	minProbeBytes int,
+	readRate float64,
+	readRateCatchup float64,
+	initialBurst int,
+	startupProbeSize int,
+	startupAnalyzeDuration time.Duration,
+	reconnectEnabled bool,
+	reconnectDelayMax time.Duration,
+	reconnectMaxRetries int,
+	reconnectHTTPErrors string,
+	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
+	requireRandomAccess bool,
+) (*streamSession, error) {
+	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
+
+	startupProbeSize, startupAnalyzeDuration = normalizeFFmpegStartupDetection(startupProbeSize, startupAnalyzeDuration)
+
+	startedAt := time.Now()
+	session, err := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
+		startupCtx,
+		streamCtx,
+		ffmpegPath,
+		upstreamURL,
+		mode,
+		startupTimeout,
+		minProbeBytes,
+		readRate,
+		readRateCatchup,
 		initialBurst,
 		startupProbeSize,
 		startupAnalyzeDuration,
@@ -1378,7 +1434,7 @@ func startFFmpegWithContextsConfigured(
 		}
 	}
 
-	retrySession, retryErr := startFFmpegOnceWithContextsConfigured(
+	retrySession, retryErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 		startupCtx,
 		streamCtx,
 		ffmpegPath,
@@ -1387,6 +1443,7 @@ func startFFmpegWithContextsConfigured(
 		remaining,
 		minProbeBytes,
 		readRate,
+		readRateCatchup,
 		initialBurst,
 		relaxedProbeSize,
 		relaxedAnalyzeDuration,
@@ -1510,13 +1567,56 @@ func startFFmpegOnceWithContextsConfigured(
 	outputTSOffset time.Duration,
 	requireRandomAccess bool,
 ) (*streamSession, error) {
+	return startFFmpegOnceWithContextsConfiguredReadrateCatchup(
+		startupCtx,
+		streamCtx,
+		ffmpegPath,
+		upstreamURL,
+		mode,
+		startupTimeout,
+		minProbeBytes,
+		readRate,
+		readRate,
+		initialBurst,
+		startupProbeSize,
+		startupAnalyzeDuration,
+		reconnectEnabled,
+		reconnectDelayMax,
+		reconnectMaxRetries,
+		reconnectHTTPErrors,
+		copyRegenerateTimestamps,
+		outputTSOffset,
+		requireRandomAccess,
+	)
+}
+
+func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
+	startupCtx context.Context,
+	streamCtx context.Context,
+	ffmpegPath, upstreamURL, mode string,
+	startupTimeout time.Duration,
+	minProbeBytes int,
+	readRate float64,
+	readRateCatchup float64,
+	initialBurst int,
+	startupProbeSize int,
+	startupAnalyzeDuration time.Duration,
+	reconnectEnabled bool,
+	reconnectDelayMax time.Duration,
+	reconnectMaxRetries int,
+	reconnectHTTPErrors string,
+	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
+	requireRandomAccess bool,
+) (*streamSession, error) {
 	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
 	startedAt := time.Now()
 
-	args := ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
+	args := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 		mode,
 		upstreamURL,
 		readRate,
+		readRateCatchup,
 		initialBurst,
 		startupProbeSize,
 		startupAnalyzeDuration,
@@ -1584,7 +1684,7 @@ func startFFmpegOnceWithContextsConfigured(
 					remaining = startupTimeout - time.Since(startedAt)
 				}
 				if remaining > 0 || startupTimeout <= 0 {
-					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfigured(
+					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 						startupCtx,
 						streamCtx,
 						ffmpegPath,
@@ -1593,6 +1693,7 @@ func startFFmpegOnceWithContextsConfigured(
 						remaining,
 						minProbeBytes,
 						readRate,
+						readRateCatchup,
 						-1,
 						startupProbeSize,
 						startupAnalyzeDuration,
@@ -1606,6 +1707,40 @@ func startFFmpegOnceWithContextsConfigured(
 					)
 					if fallbackErr == nil {
 						fallbackSession.startupNoInitialBurstFallback = true
+						return fallbackSession, nil
+					}
+					return nil, fallbackErr
+				}
+			}
+			if ffmpegReadrateCatchupUnsupported(waitErr) && ffmpegArgsContains(args, ffmpegReadrateCatchupOption) {
+				remaining := startupTimeout
+				if startupTimeout > 0 {
+					remaining = startupTimeout - time.Since(startedAt)
+				}
+				if remaining > 0 || startupTimeout <= 0 {
+					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
+						startupCtx,
+						streamCtx,
+						ffmpegPath,
+						upstreamURL,
+						mode,
+						remaining,
+						minProbeBytes,
+						readRate,
+						-1,
+						initialBurst,
+						startupProbeSize,
+						startupAnalyzeDuration,
+						reconnectEnabled,
+						reconnectDelayMax,
+						reconnectMaxRetries,
+						reconnectHTTPErrors,
+						copyRegenerateTimestamps,
+						outputTSOffset,
+						requireRandomAccess,
+					)
+					if fallbackErr == nil {
+						fallbackSession.startupNoReadrateCatchupFallback = true
 						return fallbackSession, nil
 					}
 					return nil, fallbackErr
@@ -2797,6 +2932,17 @@ func ffmpegReadrateInitialBurstUnsupported(err error) bool {
 	return strings.Contains(msg, "unrecognized option") || strings.Contains(msg, "option not found")
 }
 
+func ffmpegReadrateCatchupUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" || !strings.Contains(msg, "readrate_catchup") {
+		return false
+	}
+	return strings.Contains(msg, "unrecognized option") || strings.Contains(msg, "option not found")
+}
+
 func ffmpegArgsContains(args []string, target string) bool {
 	target = strings.TrimSpace(target)
 	if target == "" {
@@ -2939,8 +3085,44 @@ func ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
 	copyRegenerateTimestamps bool,
 	outputTSOffset time.Duration,
 ) []string {
+	return ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
+		mode,
+		upstreamURL,
+		readRate,
+		readRate,
+		initialBurst,
+		startupProbeSize,
+		startupAnalyzeDuration,
+		reconnectEnabled,
+		reconnectDelayMax,
+		reconnectMaxRetries,
+		reconnectHTTPErrors,
+		copyRegenerateTimestamps,
+		outputTSOffset,
+	)
+}
+
+func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
+	mode, upstreamURL string,
+	readRate float64,
+	readRateCatchup float64,
+	initialBurst int,
+	startupProbeSize int,
+	startupAnalyzeDuration time.Duration,
+	reconnectEnabled bool,
+	reconnectDelayMax time.Duration,
+	reconnectMaxRetries int,
+	reconnectHTTPErrors string,
+	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
+) []string {
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
 	readRateArg := formatReadRate(readRate)
+	includeReadrateCatchup := true
+	if readRateCatchup < 0 {
+		includeReadrateCatchup = false
+	}
+	readRateCatchupArg := formatFFmpegReadRateCatchup(readRate, readRateCatchup)
 	includeInitialBurst := true
 	if initialBurst < 0 {
 		includeInitialBurst = false
@@ -2955,6 +3137,9 @@ func ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
 		"-loglevel", "error",
 		"-nostdin",
 		"-readrate", readRateArg,
+	}
+	if includeReadrateCatchup {
+		inputArgs = append(inputArgs, ffmpegReadrateCatchupOption, readRateCatchupArg)
 	}
 	if includeInitialBurst {
 		inputArgs = append(inputArgs, ffmpegReadrateInitialBurstOption, strconv.Itoa(initialBurst))
@@ -3002,6 +3187,18 @@ func ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
 	default:
 		return nil
 	}
+}
+
+func formatFFmpegReadRateCatchup(readRate, readRateCatchup float64) string {
+	baseRate := readRate
+	if baseRate <= 0 {
+		baseRate = defaultProducerReadRate
+	}
+	catchup := readRateCatchup
+	if catchup <= 0 {
+		catchup = baseRate
+	}
+	return strconv.FormatFloat(catchup, 'f', -1, 64)
 }
 
 func appendFFmpegOutputTSOffsetArg(args []string, outputTSOffset time.Duration) []string {
@@ -3160,6 +3357,7 @@ func startSourceSession(
 		startupTimeout,
 		minProbeBytes,
 		readRate,
+		readRate,
 		initialBurst,
 		startupProbeSize,
 		startupAnalyzeDuration,
@@ -3183,6 +3381,7 @@ func startSourceSessionWithContexts(
 	startupTimeout time.Duration,
 	minProbeBytes int,
 	readRate float64,
+	readRateCatchup float64,
 	initialBurst int,
 	startupProbeSize int,
 	startupAnalyzeDuration time.Duration,
@@ -3202,6 +3401,7 @@ func startSourceSessionWithContexts(
 		startupTimeout,
 		minProbeBytes,
 		readRate,
+		readRateCatchup,
 		initialBurst,
 		startupProbeSize,
 		startupAnalyzeDuration,
@@ -3225,6 +3425,7 @@ func startSourceSessionWithContextsConfigured(
 	startupTimeout time.Duration,
 	minProbeBytes int,
 	readRate float64,
+	readRateCatchup float64,
 	initialBurst int,
 	startupProbeSize int,
 	startupAnalyzeDuration time.Duration,
@@ -3248,7 +3449,7 @@ func startSourceSessionWithContextsConfigured(
 			false,
 		)
 	case "ffmpeg-copy":
-		return startFFmpegWithContextsConfigured(
+		return startFFmpegWithContextsConfiguredReadrateCatchup(
 			startupCtx,
 			streamCtx,
 			ffmpegPath,
@@ -3257,6 +3458,7 @@ func startSourceSessionWithContextsConfigured(
 			startupTimeout,
 			minProbeBytes,
 			readRate,
+			readRateCatchup,
 			initialBurst,
 			startupProbeSize,
 			startupAnalyzeDuration,
@@ -3269,7 +3471,7 @@ func startSourceSessionWithContextsConfigured(
 			requireRandomAccess,
 		)
 	case "ffmpeg-transcode":
-		return startFFmpegWithContextsConfigured(
+		return startFFmpegWithContextsConfiguredReadrateCatchup(
 			startupCtx,
 			streamCtx,
 			ffmpegPath,
@@ -3278,6 +3480,7 @@ func startSourceSessionWithContextsConfigured(
 			startupTimeout,
 			minProbeBytes,
 			readRate,
+			readRateCatchup,
 			initialBurst,
 			startupProbeSize,
 			startupAnalyzeDuration,

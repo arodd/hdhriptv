@@ -195,7 +195,7 @@ func TestJellyfinProviderRequiresToken(t *testing.T) {
 	}
 }
 
-func TestJellyfinProviderUnsupportedOperations(t *testing.T) {
+func TestJellyfinProviderListLineupsUnsupported(t *testing.T) {
 	t.Parallel()
 
 	provider := NewJellyfinProvider(InstanceConfig{
@@ -209,25 +209,19 @@ func TestJellyfinProviderUnsupportedOperations(t *testing.T) {
 	if !errors.Is(err, ErrUnsupportedProvider) {
 		t.Fatalf("ListLineups() error = %v, want ErrUnsupportedProvider", err)
 	}
-	_, err = provider.ListDeviceChannels(ctx)
-	if !errors.Is(err, ErrUnsupportedProvider) {
-		t.Fatalf("ListDeviceChannels() error = %v, want ErrUnsupportedProvider", err)
-	}
-	_, err = provider.ListLineupStations(ctx, "lineup")
-	if !errors.Is(err, ErrUnsupportedProvider) {
-		t.Fatalf("ListLineupStations() error = %v, want ErrUnsupportedProvider", err)
-	}
-	_, err = provider.GetCustomMapping(ctx, "lineup")
-	if !errors.Is(err, ErrUnsupportedProvider) {
-		t.Fatalf("GetCustomMapping() error = %v, want ErrUnsupportedProvider", err)
-	}
-	err = provider.PutCustomMapping(ctx, "lineup", map[string]string{"1": "2"})
-	if !errors.Is(err, ErrUnsupportedProvider) {
-		t.Fatalf("PutCustomMapping() error = %v, want ErrUnsupportedProvider", err)
-	}
-	err = provider.RefreshDevices(ctx)
-	if !errors.Is(err, ErrUnsupportedProvider) {
-		t.Fatalf("RefreshDevices() error = %v, want ErrUnsupportedProvider", err)
+}
+
+func TestJellyfinProviderDoesNotImplementMappingProvider(t *testing.T) {
+	t.Parallel()
+
+	provider := NewJellyfinProvider(InstanceConfig{
+		Provider:         ProviderJellyfin,
+		BaseURL:          "http://jellyfin.example.invalid:8096",
+		JellyfinAPIToken: "token-abc",
+	}, nil)
+
+	if _, ok := any(provider).(MappingProvider); ok {
+		t.Fatal("JellyfinProvider unexpectedly satisfies MappingProvider")
 	}
 }
 

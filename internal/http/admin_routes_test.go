@@ -577,13 +577,15 @@ func TestAdminRoutesChannelSourceFlow(t *testing.T) {
 		`id="summary-recovering-severity"`,
 		`id="summary-card-reselect-alert"`,
 		`id="summary-max-reselect-severity"`,
-		`id="alerts-list"`,
 		`id="client-groups"`,
 		`id="selected-session-detail"`,
 	} {
 		if !strings.Contains(tunerUIBody, marker) {
 			t.Fatalf("GET /ui/tuners body missing marker %q", marker)
 		}
+	}
+	if strings.Contains(tunerUIBody, `id="alerts-list"`) {
+		t.Fatal(`GET /ui/tuners body unexpectedly contains deprecated marker "alerts-list"`)
 	}
 
 	tunerAPIRec := doRaw(t, mux, http.MethodGet, "/api/admin/tuners", nil)
@@ -4751,9 +4753,9 @@ func TestAdminRoutesDVRJellyfinTokenWriteOnly(t *testing.T) {
 	const token = "jellyfin-super-secret-token"
 	var updated dvr.ConfigState
 	doJSON(t, mux, http.MethodPut, "/api/admin/dvr", map[string]any{
-		"provider":                 "jellyfin",
+		"provider":                 "channels",
 		"active_providers":         []string{"channels", "jellyfin"},
-		"base_url":                 "http://jellyfin.lan:8096",
+		"base_url":                 "http://channels.lan:8089",
 		"channels_base_url":        "http://channels.lan:8089",
 		"jellyfin_base_url":        "http://jellyfin.lan:8096",
 		"jellyfin_api_token":       token,
@@ -4763,8 +4765,8 @@ func TestAdminRoutesDVRJellyfinTokenWriteOnly(t *testing.T) {
 		"pre_sync_refresh_devices": false,
 	}, http.StatusOK, &updated)
 
-	if updated.Instance.Provider != dvr.ProviderJellyfin {
-		t.Fatalf("updated provider = %q, want jellyfin", updated.Instance.Provider)
+	if updated.Instance.Provider != dvr.ProviderChannels {
+		t.Fatalf("updated provider = %q, want channels", updated.Instance.Provider)
 	}
 	if updated.Instance.JellyfinAPIToken != "" {
 		t.Fatalf("updated jellyfin_api_token = %q, want empty", updated.Instance.JellyfinAPIToken)
@@ -4821,8 +4823,10 @@ func TestAdminRoutesDVRPutPreservesStoredJellyfinTokenWhenOmitted(t *testing.T) 
 		state: dvr.ConfigState{
 			Instance: dvr.InstanceConfig{
 				ID:                         1,
-				Provider:                   dvr.ProviderJellyfin,
-				BaseURL:                    "http://jellyfin.lan:8096",
+				Provider:                   dvr.ProviderChannels,
+				BaseURL:                    "http://channels.lan:8089",
+				ChannelsBaseURL:            "http://channels.lan:8089",
+				JellyfinBaseURL:            "http://jellyfin.lan:8096",
 				JellyfinAPIToken:           token,
 				JellyfinAPITokenConfigured: true,
 			},
@@ -4847,6 +4851,90 @@ func TestAdminRoutesDVRPutPreservesStoredJellyfinTokenWhenOmitted(t *testing.T) 
 	}
 	if !updated.Instance.JellyfinAPITokenConfigured {
 		t.Fatal("updated response jellyfin_api_token_configured = false, want true")
+	}
+}
+
+func TestAdminRoutesDVRPutRejectsUnsupportedPrimaryProvider(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	fakeDVR := &fakeDVRService{
+		state: dvr.ConfigState{
+			Instance: dvr.InstanceConfig{
+				ID:       1,
+				Provider: dvr.ProviderChannels,
+				BaseURL:  "http://channels.lan:8089",
+			},
+		},
+	}
+	handler.SetDVRService(fakeDVR)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	rec := doRaw(t, mux, http.MethodPut, "/api/admin/dvr", map[string]any{
+		"provider":          "jellyfin",
+		"jellyfin_base_url": "http://jellyfin.lan:8096",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT /api/admin/dvr status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `only "channels" is supported for sync/mapping`) {
+		t.Fatalf("PUT /api/admin/dvr body = %q, want primary provider validation message", rec.Body.String())
+	}
+	if fakeDVR.updateCalls != 0 {
+		t.Fatalf("UpdateConfig called %d times, want 0", fakeDVR.updateCalls)
+	}
+}
+
+func TestAdminRoutesDVRPutRejectsLegacyPrimaryProviderWhenProviderOmitted(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	fakeDVR := &fakeDVRService{
+		state: dvr.ConfigState{
+			Instance: dvr.InstanceConfig{
+				ID:       1,
+				Provider: dvr.ProviderJellyfin,
+				BaseURL:  "http://jellyfin.lan:8096",
+			},
+		},
+	}
+	handler.SetDVRService(fakeDVR)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	rec := doRaw(t, mux, http.MethodPut, "/api/admin/dvr", map[string]any{
+		"sync_enabled": true,
+		"sync_cron":    "*/30 * * * *",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PUT /api/admin/dvr status = %d, want %d, body=%s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `invalid primary provider "jellyfin"`) {
+		t.Fatalf("PUT /api/admin/dvr body = %q, want jellyfin primary-provider rejection", rec.Body.String())
+	}
+	if fakeDVR.updateCalls != 0 {
+		t.Fatalf("UpdateConfig called %d times, want 0", fakeDVR.updateCalls)
 	}
 }
 

@@ -59,9 +59,12 @@ Additional variables (with defaults from `Makefile`):
 | --- | --- | --- |
 | `RELEASE_TAG` | empty (required) | Release tag name (for example `v1.2.3`). |
 | `RELEASE_TITLE` | empty | GitHub release title (defaults to `RELEASE_TAG`). |
-| `RELEASE_NOTES_FILE` | empty | Optional notes file for GitHub release create/edit. |
+| `RELEASE_NOTES_FILE` | empty | Optional notes preface merged ahead of auto-generated changelog highlights. |
 | `RELEASE_DIST_DIR` | `dist` | Output directory for release binaries/checksums. |
 | `GITHUB_RELEASE_REPO` | empty | Optional override for GitHub repo in `owner/repo` format (auto-derived from `PUBLIC_REPO_URL` when empty). |
+| `RELEASE_IMAGE` | `arodd/hdhriptv` | Container image repository pushed by the release workflow (`<repo>:<RELEASE_TAG>` and `<repo>:latest`). |
+| `BUILDX_BUILDER` | `hdhriptv-multiarch` | Docker Buildx builder name used for multi-arch image publishing. |
+| `PUBLISH_GITHUB_COMMIT_MESSAGE` | empty | Optional override for the mirror squash commit message. If empty, release workflow defaults to `public(<SYNC_BRANCH>): release <RELEASE_TAG>`. |
 
 Example:
 
@@ -85,9 +88,16 @@ Behavior summary:
   - `dist/hdhriptv-linux-arm64`
   - `dist/hdhriptv-darwin-amd64`
   - `dist/hdhriptv-darwin-arm64`
+- Uses `public(<SYNC_BRANCH>): release <RELEASE_TAG>` for the mirror squash
+  commit subject unless `PUBLISH_GITHUB_COMMIT_MESSAGE` is explicitly set.
 - Runs `make publish-github` and verifies internal/public trees match.
+- Builds and pushes multi-arch container image tags for both
+  `<RELEASE_IMAGE>:<RELEASE_TAG>` and `<RELEASE_IMAGE>:latest`.
 - Ensures `RELEASE_TAG` points to internal tip on GitLab remote and public tip
   on GitHub remote, failing fast if an existing remote tag points elsewhere.
+- Auto-generates pretty release-note sections from `CHANGELOG.md` entries added
+  since the previous internal release tag (grouped into Features, Bug Fixes,
+  Docs, and Other), then merges any optional `RELEASE_NOTES_FILE` preface.
 - Creates or updates the GitHub release and uploads assets with clobber enabled
   for idempotent reruns.
 

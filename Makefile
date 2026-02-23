@@ -15,6 +15,8 @@ RELEASE_TITLE ?=
 RELEASE_NOTES_FILE ?=
 RELEASE_DIST_DIR ?= dist
 GITHUB_RELEASE_REPO ?=
+RELEASE_IMAGE ?= arodd/hdhriptv
+BINFMT_IMAGE ?= tonistiigi/binfmt:qemu-v10.0.4
 
 .PHONY: production-build release-local docs-check publish-github release-github-sync-tag
 
@@ -54,6 +56,9 @@ release-github-sync-tag:
 	RELEASE_NOTES_FILE="$(RELEASE_NOTES_FILE)" \
 	RELEASE_DIST_DIR="$(RELEASE_DIST_DIR)" \
 	GITHUB_RELEASE_REPO="$(GITHUB_RELEASE_REPO)" \
+	BUILDX_BUILDER="$(BUILDX_BUILDER)" \
+	RELEASE_IMAGE="$(RELEASE_IMAGE)" \
+	BINFMT_IMAGE="$(BINFMT_IMAGE)" \
 	PUBLISH_GITHUB_COMMIT_MESSAGE="$(PUBLISH_GITHUB_COMMIT_MESSAGE)" \
 	./scripts/release/release-github-sync-tag.sh
 

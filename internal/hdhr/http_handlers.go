@@ -106,7 +106,7 @@ func (h *Handler) DiscoverJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) LineupJSON(w http.ResponseWriter, r *http.Request) {
-	entries, err := h.lineupEntriesForRequest(r.Context(), r, BaseURL(r))
+	entries, err := h.lineupEntriesForRequest(r.Context(), r, BaseURL(r), false)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build lineup: %v", err), http.StatusInternalServerError)
 		return
@@ -127,7 +127,7 @@ func (h *Handler) LineupJSON(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) LineupM3U(w http.ResponseWriter, r *http.Request) {
-	entries, err := h.lineupEntriesForRequest(r.Context(), r, BaseURL(r))
+	entries, err := h.lineupEntriesForRequest(r.Context(), r, BaseURL(r), false)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build lineup: %v", err), http.StatusInternalServerError)
 		return
@@ -143,7 +143,7 @@ func (h *Handler) LineupM3U(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) LineupXML(w http.ResponseWriter, r *http.Request) {
-	entries, err := h.lineupEntriesForRequest(r.Context(), r, BaseURL(r))
+	entries, err := h.lineupEntriesForRequest(r.Context(), r, BaseURL(r), true)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build lineup: %v", err), http.StatusInternalServerError)
 		return
@@ -218,7 +218,7 @@ func (h *Handler) LineupHTML(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/ui/", http.StatusFound)
 }
 
-func (h *Handler) lineupEntries(ctx context.Context, baseURL string) ([]LineupEntry, error) {
+func (h *Handler) lineupEntries(ctx context.Context, baseURL string, includeCodecs bool) ([]LineupEntry, error) {
 	if h.channelsProvider == nil {
 		return nil, fmt.Errorf("channels provider is not configured")
 	}
@@ -228,24 +228,36 @@ func (h *Handler) lineupEntries(ctx context.Context, baseURL string) ([]LineupEn
 		return nil, err
 	}
 
-	codecByChannelID := make(map[int64]lineupCodecs, len(publishedChannels))
-	if sourcesProvider, ok := h.channelsProvider.(channelSourcesProvider); ok && len(publishedChannels) > 0 {
-		channelIDs := make([]int64, 0, len(publishedChannels))
-		for _, channel := range publishedChannels {
-			channelIDs = append(channelIDs, channel.ChannelID)
+	codecByChannelID := map[int64]lineupCodecs{}
+	if includeCodecs {
+		codecByChannelID = make(map[int64]lineupCodecs, len(publishedChannels))
+	}
+	if includeCodecs {
+		sourcesProvider, ok := h.channelsProvider.(channelSourcesProvider)
+		if !ok {
+			includeCodecs = false
 		}
-		sourcesByChannelID, err := sourcesProvider.ListSourcesByChannelIDs(ctx, channelIDs, true)
-		if err != nil {
-			return nil, fmt.Errorf("list channel sources for lineup: %w", err)
-		}
-		for _, channel := range publishedChannels {
-			codecByChannelID[channel.ChannelID] = preferredLineupCodecs(sourcesByChannelID[channel.ChannelID])
+		if ok && len(publishedChannels) > 0 {
+			channelIDs := make([]int64, 0, len(publishedChannels))
+			for _, channel := range publishedChannels {
+				channelIDs = append(channelIDs, channel.ChannelID)
+			}
+			sourcesByChannelID, err := sourcesProvider.ListSourcesByChannelIDs(ctx, channelIDs, true)
+			if err != nil {
+				return nil, fmt.Errorf("list channel sources for lineup: %w", err)
+			}
+			for _, channel := range publishedChannels {
+				codecByChannelID[channel.ChannelID] = preferredLineupCodecs(sourcesByChannelID[channel.ChannelID])
+			}
 		}
 	}
 
 	entries := make([]LineupEntry, 0, len(publishedChannels))
 	for _, channel := range publishedChannels {
-		codecs := codecByChannelID[channel.ChannelID]
+		codecs := lineupCodecs{}
+		if includeCodecs {
+			codecs = codecByChannelID[channel.ChannelID]
+		}
 		entries = append(entries, LineupEntry{
 			GuideNumber: channel.GuideNumber,
 			GuideName:   channel.GuideName,
@@ -334,17 +346,12 @@ func normalizeLineupAudioCodec(codec string) string {
 	}
 }
 
-func (h *Handler) lineupEntriesForRequest(ctx context.Context, r *http.Request, baseURL string) ([]LineupEntry, error) {
-	entries, err := h.lineupEntries(ctx, baseURL)
-	if err != nil {
-		return nil, err
-	}
-
+func (h *Handler) lineupEntriesForRequest(ctx context.Context, r *http.Request, baseURL string, includeCodecs bool) ([]LineupEntry, error) {
 	show := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("show")))
 	if show == "demo" {
 		return []LineupEntry{}, nil
 	}
-	return entries, nil
+	return h.lineupEntries(ctx, baseURL, includeCodecs)
 }
 
 func BaseURL(r *http.Request) string {

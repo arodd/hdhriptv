@@ -16,7 +16,7 @@ const (
 	jellyfinTaskRefreshKey = "RefreshGuide"
 )
 
-// JellyfinProvider implements DVRProvider against Jellyfin Live TV APIs.
+// JellyfinProvider implements LineupReloadProvider against Jellyfin Live TV APIs.
 type JellyfinProvider struct {
 	baseURL         string
 	apiToken        string
@@ -46,7 +46,7 @@ func (p *JellyfinProvider) Type() ProviderType {
 }
 
 func (p *JellyfinProvider) ListLineups(context.Context) ([]DVRLineup, error) {
-	return nil, unsupportedOperationError(ProviderJellyfin, "list lineups")
+	return nil, unsupportedProviderOperationError(ProviderJellyfin, "list lineups")
 }
 
 func (p *JellyfinProvider) ReloadDeviceLineup(ctx context.Context, deviceID string) error {
@@ -88,26 +88,6 @@ func (p *JellyfinProvider) RedownloadGuideLineup(context.Context, string) error 
 	// Jellyfin has no lineup-scoped guide redownload endpoint analogous to
 	// Channels DVR's PUT /dvr/lineups/{lineupID}.
 	return nil
-}
-
-func (p *JellyfinProvider) ListDeviceChannels(context.Context) (map[string]DVRDeviceChannel, error) {
-	return nil, unsupportedOperationError(ProviderJellyfin, "list device channels")
-}
-
-func (p *JellyfinProvider) ListLineupStations(context.Context, string) ([]DVRStation, error) {
-	return nil, unsupportedOperationError(ProviderJellyfin, "list lineup stations")
-}
-
-func (p *JellyfinProvider) GetCustomMapping(context.Context, string) (map[string]string, error) {
-	return nil, unsupportedOperationError(ProviderJellyfin, "get custom mapping")
-}
-
-func (p *JellyfinProvider) PutCustomMapping(context.Context, string, map[string]string) error {
-	return unsupportedOperationError(ProviderJellyfin, "put custom mapping")
-}
-
-func (p *JellyfinProvider) RefreshDevices(context.Context) error {
-	return unsupportedOperationError(ProviderJellyfin, "refresh devices")
 }
 
 type jellyfinLiveTVConfig struct {
@@ -244,8 +224,4 @@ func (p *JellyfinProvider) request(
 		return fmt.Errorf("decode %s %s response: %w", method, path, err)
 	}
 	return nil
-}
-
-func unsupportedOperationError(provider ProviderType, operation string) error {
-	return fmt.Errorf("%w: provider=%q does not support %s", ErrUnsupportedProvider, provider, strings.TrimSpace(operation))
 }

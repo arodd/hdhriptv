@@ -11,6 +11,9 @@ RELEASE_TITLE="${RELEASE_TITLE:-}"
 RELEASE_NOTES_FILE="${RELEASE_NOTES_FILE:-}"
 RELEASE_DIST_DIR="${RELEASE_DIST_DIR:-dist}"
 GITHUB_RELEASE_REPO="${GITHUB_RELEASE_REPO:-}"
+BUILDX_BUILDER="${BUILDX_BUILDER:-hdhriptv-multiarch}"
+RELEASE_IMAGE="${RELEASE_IMAGE:-arodd/hdhriptv}"
+BINFMT_IMAGE="${BINFMT_IMAGE:-tonistiigi/binfmt:qemu-v10.0.4}"
 PUBLISH_GITHUB_COMMIT_MESSAGE="${PUBLISH_GITHUB_COMMIT_MESSAGE:-}"
 
 log() {
@@ -26,6 +29,33 @@ require_cmd() {
   if ! command -v "$1" >/dev/null 2>&1; then
     die "required command not found: $1"
   fi
+}
+
+ensure_pinned_image_reference() {
+  image_ref="$1"
+  if [ -z "$image_ref" ]; then
+    die "image reference is required"
+  fi
+
+  case "$image_ref" in
+    *@sha256:*)
+      return
+      ;;
+  esac
+
+  ref_without_digest="${image_ref%%@*}"
+  last_path_segment="${ref_without_digest##*/}"
+  case "$last_path_segment" in
+    *:latest)
+      die "image reference must not use floating :latest tag (${image_ref}); use a version tag or digest"
+      ;;
+    *:*)
+      return
+      ;;
+    *)
+      die "image reference must include an explicit version tag or digest (${image_ref})"
+      ;;
+  esac
 }
 
 ensure_remote_url() {
@@ -113,6 +143,162 @@ parse_github_repo_from_url() {
   esac
 }
 
+list_release_tags() {
+  remote_name="$1"
+  git ls-remote --refs --tags "$remote_name" "refs/tags/v*" \
+    | awk '{print $2}' \
+    | sed 's#refs/tags/##' \
+    | sort -uV
+}
+
+previous_release_tag() {
+  remote_name="$1"
+  current_tag="$2"
+  tags="$(list_release_tags "$remote_name")"
+  if [ -z "$tags" ]; then
+    return
+  fi
+
+  prev="$(printf '%s\n%s\n' "$tags" "$current_tag" | sort -uV | awk -v current="$current_tag" '
+    {
+      ordered[NR] = $0
+    }
+    END {
+      for (i = 1; i <= NR; i++) {
+        if (ordered[i] == current) {
+          if (i > 1) {
+            print ordered[i-1]
+          }
+          exit
+        }
+      }
+    }
+  ')"
+  if [ -n "$prev" ]; then
+    printf '%s\n' "$prev"
+    return
+  fi
+
+  printf '%s\n' "$tags" | grep -Fvx "$current_tag" | tail -n1 || true
+}
+
+collect_changelog_entries_since_commit() {
+  from_commit="$1"
+  to_commit="$2"
+
+  if [ -z "$from_commit" ]; then
+    awk '
+      /^- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \[[^]]+\] / {
+        print
+      }
+    ' CHANGELOG.md
+    return
+  fi
+
+  git diff --unified=0 "${from_commit}..${to_commit}" -- CHANGELOG.md \
+    | awk '
+      /^\+- [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9] \[[^]]+\] / {
+        print substr($0, 2)
+      }
+    '
+}
+
+build_release_notes_file() {
+  previous_tag="$1"
+  previous_commit="$2"
+  to_commit="$3"
+  output_file="$4"
+
+  : > "$output_file"
+  if [ -n "$RELEASE_NOTES_FILE" ]; then
+    cat "$RELEASE_NOTES_FILE" >> "$output_file"
+    printf '\n\n' >> "$output_file"
+  fi
+
+  changelog_entries_file="$(mktemp)"
+  collect_changelog_entries_since_commit "$previous_commit" "$to_commit" > "$changelog_entries_file"
+
+  feature_lines=()
+  bug_lines=()
+  docs_lines=()
+  other_lines=()
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    entry_date="$(printf '%s' "$entry" | sed -E 's/^- ([0-9-]+) .*/\1/')"
+    entry_tag="$(printf '%s' "$entry" | sed -E 's/^- [0-9-]+ \[([^]]+)\] .*/\1/')"
+    entry_text="$(printf '%s' "$entry" | sed -E 's/^- [0-9-]+ \[[^]]+\] //')"
+    formatted="- ${entry_text} (${entry_date})"
+    case "$entry_tag" in
+      feature)
+        feature_lines+=("$formatted")
+        ;;
+      bug)
+        bug_lines+=("$formatted")
+        ;;
+      docs)
+        docs_lines+=("$formatted")
+        ;;
+      *)
+        other_lines+=("$formatted")
+        ;;
+    esac
+  done < "$changelog_entries_file"
+  rm -f "$changelog_entries_file"
+
+  printf '## Changelog Highlights\n\n' >> "$output_file"
+  if [ -n "$previous_tag" ]; then
+    printf 'Entries added to `CHANGELOG.md` since `%s`.\n\n' "$previous_tag" >> "$output_file"
+  else
+    printf 'Entries captured from `CHANGELOG.md`.\n\n' >> "$output_file"
+  fi
+
+  if [ "${#feature_lines[@]}" -gt 0 ]; then
+    printf '### Features\n\n' >> "$output_file"
+    printf '%s\n' "${feature_lines[@]}" >> "$output_file"
+    printf '\n' >> "$output_file"
+  fi
+
+  if [ "${#bug_lines[@]}" -gt 0 ]; then
+    printf '### Bug Fixes\n\n' >> "$output_file"
+    printf '%s\n' "${bug_lines[@]}" >> "$output_file"
+    printf '\n' >> "$output_file"
+  fi
+
+  if [ "${#docs_lines[@]}" -gt 0 ]; then
+    printf '### Docs\n\n' >> "$output_file"
+    printf '%s\n' "${docs_lines[@]}" >> "$output_file"
+    printf '\n' >> "$output_file"
+  fi
+
+  if [ "${#other_lines[@]}" -gt 0 ]; then
+    printf '### Other\n\n' >> "$output_file"
+    printf '%s\n' "${other_lines[@]}" >> "$output_file"
+    printf '\n' >> "$output_file"
+  fi
+
+  if [ "${#feature_lines[@]}" -eq 0 ] && [ "${#bug_lines[@]}" -eq 0 ] && [ "${#docs_lines[@]}" -eq 0 ] && [ "${#other_lines[@]}" -eq 0 ]; then
+    printf -- '- No changelog entries detected between release boundaries.\n' >> "$output_file"
+  fi
+}
+
+build_and_push_release_image() {
+  image_repo="$1"
+  release_tag="$2"
+
+  log "Building and pushing container image tags ${image_repo}:${release_tag} and ${image_repo}:latest"
+  docker version >/dev/null
+  docker run --privileged --rm "$BINFMT_IMAGE" --install arm64,amd64
+  docker buildx inspect "$BUILDX_BUILDER" >/dev/null 2>&1 || docker buildx create --name "$BUILDX_BUILDER" --driver docker-container
+  docker buildx use "$BUILDX_BUILDER"
+  docker buildx inspect --bootstrap
+  docker buildx build \
+    --platform linux/amd64,linux/arm64 \
+    --provenance=false \
+    --tag "${image_repo}:${release_tag}" \
+    --tag "${image_repo}:latest" \
+    --push .
+}
+
 if [ -z "$RELEASE_TAG" ]; then
   die "RELEASE_TAG is required (example: v1.2.3)"
 fi
@@ -121,8 +307,11 @@ require_cmd git
 require_cmd go
 require_cmd make
 require_cmd gh
+require_cmd docker
 require_cmd sha256sum
 require_cmd awk
+require_cmd sort
+ensure_pinned_image_reference "$BINFMT_IMAGE"
 
 if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   die "tracked changes detected; commit/stash tracked changes before running a release"
@@ -186,6 +375,11 @@ if [ -n "$(git status --porcelain --untracked-files=no)" ]; then
   die "tracked files changed during build; stop and inspect before publishing"
 fi
 
+publish_commit_subject="$PUBLISH_GITHUB_COMMIT_MESSAGE"
+if [ -z "$publish_commit_subject" ]; then
+  publish_commit_subject="public(${SYNC_BRANCH}): release ${RELEASE_TAG}"
+fi
+
 log "Publishing mirrored public branch commit via make publish-github"
 make publish-github \
   INTERNAL_REMOTE="$INTERNAL_REMOTE" \
@@ -193,7 +387,7 @@ make publish-github \
   PUBLIC_REMOTE="$PUBLIC_REMOTE" \
   PUBLIC_REPO_URL="$PUBLIC_REPO_URL" \
   SYNC_BRANCH="$SYNC_BRANCH" \
-  PUBLISH_GITHUB_COMMIT_MESSAGE="$PUBLISH_GITHUB_COMMIT_MESSAGE"
+  PUBLISH_GITHUB_COMMIT_MESSAGE="$publish_commit_subject"
 
 git fetch --no-tags "$PUBLIC_REMOTE" "$SYNC_BRANCH"
 public_tip="$(git rev-parse "${PUBLIC_REMOTE}/${SYNC_BRANCH}")"
@@ -205,6 +399,8 @@ fi
 
 push_tag_if_needed "$INTERNAL_REMOTE" "$RELEASE_TAG" "$internal_tip"
 push_tag_if_needed "$PUBLIC_REMOTE" "$RELEASE_TAG" "$public_tip"
+
+build_and_push_release_image "$RELEASE_IMAGE" "$RELEASE_TAG"
 
 release_repo="$GITHUB_RELEASE_REPO"
 if [ -z "$release_repo" ]; then
@@ -225,20 +421,29 @@ if [ -n "$RELEASE_NOTES_FILE" ] && [ ! -f "$RELEASE_NOTES_FILE" ]; then
   die "RELEASE_NOTES_FILE does not exist: ${RELEASE_NOTES_FILE}"
 fi
 
+previous_tag="$(previous_release_tag "$INTERNAL_REMOTE" "$RELEASE_TAG")"
+previous_tag_commit=""
+if [ -n "$previous_tag" ]; then
+  previous_tag_commit="$(remote_tag_commit "$INTERNAL_REMOTE" "$previous_tag")"
+  if [ -z "$previous_tag_commit" ]; then
+    die "could not resolve previous release tag commit for ${previous_tag} on ${INTERNAL_REMOTE}"
+  fi
+  if ! git merge-base --is-ancestor "$previous_tag_commit" "$internal_tip"; then
+    die "previous release tag ${previous_tag} (${previous_tag_commit}) is not an ancestor of ${internal_tip}"
+  fi
+fi
+
+generated_notes_file="$(mktemp)"
+trap 'rm -f "$generated_notes_file"' EXIT
+build_release_notes_file "$previous_tag" "$previous_tag_commit" "$internal_tip" "$generated_notes_file"
+log "Generated release notes from CHANGELOG.md${previous_tag:+ since ${previous_tag}}"
+
 if gh release view "$RELEASE_TAG" --repo "$release_repo" >/dev/null 2>&1; then
   log "GitHub release ${RELEASE_TAG} already exists in ${release_repo}; updating metadata"
-  if [ -n "$RELEASE_NOTES_FILE" ]; then
-    gh release edit "$RELEASE_TAG" --repo "$release_repo" --title "$RELEASE_TITLE" --notes-file "$RELEASE_NOTES_FILE"
-  else
-    gh release edit "$RELEASE_TAG" --repo "$release_repo" --title "$RELEASE_TITLE"
-  fi
+  gh release edit "$RELEASE_TAG" --repo "$release_repo" --title "$RELEASE_TITLE" --notes-file "$generated_notes_file"
 else
   log "Creating GitHub release ${RELEASE_TAG} in ${release_repo}"
-  if [ -n "$RELEASE_NOTES_FILE" ]; then
-    gh release create "$RELEASE_TAG" --repo "$release_repo" --title "$RELEASE_TITLE" --verify-tag --notes-file "$RELEASE_NOTES_FILE"
-  else
-    gh release create "$RELEASE_TAG" --repo "$release_repo" --title "$RELEASE_TITLE" --verify-tag --generate-notes
-  fi
+  gh release create "$RELEASE_TAG" --repo "$release_repo" --title "$RELEASE_TITLE" --verify-tag --notes-file "$generated_notes_file"
 fi
 
 log "Uploading release assets to GitHub (clobber enabled)"
@@ -255,3 +460,4 @@ log "Internal commit: ${internal_tip}"
 log "Public commit:   ${public_tip}"
 log "GitLab tag:      ${INTERNAL_REMOTE}/${RELEASE_TAG}"
 log "GitHub release:  ${release_repo}#${RELEASE_TAG}"
+log "Container tags:  ${RELEASE_IMAGE}:${RELEASE_TAG}, ${RELEASE_IMAGE}:latest"

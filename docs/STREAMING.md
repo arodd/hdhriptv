@@ -117,6 +117,9 @@ Mode selection happens in `startSourceSessionWithContexts()` (`ffmpeg.go:2048`).
 Built by `ffmpegArgs()` (`ffmpeg.go:1839`):
 
 - `-readrate` controls producer pacing (default `1.0`).
+- `-readrate_catchup` sets temporary catch-up pacing when ffmpeg falls behind
+  realtime (default follows `-readrate`); falls back gracefully if the ffmpeg
+  build does not support this option.
 - `-readrate_initial_burst` sends an initial burst (default 1 s); falls back
   gracefully if the ffmpeg build does not support this option.
 - `-probesize` and `-analyzeduration` control MPEG-TS stream detection window

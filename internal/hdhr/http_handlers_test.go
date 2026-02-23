@@ -337,7 +337,7 @@ func TestLineupJSONShowDemoReturnsEmpty(t *testing.T) {
 	}
 }
 
-func TestLineupJSONListSourcesErrorReturnsInternalServerError(t *testing.T) {
+func TestLineupJSONIgnoresListSourcesErrorForCompatibility(t *testing.T) {
 	h := NewHandler(Config{FriendlyName: "x", DeviceID: "ABCD1234", DeviceAuth: "a", TunerCount: 2}, fakeChannelsProvider{
 		items: []channels.Channel{{
 			ChannelID:   1,
@@ -353,6 +353,39 @@ func TestLineupJSONListSourcesErrorReturnsInternalServerError(t *testing.T) {
 	w := httptest.NewRecorder()
 
 	h.LineupJSON(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var out []map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(out) != 1 {
+		t.Fatalf("len(out) = %d, want 1", len(out))
+	}
+	if got, _ := out[0]["GuideNumber"].(string); got != "101" {
+		t.Fatalf("GuideNumber = %q, want 101", got)
+	}
+}
+
+func TestLineupXMLListSourcesErrorReturnsInternalServerError(t *testing.T) {
+	h := NewHandler(Config{FriendlyName: "x", DeviceID: "ABCD1234", DeviceAuth: "a", TunerCount: 2}, fakeChannelsProvider{
+		items: []channels.Channel{{
+			ChannelID:   1,
+			GuideNumber: "101",
+			GuideName:   "News One",
+			Enabled:     true,
+		}},
+		listSourcesErr: errors.New("boom"),
+	})
+
+	r := httptest.NewRequest(http.MethodGet, "http://127.0.0.1/lineup.xml", nil)
+	r.Host = "127.0.0.1:5004"
+	w := httptest.NewRecorder()
+
+	h.LineupXML(w, r)
 
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("status code = %d, want %d", w.Code, http.StatusInternalServerError)

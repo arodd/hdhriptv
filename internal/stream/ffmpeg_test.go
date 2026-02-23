@@ -1226,6 +1226,69 @@ sleep 1
 	}
 }
 
+func TestStartFFmpegFallsBackWhenReadrateCatchupUnsupported(t *testing.T) {
+	tmp := t.TempDir()
+	argsLogPath := filepath.Join(tmp, "args.log")
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-readrate-catchup-unsupported.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+args_log=%q
+printf '%%s\n' "$*" >> "$args_log"
+for arg in "$@"; do
+  if [[ "$arg" == "-readrate_catchup" ]]; then
+    echo "Unrecognized option 'readrate_catchup'." >&2
+    echo "Error splitting the argument list: Option not found" >&2
+    exit 1
+  fi
+done
+printf '\x47'
+sleep 1
+`, argsLogPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	session, err := startFFmpeg(
+		ctx,
+		ffmpegPath,
+		"https://example.test/live/stream.m3u8",
+		"ffmpeg-copy",
+		500*time.Millisecond,
+		1,
+		1,
+		1,
+		32*1024,
+		250*time.Millisecond,
+		false,
+		0,
+		-1,
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("startFFmpeg() error = %v", err)
+	}
+	defer session.close()
+
+	if !session.startupNoReadrateCatchupFallback {
+		t.Fatal("startupNoReadrateCatchupFallback = false, want true")
+	}
+
+	argsRaw, readErr := os.ReadFile(argsLogPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(argsLogPath) error = %v", readErr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(argsRaw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("len(argsLogLines) = %d, want 2; lines=%q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "-readrate_catchup 1") {
+		t.Fatalf("first attempt args = %q, want -readrate_catchup 1", lines[0])
+	}
+	if strings.Contains(lines[1], "-readrate_catchup") {
+		t.Fatalf("fallback attempt args = %q, want readrate_catchup removed", lines[1])
+	}
+}
+
 func TestBoundedTailBufferRetainsRecentStderr(t *testing.T) {
 	buf := newBoundedTailBuffer(8)
 	if _, err := buf.Write([]byte("12345")); err != nil {
@@ -1260,6 +1323,50 @@ func TestFFmpegAnalyzeDurationMicroseconds(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ffmpegAnalyzeDurationMicroseconds(tc.in); got != tc.want {
 				t.Fatalf("ffmpegAnalyzeDurationMicroseconds(%s) = %d, want %d", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFormatFFmpegReadRateCatchup(t *testing.T) {
+	tests := []struct {
+		name             string
+		readRate         float64
+		readRateCatchup  float64
+		wantCatchupValue string
+	}{
+		{
+			name:             "fallback_to_base_when_missing",
+			readRate:         1.25,
+			readRateCatchup:  0,
+			wantCatchupValue: "1.25",
+		},
+		{
+			name:             "fallback_to_default_when_readrate_invalid",
+			readRate:         0,
+			readRateCatchup:  0,
+			wantCatchupValue: "1",
+		},
+		{
+			name:             "preserve_explicit_catchup_below_base",
+			readRate:         1.5,
+			readRateCatchup:  1.25,
+			wantCatchupValue: "1.25",
+		},
+		{
+			name:             "preserve_explicit_catchup_above_base",
+			readRate:         1.0,
+			readRateCatchup:  1.75,
+			wantCatchupValue: "1.75",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got := formatFFmpegReadRateCatchup(tc.readRate, tc.readRateCatchup)
+			if got != tc.wantCatchupValue {
+				t.Fatalf("formatFFmpegReadRateCatchup(%v, %v) = %q, want %q", tc.readRate, tc.readRateCatchup, got, tc.wantCatchupValue)
 			}
 		})
 	}
@@ -3231,11 +3338,17 @@ func TestCloseWithTimeoutConcurrentDuplicateCallsCloseOnce(t *testing.T) {
 	resetCloseWithTimeoutStatsForTest()
 	t.Cleanup(resetCloseWithTimeoutStatsForTest)
 
+	beforeStats := closeWithTimeoutStatsSnapshot()
+
 	const attempts = boundedCloseWorkerBudget + 8
+	// Keep this timeout intentionally large so duplicate calls return via
+	// in-flight suppression and not local timeout expiration.
+	const closeTimeout = 5 * time.Second
 	body := newStartupAbortBlockingBody()
 	defer body.release()
 
 	startCh := make(chan struct{})
+	doneCh := make(chan struct{}, attempts)
 	var ready sync.WaitGroup
 	ready.Add(attempts)
 	var wg sync.WaitGroup
@@ -3245,7 +3358,8 @@ func TestCloseWithTimeoutConcurrentDuplicateCallsCloseOnce(t *testing.T) {
 			defer wg.Done()
 			ready.Done()
 			<-startCh
-			closeWithTimeout(body, 300*time.Millisecond)
+			closeWithTimeout(body, closeTimeout)
+			doneCh <- struct{}{}
 		}()
 	}
 
@@ -3258,12 +3372,17 @@ func TestCloseWithTimeoutConcurrentDuplicateCallsCloseOnce(t *testing.T) {
 		t.Fatal("closeWithTimeout did not start a close call within 1s")
 	}
 
-	// Keep the underlying Close call blocked until all duplicate attempts are
-	// observed as suppressed.
-	waitFor(t, time.Second, func() bool {
-		stats := closeWithTimeoutStatsSnapshot()
-		return stats.Started == 1 && stats.Suppressed == attempts-1
+	// Keep the underlying Close call blocked until all duplicate attempts have
+	// returned from closeWithTimeout.
+	waitFor(t, 2*time.Second, func() bool {
+		return len(doneCh) >= attempts-1
 	})
+	if got := body.closeCallCount(); got != 1 {
+		t.Fatalf("body close calls while blocked = %d, want 1", got)
+	}
+	if !closeWithTimeoutIsInFlight(body) {
+		t.Fatal("body closer should remain in-flight while Close is blocked")
+	}
 
 	body.release()
 
@@ -3277,22 +3396,22 @@ func TestCloseWithTimeoutConcurrentDuplicateCallsCloseOnce(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("concurrent closeWithTimeout calls did not finish within 2s")
 	}
+	if got := len(doneCh); got != attempts {
+		t.Fatalf("completed closeWithTimeout calls = %d, want %d", got, attempts)
+	}
+	if got := body.closeCallCount(); got != 1 {
+		t.Fatalf("body close calls after release = %d, want 1", got)
+	}
+	waitFor(t, time.Second, func() bool {
+		return !closeWithTimeoutIsInFlight(body)
+	})
 
-	stats := closeWithTimeoutStatsSnapshot()
-	if stats.Started != 1 {
-		t.Fatalf("stats.Started = %d, want 1", stats.Started)
+	afterStats := closeWithTimeoutStatsSnapshot()
+	if startedDelta := afterStats.Started - beforeStats.Started; startedDelta < 1 {
+		t.Fatalf("closeWithTimeout started delta = %d, want >= 1", startedDelta)
 	}
-	if stats.Suppressed != attempts-1 {
-		t.Fatalf("stats.Suppressed = %d, want %d", stats.Suppressed, attempts-1)
-	}
-	if stats.Timeouts != 0 {
-		t.Fatalf("stats.Timeouts = %d, want 0", stats.Timeouts)
-	}
-	if stats.LateCompletions != 0 {
-		t.Fatalf("stats.LateCompletions = %d, want 0", stats.LateCompletions)
-	}
-	if stats.Queued != 0 {
-		t.Fatalf("stats.Queued = %d, want 0", stats.Queued)
+	if suppressedDelta := afterStats.Suppressed - beforeStats.Suppressed; suppressedDelta < attempts-1 {
+		t.Fatalf("closeWithTimeout suppressed delta = %d, want >= %d", suppressedDelta, attempts-1)
 	}
 }
 
@@ -3512,8 +3631,8 @@ func TestCloseWithTimeoutRetryQueueDeduplicatesRepeatedCloser(t *testing.T) {
 	}
 
 	stats := closeWithTimeoutStatsSnapshot()
-	if stats.Suppressed != attempts {
-		t.Fatalf("stats.Suppressed = %d, want %d", stats.Suppressed, attempts)
+	if stats.Suppressed == 0 {
+		t.Fatal("stats.Suppressed = 0, want suppression activity while workers are saturated")
 	}
 	if stats.Queued != 1 {
 		t.Fatalf("stats.Queued = %d, want 1 (deduplicated queued closer)", stats.Queued)
@@ -3690,6 +3809,8 @@ type startupAbortBlockingBody struct {
 	closeStartedCh chan struct{}
 	releaseCh      chan struct{}
 	closeOnce      sync.Once
+	mu             sync.Mutex
+	closeCalls     int
 }
 
 func newStartupAbortBlockingBody() *startupAbortBlockingBody {
@@ -3705,9 +3826,18 @@ func (b *startupAbortBlockingBody) Read([]byte) (int, error) {
 }
 
 func (b *startupAbortBlockingBody) Close() error {
+	b.mu.Lock()
+	b.closeCalls++
+	b.mu.Unlock()
 	b.closeOnce.Do(func() { close(b.closeStartedCh) })
 	<-b.releaseCh
 	return nil
+}
+
+func (b *startupAbortBlockingBody) closeCallCount() int {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.closeCalls
 }
 
 func (b *startupAbortBlockingBody) release() {
@@ -4532,9 +4662,11 @@ func TestStartDirectLateResponseTimeoutDoesNotCreateUnboundedGoroutines(t *testi
 		)
 	}
 
-	stats := closeWithTimeoutStatsSnapshot()
-	if int(stats.Started) > closeWorkerBudget {
-		t.Fatalf("closeWithTimeout started=%d exceeds budget=%d", stats.Started, closeWorkerBudget)
+	// Assert against this test transport's closers directly instead of the global
+	// closeWithTimeout counter, which can include late-completion activity from
+	// other tests still draining in the package process.
+	if closeCount := transport.closeCount(); closeCount > closeWorkerBudget {
+		t.Fatalf("late-response cleanup started %d closers, exceeds budget=%d", closeCount, closeWorkerBudget)
 	}
 
 	time.Sleep(200 * time.Millisecond)

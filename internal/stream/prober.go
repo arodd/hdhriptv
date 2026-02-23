@@ -52,6 +52,7 @@ type ProberConfig struct {
 	HTTPClient                     *http.Client
 	Logger                         *slog.Logger
 	ProducerReadRate               float64
+	ProducerReadRateCatchup        float64
 	ProducerInitialBurst           int
 	FFmpegReconnectEnabled         bool
 	FFmpegReconnectDelayMax        time.Duration
@@ -77,6 +78,7 @@ type BackgroundProber struct {
 	mode                           string
 	ffmpegPath                     string
 	readRate                       float64
+	readRateCatchup                float64
 	initialBurst                   int
 	ffmpegReconnectEnabled         bool
 	ffmpegReconnectDelayMax        time.Duration
@@ -135,6 +137,13 @@ func NewBackgroundProber(cfg ProberConfig, provider ProbeChannelsProvider) *Back
 	if readRate <= 0 {
 		readRate = defaultProducerReadRate
 	}
+	readRateCatchup := cfg.ProducerReadRateCatchup
+	if readRateCatchup <= 0 {
+		readRateCatchup = readRate
+	}
+	if readRateCatchup < readRate {
+		readRateCatchup = readRate
+	}
 
 	initialBurst := cfg.ProducerInitialBurst
 	if initialBurst <= 0 {
@@ -183,6 +192,7 @@ func NewBackgroundProber(cfg ProberConfig, provider ProbeChannelsProvider) *Back
 		mode:                           mode,
 		ffmpegPath:                     ffmpegPath,
 		readRate:                       readRate,
+		readRateCatchup:                readRateCatchup,
 		initialBurst:                   initialBurst,
 		ffmpegReconnectEnabled:         ffmpegReconnectEnabled,
 		ffmpegReconnectDelayMax:        ffmpegReconnectDelayMax,
@@ -337,6 +347,7 @@ func (p *BackgroundProber) ProbeOnce(ctx context.Context) error {
 			p.probeTimeout,
 			p.minProbe,
 			p.readRate,
+			p.readRateCatchup,
 			p.initialBurst,
 			p.ffmpegStartupProbeSize,
 			p.ffmpegStartupAnalyzeDelay,
