@@ -125,10 +125,14 @@ Built by `ffmpegArgs()` (`ffmpeg.go:1839`):
 - `-probesize` and `-analyzeduration` control MPEG-TS stream detection window
   (defaults: 1 MB / 1500 ms). On incomplete detection, a retry with relaxed
   parameters is attempted (2 MB / 3 s).
+- Optional `-buffer_size` input sizing (`FFMPEG_INPUT_BUFFER_SIZE`) for
+  ffmpeg stream modes.
 - Optional `-reconnect*` flags for ffmpeg-level reconnection.
 - In `ffmpeg-copy` mode, `-fflags +genpts` is enabled by default so ffmpeg can
   regenerate timestamps when upstream PTS/DTS continuity is weak. This can be
   disabled with `FFMPEG_COPY_REGENERATE_TIMESTAMPS=false` when needed.
+- `FFMPEG_DISCARD_CORRUPT=true` adds `-fflags +discardcorrupt` and combines
+  with `+genpts` in `ffmpeg-copy` mode when both features are enabled.
 
 ---
 

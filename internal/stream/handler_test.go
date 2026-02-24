@@ -2362,6 +2362,64 @@ func TestFFmpegArgs(t *testing.T) {
 		)
 	}
 
+	copyBufferDiscardArgs := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
+		"ffmpeg-copy",
+		"http://example.com/live.m3u8",
+		1,
+		1,
+		1,
+		32*1024,
+		200*time.Millisecond,
+		true,
+		1500*time.Millisecond,
+		3,
+		"4xx,5xx",
+		true,
+		0,
+		262144,
+		true,
+	)
+	copyBufferIndex, copyBufferValue, ok := findArg(copyBufferDiscardArgs, ffmpegInputBufferSizeOption)
+	if !ok || copyBufferValue != "262144" {
+		t.Fatalf("ffmpeg-copy args missing %s 262144: %#v", ffmpegInputBufferSizeOption, copyBufferDiscardArgs)
+	}
+	copyBufferInputIndex, _, ok := findArg(copyBufferDiscardArgs, "-i")
+	if !ok {
+		t.Fatalf("ffmpeg-copy args missing -i when buffer/discard configured: %#v", copyBufferDiscardArgs)
+	}
+	if copyBufferIndex > copyBufferInputIndex {
+		t.Fatalf("ffmpeg-copy args place %s after -i: %#v", ffmpegInputBufferSizeOption, copyBufferDiscardArgs)
+	}
+	copyBufferFFlagsIndex, copyBufferFFlagsValue, ok := findArg(copyBufferDiscardArgs, ffmpegInputFlagsOption)
+	if !ok || copyBufferFFlagsValue != "+genpts+discardcorrupt" {
+		t.Fatalf("ffmpeg-copy args missing %s +genpts+discardcorrupt: %#v", ffmpegInputFlagsOption, copyBufferDiscardArgs)
+	}
+	if copyBufferFFlagsIndex > copyBufferInputIndex {
+		t.Fatalf("ffmpeg-copy args place %s after -i when discard-corrupt enabled: %#v", ffmpegInputFlagsOption, copyBufferDiscardArgs)
+	}
+
+	copyDiscardOnlyArgs := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
+		"ffmpeg-copy",
+		"http://example.com/live.m3u8",
+		1,
+		1,
+		1,
+		32*1024,
+		200*time.Millisecond,
+		true,
+		1500*time.Millisecond,
+		3,
+		"4xx,5xx",
+		false,
+		0,
+		0,
+		true,
+	)
+	_, copyDiscardOnlyFFlagsValue, ok := findArg(copyDiscardOnlyArgs, ffmpegInputFlagsOption)
+	if !ok || copyDiscardOnlyFFlagsValue != "+discardcorrupt" {
+		t.Fatalf("ffmpeg-copy args missing %s +discardcorrupt when genpts disabled: %#v", ffmpegInputFlagsOption, copyDiscardOnlyArgs)
+	}
+
 	transcodeArgs := ffmpegArgs(
 		"ffmpeg-transcode",
 		"http://example.com/live.m3u8",

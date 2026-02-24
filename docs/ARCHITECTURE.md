@@ -369,6 +369,11 @@ Behavior notes:
   - response echoes normalized `min` and `q`.
 - `handleTunerStatus` (`GET /api/admin/tuners`) returns both live tuner/session
   rows and bounded shared-session history:
+  - supports optional `resolve_ip` boolean query parsing (`1/0`, `true/false`,
+    `yes/no`, `on/off`; default `false`); invalid values return HTTP `400`.
+  - when `resolve_ip=true`, reverse DNS hostnames are added as `client_host`
+    on both `client_streams[*]` and
+    `session_history[*].subscribers[*]` when lookup succeeds.
   - `session_history` is newest-first and includes active + recently closed sessions
     tracked in-memory during process lifetime.
   - `session_history_limit` reports current retention capacity (default `256`).

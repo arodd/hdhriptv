@@ -558,6 +558,8 @@ func TestAdminRoutesChannelSourceFlow(t *testing.T) {
 	for _, marker := range []string{
 		"Shared Session History",
 		`id="tuner-command-bar"`,
+		`id="command-bar-toggle"`,
+		`id="command-bar-controls"`,
 		`id="quick-filter-active"`,
 		`id="quick-filter-recovering"`,
 		`id="quick-filter-errors"`,
@@ -578,6 +580,7 @@ func TestAdminRoutesChannelSourceFlow(t *testing.T) {
 		`id="summary-card-reselect-alert"`,
 		`id="summary-max-reselect-severity"`,
 		`id="client-groups"`,
+		`id="resolve-client-ip"`,
 		`id="selected-session-detail"`,
 	} {
 		if !strings.Contains(tunerUIBody, marker) {
@@ -4353,6 +4356,442 @@ func TestAdminRoutesTunerStatusSnapshot(t *testing.T) {
 	}
 	if got, want := payload.SessionHistory[0].SessionID, uint64(501); got != want {
 		t.Fatalf("payload.session_history[0].session_id = %d, want %d", got, want)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPEnabled(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	provider := &fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 11,
+					ClientAddr:   "10.13.0.165:49084",
+				},
+				{
+					SubscriberID: 12,
+					ClientAddr:   "10.13.0.165:49085",
+				},
+				{
+					SubscriberID: 13,
+					ClientAddr:   "unknown-client",
+				},
+			},
+			SessionHistory: []stream.SharedSessionHistory{
+				{
+					SessionID: 7001,
+					Subscribers: []stream.SharedSessionSubscriberHistory{
+						{
+							SubscriberID: 22,
+							ClientAddr:   "10.13.0.165:59084",
+						},
+						{
+							SubscriberID: 23,
+							ClientAddr:   "10.13.0.166:59085",
+						},
+					},
+				},
+			},
+		},
+	}
+	handler.SetTunerStatusProvider(provider)
+
+	lookupCalls := make(map[string]int)
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		lookupCalls[addr]++
+		if addr == "10.13.0.165" {
+			return []string{"living-room.local."}, nil
+		}
+		if addr == "10.13.0.166" {
+			return []string{"kitchen-tablet.local."}, nil
+		}
+		return nil, fmt.Errorf("no PTR record")
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var payload stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &payload)
+
+	if got := len(payload.ClientStreams); got != 3 {
+		t.Fatalf("len(payload.client_streams) = %d, want 3", got)
+	}
+
+	if got, want := payload.ClientStreams[0].ClientHost, "living-room.local"; got != want {
+		t.Fatalf("payload.client_streams[0].client_host = %q, want %q", got, want)
+	}
+	if got, want := payload.ClientStreams[1].ClientHost, "living-room.local"; got != want {
+		t.Fatalf("payload.client_streams[1].client_host = %q, want %q", got, want)
+	}
+	if got := payload.ClientStreams[2].ClientHost; got != "" {
+		t.Fatalf("payload.client_streams[2].client_host = %q, want empty", got)
+	}
+	if got, want := payload.SessionHistory[0].Subscribers[0].ClientHost, "living-room.local"; got != want {
+		t.Fatalf("payload.session_history[0].subscribers[0].client_host = %q, want %q", got, want)
+	}
+	if got, want := payload.SessionHistory[0].Subscribers[1].ClientHost, "kitchen-tablet.local"; got != want {
+		t.Fatalf("payload.session_history[0].subscribers[1].client_host = %q, want %q", got, want)
+	}
+
+	// Duplicate IP lookups should be memoized per response.
+	if got, want := lookupCalls["10.13.0.165"], 1; got != want {
+		t.Fatalf("lookupCalls[10.13.0.165] = %d, want %d", got, want)
+	}
+	if got, want := lookupCalls["10.13.0.166"], 1; got != want {
+		t.Fatalf("lookupCalls[10.13.0.166] = %d, want %d", got, want)
+	}
+
+	// Provider snapshot should remain unchanged.
+	if got := provider.snapshot.ClientStreams[0].ClientHost; got != "" {
+		t.Fatalf("provider snapshot mutated client_host = %q, want empty", got)
+	}
+	if got := provider.snapshot.SessionHistory[0].Subscribers[0].ClientHost; got != "" {
+		t.Fatalf("provider snapshot mutated session_history subscriber client_host = %q, want empty", got)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPUsesPerLookupTimeout(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 41,
+					ClientAddr:   "10.99.0.1:40000",
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(ctx context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		deadline, hasDeadline := ctx.Deadline()
+		if !hasDeadline {
+			t.Fatal("lookup context missing deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("lookup context deadline remaining = %s, want positive", remaining)
+		}
+		if remaining > defaultResolveClientHostLookupTimeout {
+			t.Fatalf(
+				"lookup context deadline remaining = %s, want <= %s",
+				remaining,
+				defaultResolveClientHostLookupTimeout,
+			)
+		}
+		if addr != "10.99.0.1" {
+			t.Fatalf("lookup address = %q, want 10.99.0.1", addr)
+		}
+		return []string{"garage-tv.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var payload stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &payload)
+
+	if lookupCalls != 1 {
+		t.Fatalf("lookupCalls = %d, want 1", lookupCalls)
+	}
+	if got, want := payload.ClientStreams[0].ClientHost, "garage-tv.local"; got != want {
+		t.Fatalf("payload.client_streams[0].client_host = %q, want %q", got, want)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPUsesCrossRequestCache(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 51,
+					ClientAddr:   "10.88.0.7:41000",
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		if addr != "10.88.0.7" {
+			t.Fatalf("lookup address = %q, want 10.88.0.7", addr)
+		}
+		return []string{"bedroom-tv.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var first stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &first)
+	if got, want := first.ClientStreams[0].ClientHost, "bedroom-tv.local"; got != want {
+		t.Fatalf("first payload client_host = %q, want %q", got, want)
+	}
+
+	var second stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &second)
+	if got, want := second.ClientStreams[0].ClientHost, "bedroom-tv.local"; got != want {
+		t.Fatalf("second payload client_host = %q, want %q", got, want)
+	}
+
+	if lookupCalls != 1 {
+		t.Fatalf("lookupCalls = %d, want 1 across repeated requests", lookupCalls)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPUsesTotalTimeoutCap(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostsTimeout = 150 * time.Millisecond
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 61,
+					ClientAddr:   "10.88.0.8:41000",
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(ctx context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		if addr != "10.88.0.8" {
+			t.Fatalf("lookup address = %q, want 10.88.0.8", addr)
+		}
+		deadline, hasDeadline := ctx.Deadline()
+		if !hasDeadline {
+			t.Fatal("lookup context missing deadline")
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			t.Fatalf("lookup context deadline remaining = %s, want positive", remaining)
+		}
+		if remaining > 250*time.Millisecond {
+			t.Fatalf("lookup context deadline remaining = %s, want <= 250ms", remaining)
+		}
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	start := time.Now()
+	var payload stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &payload)
+	elapsed := time.Since(start)
+
+	if elapsed > time.Second {
+		t.Fatalf("resolve_ip request elapsed = %s, want <= 1s", elapsed)
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("lookupCalls = %d, want 1", lookupCalls)
+	}
+	if got := payload.ClientStreams[0].ClientHost; got != "" {
+		t.Fatalf("payload.client_streams[0].client_host = %q, want empty after timeout", got)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPMemoizesTimeoutLookupErrors(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 71,
+					ClientAddr:   "10.77.0.42:41000",
+				},
+				{
+					SubscriberID: 72,
+					ClientAddr:   "10.77.0.42:41001",
+				},
+			},
+			SessionHistory: []stream.SharedSessionHistory{
+				{
+					SessionID: 9001,
+					Subscribers: []stream.SharedSessionSubscriberHistory{
+						{
+							SubscriberID: 73,
+							ClientAddr:   "10.77.0.42:41002",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		if addr != "10.77.0.42" {
+			t.Fatalf("lookup address = %q, want 10.77.0.42", addr)
+		}
+		return nil, context.DeadlineExceeded
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var payload stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &payload)
+
+	if lookupCalls != 1 {
+		t.Fatalf("lookupCalls = %d, want 1 after timeout memoization", lookupCalls)
+	}
+	if got := payload.ClientStreams[0].ClientHost; got != "" {
+		t.Fatalf("payload.client_streams[0].client_host = %q, want empty after timeout", got)
+	}
+	if got := payload.ClientStreams[1].ClientHost; got != "" {
+		t.Fatalf("payload.client_streams[1].client_host = %q, want empty after timeout", got)
+	}
+	if got := payload.SessionHistory[0].Subscribers[0].ClientHost; got != "" {
+		t.Fatalf("payload.session_history[0].subscribers[0].client_host = %q, want empty after timeout", got)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPDisabledByDefault(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 21,
+					ClientAddr:   "10.13.0.99:41000",
+				},
+			},
+			SessionHistory: []stream.SharedSessionHistory{
+				{
+					SessionID: 8100,
+					Subscribers: []stream.SharedSessionSubscriberHistory{
+						{
+							SubscriberID: 31,
+							ClientAddr:   "10.13.0.99:41001",
+						},
+					},
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, _ string) ([]string, error) {
+		lookupCalls++
+		return []string{"should-not-be-used.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var payload stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners", nil, http.StatusOK, &payload)
+
+	if lookupCalls != 0 {
+		t.Fatalf("lookup calls = %d, want 0 when resolve_ip is omitted", lookupCalls)
+	}
+	if got := payload.ClientStreams[0].ClientHost; got != "" {
+		t.Fatalf("payload.client_streams[0].client_host = %q, want empty when resolve_ip is omitted", got)
+	}
+	if got := payload.SessionHistory[0].Subscribers[0].ClientHost; got != "" {
+		t.Fatalf("payload.session_history[0].subscribers[0].client_host = %q, want empty when resolve_ip is omitted", got)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPRejectsInvalidBoolean(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{})
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	rec := doRaw(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=banana", nil)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid resolve_ip status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), "resolve_ip must be a boolean") {
+		t.Fatalf("invalid resolve_ip body = %q, want boolean validation error", rec.Body.String())
 	}
 }
 

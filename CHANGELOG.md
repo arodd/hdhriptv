@@ -1,3 +1,19 @@
+- 2026-02-23 [docs] Expanded tuner diagnostics and ffmpeg buffer guidance with resolve_ip timeout/cache behavior, local DNS resolver recommendations, and explicit per-stream 64 MiB memory planning notes.
+- 2026-02-23 [bug] Added handler-level resolve_ip DNS caching plus an 8s total resolve budget to cap tuner status lookup latency under high unique-client churn.
+- 2026-02-23 [docs] Documented `/api/admin/tuners?resolve_ip=1` lookup latency characteristics and ffmpeg `discard_corrupt` / input-buffer guardrail semantics in API and operations docs.
+- 2026-02-23 [bug] Added a 2-second per-lookup timeout for tuner `resolve_ip` reverse DNS resolution to avoid long request-path stalls.
+- 2026-02-23 [bug] Added a 64 MiB validation ceiling for `ffmpeg_input_buffer_size` to prevent oversized per-stream buffer configuration.
+- 2026-02-23 [bug] Refactored stream FFmpeg startup helpers to pass typed `ffmpegStartupOptions` configs instead of growing positional argument chains.
+- 2026-02-23 [docs] Documented UPnP `GetSystemUpdateID` coalescing retry semantics and telemetry (`hdhr_content_directory_update_id_refresh_retries_total`) in the operations runbook.
+- 2026-02-23 [bug] Hardened UPnP ContentDirectory update-ID coalescing with bounded retry backoff, retry-cap guardrails, stale-cycle reset, and expanded consecutive-cancellation regression coverage.
+- 2026-02-23 [bug] Tuned `/ui/tuners` Active Sessions table responsiveness to fit wide viewports without forced horizontal scroll while preserving compact-window horizontal overflow behavior.
+- 2026-02-23 [bug] Fixed `/ui/tuners` compact-window Active Sessions table behavior so narrow viewports keep row height stable and use horizontal scrolling instead of per-cell vertical character wrapping.
+- 2026-02-23 [bug] Fixed `/ui/tuners` command-bar roll-up behavior so compact viewports (small desktop windows and mobile) can reliably collapse diagnostics controls.
+- 2026-02-23 [bug] Added a mobile roll-up toggle for `/ui/tuners` Diagnostics Command Bar so detailed filter/search/sort controls can collapse while reviewing stream and tuner diagnostics.
+- 2026-02-23 [feature] Added configurable ffmpeg input tuning for `-buffer_size` and optional `-fflags +discardcorrupt`, with independent `+genpts` toggle behavior.
+- 2026-02-23 [feature] Re-enabled Windows release artifact publishing by adding `hdhriptv-windows-amd64.exe` to release automation, CI build outputs, and release runbook docs.
+- 2026-02-23 [bug] Restored Windows cross-compilation by splitting ffmpeg process setup/termination into OS-specific stream helpers (Unix process-group handling and Windows-safe termination).
+- 2026-02-23 [feature] Added an opt-in `Resolve IP` toggle on the Tuners page that reverse-resolves client addresses for both live Client Streams and Shared Session History subscriber rows.
 - 2026-02-23 [feature] Tuned full-width Active Sessions table sizing so Source gets more horizontal room while compact columns (Subs, Last Push, Actions) use tighter fixed widths.
 - 2026-02-23 [feature] Simplified the Tuners dashboard by removing the redundant Alerts/Health rail and expanding the Active Sessions panel to full width.
 - 2026-02-23 [bug] Hardened `/api/admin/dvr` to reject non-`channels` primary providers server-side while keeping Jellyfin available for post-sync reload fan-out configuration.

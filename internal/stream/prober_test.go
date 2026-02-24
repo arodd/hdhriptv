@@ -762,6 +762,53 @@ func TestBackgroundProberCopyTimestampRegenerationDefaultsAndOverride(t *testing
 	}
 }
 
+func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T) {
+	defaults := NewBackgroundProber(ProberConfig{
+		Mode:          "ffmpeg-copy",
+		MinProbeBytes: 1,
+		ProbeTimeout:  time.Second,
+	}, &fakeProbeProvider{})
+	t.Cleanup(func() {
+		defaults.Close()
+	})
+	if defaults.ffmpegInputBufferSize != 0 {
+		t.Fatalf("ffmpegInputBufferSize = %d, want 0 by default", defaults.ffmpegInputBufferSize)
+	}
+	if defaults.ffmpegDiscardCorrupt {
+		t.Fatal("ffmpegDiscardCorrupt = true, want false by default")
+	}
+
+	configured := NewBackgroundProber(ProberConfig{
+		Mode:                  "ffmpeg-copy",
+		FFmpegInputBufferSize: 262144,
+		FFmpegDiscardCorrupt:  true,
+		MinProbeBytes:         1,
+		ProbeTimeout:          time.Second,
+	}, &fakeProbeProvider{})
+	t.Cleanup(func() {
+		configured.Close()
+	})
+	if configured.ffmpegInputBufferSize != 262144 {
+		t.Fatalf("ffmpegInputBufferSize = %d, want 262144", configured.ffmpegInputBufferSize)
+	}
+	if !configured.ffmpegDiscardCorrupt {
+		t.Fatal("ffmpegDiscardCorrupt = false, want true")
+	}
+
+	clamped := NewBackgroundProber(ProberConfig{
+		Mode:                  "ffmpeg-copy",
+		FFmpegInputBufferSize: -1,
+		MinProbeBytes:         1,
+		ProbeTimeout:          time.Second,
+	}, &fakeProbeProvider{})
+	t.Cleanup(func() {
+		clamped.Close()
+	})
+	if clamped.ffmpegInputBufferSize != 0 {
+		t.Fatalf("ffmpegInputBufferSize = %d, want 0 when configured negative", clamped.ffmpegInputBufferSize)
+	}
+}
+
 func TestBackgroundProberNormalizesProducerReadRateCatchup(t *testing.T) {
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:                    "ffmpeg-copy",

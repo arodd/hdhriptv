@@ -8,12 +8,16 @@ import (
 	"fmt"
 	"hash/fnv"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/arodd/hdhriptv/internal/channels"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
 )
 
 const (
@@ -23,10 +27,19 @@ const (
 	contentDirectoryChannelsID              = "channels"
 	contentDirectoryDefaultUpdateID         = 1
 	defaultContentDirectoryUpdateIDCacheTTL = time.Second
+	// Bound retries after canceled/deadline coalesced refreshes to avoid spin loops.
+	contentDirectoryUpdateIDRefreshRetryMax       = 4
+	contentDirectoryUpdateIDRefreshRetryBaseDelay = 5 * time.Millisecond
+	contentDirectoryUpdateIDRefreshRetryMaxDelay  = 100 * time.Millisecond
 )
 
 var (
-	connectionManagerProtocolInfo = "http-get:*:video/mpeg:*"
+	connectionManagerProtocolInfo              = "http-get:*:video/mpeg:*"
+	contentDirectoryUpdateIDRefreshRetryTotal  uint64
+	contentDirectoryUpdateIDRefreshRetryMetric = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "hdhr_content_directory_update_id_refresh_retries_total",
+		Help: "Total retries triggered after canceled or deadline-exceeded UPnP ContentDirectory update-id refreshes.",
+	})
 )
 
 type soapControlRequest struct {
@@ -540,6 +553,7 @@ func (h *Handler) currentContentDirectoryUpdateID(ctx context.Context, baseURL s
 	if h == nil {
 		return 0, fmt.Errorf("channels provider is not configured")
 	}
+	retryCount := 0
 	for {
 		if cachedUpdateID, ok := h.cachedContentDirectoryUpdateID(); ok {
 			return cachedUpdateID, nil
@@ -550,6 +564,8 @@ func (h *Handler) currentContentDirectoryUpdateID(ctx context.Context, baseURL s
 		if wait == nil {
 			wait = make(chan struct{})
 			h.contentDirectoryUpdateIDRefreshWait = wait
+			h.contentDirectoryUpdateIDRefreshValue = 0
+			h.contentDirectoryUpdateIDRefreshErr = nil
 			h.contentDirectoryUpdateIDRefreshMu.Unlock()
 
 			updateID, err := h.refreshContentDirectoryUpdateID(ctx, baseURL)
@@ -560,6 +576,22 @@ func (h *Handler) currentContentDirectoryUpdateID(ctx context.Context, baseURL s
 			close(wait)
 			h.contentDirectoryUpdateIDRefreshWait = nil
 			h.contentDirectoryUpdateIDRefreshMu.Unlock()
+			if shouldRetryContentDirectoryUpdateIDRefresh(err, ctx) {
+				retryCount++
+				if retryCount > contentDirectoryUpdateIDRefreshRetryMax {
+					return 0, fmt.Errorf(
+						"content-directory update-id refresh retry cap exceeded after %d attempts: %w",
+						contentDirectoryUpdateIDRefreshRetryMax,
+						err,
+					)
+				}
+				delay := contentDirectoryUpdateIDRefreshRetryDelay(retryCount)
+				recordContentDirectoryUpdateIDRefreshRetry(retryCount, delay, err)
+				if waitErr := waitForContentDirectoryUpdateIDRefreshRetry(ctx, delay); waitErr != nil {
+					return 0, waitErr
+				}
+				continue
+			}
 			return updateID, err
 		}
 		h.contentDirectoryUpdateIDRefreshMu.Unlock()
@@ -575,13 +607,76 @@ func (h *Handler) currentContentDirectoryUpdateID(ctx context.Context, baseURL s
 		err := h.contentDirectoryUpdateIDRefreshErr
 		h.contentDirectoryUpdateIDRefreshMu.Unlock()
 
-		// If the in-flight leader refresh used a canceled/deadline-exceeded context,
-		// waiters with live contexts should retry instead of inheriting that error.
-		if err != nil && ctx.Err() == nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+		if shouldRetryContentDirectoryUpdateIDRefresh(err, ctx) {
+			retryCount++
+			if retryCount > contentDirectoryUpdateIDRefreshRetryMax {
+				return 0, fmt.Errorf(
+					"content-directory update-id refresh retry cap exceeded after %d attempts: %w",
+					contentDirectoryUpdateIDRefreshRetryMax,
+					err,
+				)
+			}
+			delay := contentDirectoryUpdateIDRefreshRetryDelay(retryCount)
+			recordContentDirectoryUpdateIDRefreshRetry(retryCount, delay, err)
+			if waitErr := waitForContentDirectoryUpdateIDRefreshRetry(ctx, delay); waitErr != nil {
+				return 0, waitErr
+			}
 			continue
 		}
 		return updateID, err
 	}
+}
+
+func shouldRetryContentDirectoryUpdateIDRefresh(err error, ctx context.Context) bool {
+	if err == nil || ctx.Err() != nil {
+		return false
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func contentDirectoryUpdateIDRefreshRetryDelay(attempt int) time.Duration {
+	if attempt <= 1 {
+		return contentDirectoryUpdateIDRefreshRetryBaseDelay
+	}
+	delay := contentDirectoryUpdateIDRefreshRetryBaseDelay << (attempt - 1)
+	if delay <= 0 || delay > contentDirectoryUpdateIDRefreshRetryMaxDelay {
+		return contentDirectoryUpdateIDRefreshRetryMaxDelay
+	}
+	return delay
+}
+
+func waitForContentDirectoryUpdateIDRefreshRetry(ctx context.Context, delay time.Duration) error {
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func recordContentDirectoryUpdateIDRefreshRetry(attempt int, delay time.Duration, err error) {
+	atomic.AddUint64(&contentDirectoryUpdateIDRefreshRetryTotal, 1)
+	contentDirectoryUpdateIDRefreshRetryMetric.Inc()
+	slog.Debug(
+		"upnp content directory update-id refresh retrying after canceled refresh",
+		"attempt",
+		attempt,
+		"max_attempts",
+		contentDirectoryUpdateIDRefreshRetryMax,
+		"backoff",
+		delay,
+		"error",
+		err,
+	)
+}
+
+func contentDirectoryUpdateIDRefreshRetryCountSnapshot() uint64 {
+	return atomic.LoadUint64(&contentDirectoryUpdateIDRefreshRetryTotal)
 }
 
 func (h *Handler) refreshContentDirectoryUpdateID(ctx context.Context, baseURL string) (int, error) {

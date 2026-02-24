@@ -96,6 +96,29 @@
       letter-spacing: 0.01em;
     }
 
+    .panel-heading-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--border);
+      background: var(--panel-soft);
+    }
+
+    .panel-heading-row h2 {
+      margin: 0;
+      padding: 0;
+      border-bottom: 0;
+      background: transparent;
+    }
+
+    .panel-heading-row .inline-check {
+      color: var(--muted);
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
     .panel h3 {
       margin: 0;
       font-size: 0.86rem;
@@ -138,6 +161,38 @@
       border-color: #bfd0ea;
       background: rgba(252, 254, 255, 0.95);
       backdrop-filter: blur(6px);
+    }
+
+    .command-bar-heading {
+      align-items: center;
+    }
+
+    .command-bar-title-group {
+      display: grid;
+      gap: 2px;
+      min-width: 0;
+    }
+
+    #command-bar-rollup-summary {
+      display: none;
+    }
+
+    .command-bar-title-group .summary-note {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+
+    .command-toggle {
+      min-height: 30px;
+      padding: 5px 10px;
+      white-space: nowrap;
+      flex: 0 0 auto;
+    }
+
+    #command-bar-controls[hidden] {
+      display: none;
     }
 
     .command-grid {
@@ -409,12 +464,13 @@
 
     .active-sessions-table {
       table-layout: fixed;
+      width: 100%;
     }
 
     .active-sessions-table col.col-tuner { width: 8rem; }
     .active-sessions-table col.col-state { width: 9.5rem; }
     .active-sessions-table col.col-channel { width: 16rem; }
-    .active-sessions-table col.col-source { width: auto; }
+    .active-sessions-table col.col-source { width: 22rem; }
     .active-sessions-table col.col-throughput { width: 12rem; }
     .active-sessions-table col.col-subs { width: 4.5rem; }
     .active-sessions-table col.col-last-push { width: 11rem; }
@@ -780,6 +836,18 @@
       .history-master-detail {
         grid-template-columns: 1fr;
       }
+
+      .active-sessions-table {
+        table-layout: auto;
+        width: max-content;
+        min-width: 88rem;
+      }
+
+      .active-sessions-table .channel-cell,
+      .active-sessions-table .source-cell {
+        white-space: nowrap;
+        overflow-wrap: normal;
+      }
     }
 
     @media (max-width: 980px) {
@@ -818,6 +886,21 @@
 
       .history-list {
         max-height: 300px;
+      }
+    }
+
+    @media (max-width: 1100px), (max-height: 820px) {
+      .command-bar-heading {
+        align-items: center;
+        flex-direction: row;
+      }
+
+      #command-bar-rollup-summary {
+        display: block;
+      }
+
+      button.command-toggle {
+        width: auto;
       }
     }
 
@@ -872,6 +955,12 @@
         flex: 1 1 auto;
         text-align: center;
       }
+
+      .panel-heading-row {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
     }
   </style>
 </head>
@@ -890,9 +979,15 @@
 
   <main>
     <section id="tuner-command-bar" class="panel command-bar" aria-label="Tuner diagnostics command bar">
-      <h2>Diagnostics Command Bar</h2>
-      <div class="panel-body">
-        <div id="status" class="status" hidden></div>
+      <div class="panel-heading-row command-bar-heading">
+        <div class="command-bar-title-group">
+          <h2>Diagnostics Command Bar</h2>
+          <span id="command-bar-rollup-summary" class="summary-note">Auto 3s on · filter all · refresh pending</span>
+        </div>
+        <button id="command-bar-toggle" type="button" class="ghost command-toggle" aria-controls="command-bar-controls" aria-expanded="true" hidden>Show Controls</button>
+      </div>
+      <div id="status" class="status" hidden></div>
+      <div id="command-bar-controls" class="panel-body">
         <div class="command-grid">
           <div class="command-primary">
             <button id="refresh-btn" type="button" class="primary">Refresh Now</button>
@@ -1060,7 +1155,13 @@
 
     <section class="grid-secondary">
       <section class="panel span-8" aria-labelledby="clients-title">
-        <h2 id="clients-title">Client Streams</h2>
+        <div class="panel-heading-row">
+          <h2 id="clients-title">Client Streams</h2>
+          <label class="inline-check" title="Resolve client addresses with reverse DNS lookups.">
+            <input id="resolve-client-ip" type="checkbox">
+            Resolve IP
+          </label>
+        </div>
         <div class="panel-body">
           <div id="clients-empty" class="empty" hidden>No active subscribers in this view.</div>
           <div id="client-groups" class="client-groups"></div>
@@ -1132,10 +1233,16 @@
 
   <script>
     const statusEl = document.getElementById("status");
+    const tunerCommandBarEl = document.getElementById("tuner-command-bar");
+    const commandBarControlsEl = document.getElementById("command-bar-controls");
+    const commandBarToggleEl = document.getElementById("command-bar-toggle");
+    const commandBarSummaryEl = document.getElementById("command-bar-rollup-summary");
+    const commandBarCompactMedia = window.matchMedia("(max-width: 1100px), (max-height: 820px)");
     const tunersBodyEl = document.getElementById("tuners-body");
     const tunersEmptyEl = document.getElementById("tuners-empty");
     const clientGroupsEl = document.getElementById("client-groups");
     const clientsEmptyEl = document.getElementById("clients-empty");
+    const resolveClientIPEl = document.getElementById("resolve-client-ip");
     const historyListEl = document.getElementById("history-list");
     const historyEmptyEl = document.getElementById("history-empty");
     const historyTruncatedEl = document.getElementById("history-truncated");
@@ -1212,6 +1319,8 @@
       activeSortDir: "asc",
       historySortKey: "opened",
       historySortDir: "desc",
+      resolveClientIP: false,
+      commandBarExpanded: false,
       expandedClientGroups: new Set(),
     };
 
@@ -1295,6 +1404,21 @@
         return `${minutes}m ${seconds}s`;
       }
       return `${seconds}s`;
+    }
+
+    function formatClientDisplay(subscriber) {
+      const address = String(subscriber?.client_addr || "").trim();
+      const host = String(subscriber?.client_host || "").trim();
+      if (host && address && normalizeText(host) !== normalizeText(address)) {
+        return `<div>${escapeHTML(host)}</div><div class="muted mono">${escapeHTML(address)}</div>`;
+      }
+      if (host) {
+        return escapeHTML(host);
+      }
+      if (address) {
+        return escapeHTML(address);
+      }
+      return "unknown";
     }
 
     function escapeHTML(value) {
@@ -1537,7 +1661,7 @@
       const sources = Array.isArray(entry.sources) ? entry.sources : [];
       const subscribers = Array.isArray(entry.subscribers) ? entry.subscribers : [];
       const sourceBits = sources.map((source) => `${source.source_id || ""} ${source.item_key || ""} ${source.stream_url || ""}`).join(" ");
-      const subscriberBits = subscribers.map((subscriber) => `${subscriber.client_addr || ""} ${subscriber.subscriber_id || ""}`).join(" ");
+      const subscriberBits = subscribers.map((subscriber) => `${subscriber.client_addr || ""} ${subscriber.client_host || ""} ${subscriber.subscriber_id || ""}`).join(" ");
       return [
         entry.session_id,
         entry.tuner_id,
@@ -1556,6 +1680,7 @@
     function buildClientSearchBlob(stream) {
       return [
         stream.client_addr,
+        stream.client_host,
         stream.subscriber_id,
         stream.tuner_id,
         stream.guide_number,
@@ -1749,7 +1874,15 @@
     }
 
     async function fetchStatus() {
-      const resp = await fetch("/api/admin/tuners", {
+      const query = new URLSearchParams();
+      if (uiState.resolveClientIP) {
+        query.set("resolve_ip", "1");
+      }
+      const endpoint = query.size > 0
+        ? `/api/admin/tuners?${query.toString()}`
+        : "/api/admin/tuners";
+
+      const resp = await fetch(endpoint, {
         headers: { "Accept": "application/json" },
       });
       if (!resp.ok) {
@@ -1778,6 +1911,48 @@
       return resp.json();
     }
 
+    function buildCommandBarSummary() {
+      const autoLabel = autoRefreshEl.checked ? "Auto 3s on" : "Auto off";
+      const filterLabel = `filter ${uiState.quickFilter}`;
+      const refreshRaw = String(lastRefreshEl.textContent || "").replace(/^Last refresh:\s*/, "").trim();
+      const refreshLabel = refreshRaw && refreshRaw !== "-"
+        ? `updated ${refreshRaw}`
+        : "refresh pending";
+      return `${autoLabel} · ${filterLabel} · ${refreshLabel}`;
+    }
+
+    function updateCommandBarSummary() {
+      if (!commandBarSummaryEl) {
+        return;
+      }
+      commandBarSummaryEl.textContent = buildCommandBarSummary();
+    }
+
+    function setCommandBarExpanded(expanded, options = {}) {
+      if (!tunerCommandBarEl || !commandBarControlsEl || !commandBarToggleEl) {
+        return;
+      }
+      const compact = commandBarCompactMedia.matches;
+      const isExpanded = compact ? Boolean(expanded) : true;
+      const persistPreference = options.persistPreference !== false;
+      if (compact && persistPreference) {
+        uiState.commandBarExpanded = isExpanded;
+      }
+      commandBarControlsEl.hidden = !isExpanded;
+      commandBarToggleEl.hidden = !compact;
+      commandBarToggleEl.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+      commandBarToggleEl.textContent = isExpanded ? "Hide Controls" : "Show Controls";
+      tunerCommandBarEl.classList.toggle("mobile-collapsed", compact && !isExpanded);
+    }
+
+    function syncCommandBarForViewport() {
+      if (commandBarCompactMedia.matches) {
+        setCommandBarExpanded(uiState.commandBarExpanded, { persistPreference: false });
+        return;
+      }
+      setCommandBarExpanded(true, { persistPreference: false });
+    }
+
     function updateFilterChipUI() {
       for (const button of document.querySelectorAll("#quick-filter-chips .chip[data-filter]")) {
         const active = button.dataset.filter === uiState.quickFilter;
@@ -1795,6 +1970,8 @@
       historyRecoveryOnlyEl.checked = uiState.historyRecoveryOnly;
       historySearchInputEl.value = uiState.historySearchQuery;
       searchInputEl.value = uiState.searchQuery;
+      resolveClientIPEl.checked = uiState.resolveClientIP;
+      updateCommandBarSummary();
     }
 
     function reconcileSelections(payload) {
@@ -2044,7 +2221,7 @@
         const rows = group.subscribers.map((subscriber) => `
           <tr>
             <td><span class="mono">${escapeHTML(subscriber.subscriber_id)}</span></td>
-            <td>${escapeHTML(subscriber.client_addr || "unknown")}</td>
+            <td>${formatClientDisplay(subscriber)}</td>
             <td>${formatTS(subscriber.connected_at)}</td>
             <td>${escapeHTML(formatBitrate(subscriber.current_bitrate_bps))}</td>
             <td>${escapeHTML(formatBitrate(subscriber.profile_bitrate_bps))}</td>
@@ -2143,7 +2320,7 @@
         return `
           <tr>
             <td>${escapeHTML(subscriber.subscriber_id)}</td>
-            <td>${escapeHTML(subscriber.client_addr || "unknown")}</td>
+            <td>${formatClientDisplay(subscriber)}</td>
             <td>${formatTS(subscriber.connected_at)}</td>
             <td>${closedAt}</td>
             <td>${closeReason}</td>
@@ -2496,6 +2673,7 @@
       if (autoRefreshEl.checked) {
         refreshTimer = window.setInterval(refresh, 3000);
       }
+      updateCommandBarSummary();
     }
 
     document.getElementById("refresh-btn").addEventListener("click", () => {
@@ -2504,6 +2682,24 @@
     });
 
     autoRefreshEl.addEventListener("change", syncAutoRefresh);
+
+    if (commandBarToggleEl) {
+      commandBarToggleEl.addEventListener("click", () => {
+        setCommandBarExpanded(!uiState.commandBarExpanded);
+      });
+    }
+
+    if (typeof commandBarCompactMedia.addEventListener === "function") {
+      commandBarCompactMedia.addEventListener("change", syncCommandBarForViewport);
+    } else if (typeof commandBarCompactMedia.addListener === "function") {
+      commandBarCompactMedia.addListener(syncCommandBarForViewport);
+    }
+
+    resolveClientIPEl.addEventListener("change", () => {
+      uiState.resolveClientIP = resolveClientIPEl.checked;
+      refresh();
+      showStatus(uiState.resolveClientIP ? "Resolve IP enabled." : "Resolve IP disabled.");
+    });
 
     document.getElementById("quick-filter-chips").addEventListener("click", (event) => {
       const button = event.target.closest("button[data-filter]");
@@ -2766,6 +2962,8 @@
       }
     }, true);
 
+    syncCommandBarForViewport();
+    updateCommandBarSummary();
     showStatus("Loading tuner diagnostics...");
     refresh();
     syncAutoRefresh();

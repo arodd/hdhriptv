@@ -154,6 +154,7 @@ type ClientStreamStatus struct {
 	SourceID          int64     `json:"source_id,omitempty"`
 	SourceItemKey     string    `json:"source_item_key,omitempty"`
 	SourceStreamURL   string    `json:"source_stream_url,omitempty"`
+	ClientHost        string    `json:"client_host,omitempty"`
 	Resolution        string    `json:"resolution,omitempty"`
 	FrameRate         float64   `json:"frame_rate,omitempty"`
 	VideoCodec        string    `json:"video_codec,omitempty"`

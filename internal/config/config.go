@@ -18,6 +18,7 @@ const (
 	streamModeFFmpegTranscode = "ffmpeg-transcode"
 
 	defaultUPnPContentDirectoryUpdateIDCacheTTL = time.Second
+	maxFFmpegInputBufferSize                    = 64 << 20
 
 	defaultCatalogSearchMaxTerms      = 12
 	defaultCatalogSearchMaxDisjuncts  = 6
@@ -65,6 +66,8 @@ type Config struct {
 	FFmpegReconnectHTTPErrors            string
 	FFmpegStartupProbeSize               int
 	FFmpegStartupAnalyzeDuration         time.Duration
+	FFmpegInputBufferSize                int
+	FFmpegDiscardCorrupt                 bool
 	FFmpegCopyRegenerateTimestamps       bool
 	ProducerReadRate                     float64
 	ProducerReadRateCatchup              float64
@@ -147,6 +150,8 @@ type RedactedConfig struct {
 	FFmpegReconnectHTTPErrors            string   `json:"ffmpeg_reconnect_http_errors"`
 	FFmpegStartupProbeSize               int      `json:"ffmpeg_startup_probesize"`
 	FFmpegStartupAnalyzeDuration         string   `json:"ffmpeg_startup_analyzeduration"`
+	FFmpegInputBufferSize                int      `json:"ffmpeg_input_buffer_size"`
+	FFmpegDiscardCorrupt                 bool     `json:"ffmpeg_discard_corrupt"`
 	FFmpegCopyRegenerateTimestamps       bool     `json:"ffmpeg_copy_regenerate_timestamps"`
 	ProducerReadRate                     string   `json:"producer_readrate"`
 	ProducerReadRateCatchup              string   `json:"producer_readrate_catchup"`
@@ -229,6 +234,8 @@ func (c Config) Redacted() RedactedConfig {
 		FFmpegReconnectHTTPErrors:            c.FFmpegReconnectHTTPErrors,
 		FFmpegStartupProbeSize:               c.FFmpegStartupProbeSize,
 		FFmpegStartupAnalyzeDuration:         c.FFmpegStartupAnalyzeDuration.String(),
+		FFmpegInputBufferSize:                c.FFmpegInputBufferSize,
+		FFmpegDiscardCorrupt:                 c.FFmpegDiscardCorrupt,
 		FFmpegCopyRegenerateTimestamps:       c.FFmpegCopyRegenerateTimestamps,
 		ProducerReadRate:                     strconv.FormatFloat(c.ProducerReadRate, 'f', -1, 64),
 		ProducerReadRateCatchup:              strconv.FormatFloat(c.ProducerReadRateCatchup, 'f', -1, 64),
@@ -324,6 +331,8 @@ func Load(args []string) (Config, error) {
 		FFmpegReconnectHTTPErrors:            getenv("FFMPEG_RECONNECT_HTTP_ERRORS", ""),
 		FFmpegStartupProbeSize:               getenvInt("FFMPEG_STARTUP_PROBESIZE_BYTES", defaultFFmpegStartupProbeSizeBytes),
 		FFmpegStartupAnalyzeDuration:         getenvDuration("FFMPEG_STARTUP_ANALYZEDURATION", defaultFFmpegStartupAnalyzeDuration),
+		FFmpegInputBufferSize:                getenvInt("FFMPEG_INPUT_BUFFER_SIZE", 0),
+		FFmpegDiscardCorrupt:                 getenvBool("FFMPEG_DISCARD_CORRUPT", false),
 		FFmpegCopyRegenerateTimestamps:       getenvBool("FFMPEG_COPY_REGENERATE_TIMESTAMPS", true),
 		ProducerReadRate:                     getenvFloat("PRODUCER_READRATE", 1),
 		ProducerReadRateCatchup:              getenvFloat("PRODUCER_READRATE_CATCHUP", 1),
@@ -405,6 +414,8 @@ func Load(args []string) (Config, error) {
 	fs.StringVar(&cfg.FFmpegReconnectHTTPErrors, "ffmpeg-reconnect-http-errors", cfg.FFmpegReconnectHTTPErrors, "Comma-separated HTTP classes/codes for ffmpeg reconnect_on_http_error (for example 404,429,5xx)")
 	fs.IntVar(&cfg.FFmpegStartupProbeSize, "ffmpeg-startup-probesize-bytes", cfg.FFmpegStartupProbeSize, "FFmpeg input probesize in bytes used during startup analysis for ffmpeg stream modes (runtime floor applies)")
 	fs.DurationVar(&cfg.FFmpegStartupAnalyzeDuration, "ffmpeg-startup-analyzeduration", cfg.FFmpegStartupAnalyzeDuration, "FFmpeg input analyzeduration during startup for ffmpeg stream modes (runtime floor applies)")
+	fs.IntVar(&cfg.FFmpegInputBufferSize, "ffmpeg-input-buffer-size", cfg.FFmpegInputBufferSize, "FFmpeg input buffer size in bytes for ffmpeg stream modes (0 disables, max 64 MiB)")
+	fs.BoolVar(&cfg.FFmpegDiscardCorrupt, "ffmpeg-discard-corrupt", cfg.FFmpegDiscardCorrupt, "Enable ffmpeg input discard-corrupt handling using -fflags +discardcorrupt")
 	fs.BoolVar(&cfg.FFmpegCopyRegenerateTimestamps, "ffmpeg-copy-regenerate-timestamps", cfg.FFmpegCopyRegenerateTimestamps, "Enable ffmpeg-copy timestamp regeneration using -fflags +genpts")
 	fs.Float64Var(&cfg.ProducerReadRate, "producer-readrate", cfg.ProducerReadRate, "FFmpeg producer readrate value for shared sessions")
 	fs.Float64Var(&cfg.ProducerReadRateCatchup, "producer-readrate-catchup", cfg.ProducerReadRateCatchup, "FFmpeg producer catch-up readrate value for shared sessions (-readrate_catchup)")
@@ -582,6 +593,15 @@ func (c *Config) normalize() error {
 	}
 	if c.FFmpegReconnectMaxRetries < -1 {
 		return fmt.Errorf("ffmpeg-reconnect-max-retries must be -1 or greater")
+	}
+	if c.FFmpegInputBufferSize < 0 {
+		return fmt.Errorf("ffmpeg-input-buffer-size must be zero or positive")
+	}
+	if c.FFmpegInputBufferSize > maxFFmpegInputBufferSize {
+		return fmt.Errorf(
+			"ffmpeg-input-buffer-size must be less than or equal to %d bytes (64 MiB)",
+			maxFFmpegInputBufferSize,
+		)
 	}
 	if c.ProducerReadRate <= 0 {
 		return fmt.Errorf("producer-readrate must be positive")

@@ -49,6 +49,8 @@ type Config struct {
 	FFmpegReconnectHTTPErrors       string
 	FFmpegStartupProbeSize          int
 	FFmpegStartupAnalyzeDelay       time.Duration
+	FFmpegInputBufferSize           int
+	FFmpegDiscardCorrupt            bool
 	FFmpegCopyRegenerateTimestamps  *bool
 
 	ProducerReadRate        float64
@@ -210,6 +212,8 @@ func NewHandler(cfg Config, tuners *Pool, channelsProvider ChannelsProvider) *Ha
 		FFmpegReconnectHTTPErrors:       cfg.FFmpegReconnectHTTPErrors,
 		FFmpegStartupProbeSize:          cfg.FFmpegStartupProbeSize,
 		FFmpegStartupAnalyzeDelay:       cfg.FFmpegStartupAnalyzeDelay,
+		FFmpegInputBufferSize:           cfg.FFmpegInputBufferSize,
+		FFmpegDiscardCorrupt:            cfg.FFmpegDiscardCorrupt,
 		FFmpegCopyRegenerateTimestamps:  cfg.FFmpegCopyRegenerateTimestamps,
 		ProducerReadRate:                cfg.ProducerReadRate,
 		ProducerReadRateCatchup:         cfg.ProducerReadRateCatchup,

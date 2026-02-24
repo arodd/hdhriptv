@@ -60,6 +60,8 @@ type ProberConfig struct {
 	FFmpegReconnectHTTPErrors      string
 	FFmpegStartupProbeSize         int
 	FFmpegStartupAnalyzeDelay      time.Duration
+	FFmpegInputBufferSize          int
+	FFmpegDiscardCorrupt           bool
 	FFmpegCopyRegenerateTimestamps *bool
 	MinProbeBytes                  int
 	ProbeInterval                  time.Duration
@@ -86,6 +88,8 @@ type BackgroundProber struct {
 	ffmpegReconnectHTTPErrors      string
 	ffmpegStartupProbeSize         int
 	ffmpegStartupAnalyzeDelay      time.Duration
+	ffmpegInputBufferSize          int
+	ffmpegDiscardCorrupt           bool
 	ffmpegCopyRegenerateTimestamps bool
 	minProbe                       int
 	interval                       time.Duration
@@ -164,6 +168,10 @@ func NewBackgroundProber(cfg ProberConfig, provider ProbeChannelsProvider) *Back
 	if ffmpegStartupAnalyzeDelay <= 0 {
 		ffmpegStartupAnalyzeDelay = defaultFFmpegStartupAnalyzeDelay
 	}
+	ffmpegInputBufferSize := cfg.FFmpegInputBufferSize
+	if ffmpegInputBufferSize < 0 {
+		ffmpegInputBufferSize = 0
+	}
 	ffmpegCopyRegenerateTimestamps := resolveFFmpegCopyRegenerateTimestamps(
 		mode,
 		cfg.FFmpegCopyRegenerateTimestamps,
@@ -200,6 +208,8 @@ func NewBackgroundProber(cfg ProberConfig, provider ProbeChannelsProvider) *Back
 		ffmpegReconnectHTTPErrors:      ffmpegReconnectHTTPErrors,
 		ffmpegStartupProbeSize:         ffmpegStartupProbeSize,
 		ffmpegStartupAnalyzeDelay:      ffmpegStartupAnalyzeDelay,
+		ffmpegInputBufferSize:          ffmpegInputBufferSize,
+		ffmpegDiscardCorrupt:           cfg.FFmpegDiscardCorrupt,
 		ffmpegCopyRegenerateTimestamps: ffmpegCopyRegenerateTimestamps,
 		minProbe:                       minProbe,
 		interval:                       cfg.ProbeInterval,
@@ -355,6 +365,8 @@ func (p *BackgroundProber) ProbeOnce(ctx context.Context) error {
 			p.ffmpegReconnectDelayMax,
 			p.ffmpegReconnectMaxRetries,
 			p.ffmpegReconnectHTTPErrors,
+			p.ffmpegInputBufferSize,
+			p.ffmpegDiscardCorrupt,
 			p.ffmpegCopyRegenerateTimestamps,
 			0,
 			false,

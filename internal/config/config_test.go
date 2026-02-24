@@ -54,6 +54,12 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.FFmpegStartupAnalyzeDuration != defaultFFmpegStartupAnalyzeDuration {
 		t.Fatalf("FFmpegStartupAnalyzeDuration = %s, want %s", cfg.FFmpegStartupAnalyzeDuration, defaultFFmpegStartupAnalyzeDuration)
 	}
+	if cfg.FFmpegInputBufferSize != 0 {
+		t.Fatalf("FFmpegInputBufferSize = %d, want 0", cfg.FFmpegInputBufferSize)
+	}
+	if cfg.FFmpegDiscardCorrupt {
+		t.Fatal("FFmpegDiscardCorrupt = true, want false")
+	}
 	if !cfg.FFmpegCopyRegenerateTimestamps {
 		t.Fatal("FFmpegCopyRegenerateTimestamps = false, want true")
 	}
@@ -705,6 +711,8 @@ func TestLoadFailoverSettings(t *testing.T) {
 		"--ffmpeg-reconnect-delay-max=1500ms",
 		"--ffmpeg-reconnect-max-retries=4",
 		"--ffmpeg-reconnect-http-errors=429,5xx",
+		"--ffmpeg-input-buffer-size=1048576",
+		"--ffmpeg-discard-corrupt=true",
 		"--ffmpeg-copy-regenerate-timestamps=false",
 		"--probe-interval=1m",
 		"--probe-timeout=2s",
@@ -740,6 +748,12 @@ func TestLoadFailoverSettings(t *testing.T) {
 	if cfg.FFmpegReconnectHTTPErrors != "429,5xx" {
 		t.Fatalf("FFmpegReconnectHTTPErrors = %q, want 429,5xx", cfg.FFmpegReconnectHTTPErrors)
 	}
+	if cfg.FFmpegInputBufferSize != 1048576 {
+		t.Fatalf("FFmpegInputBufferSize = %d, want 1048576", cfg.FFmpegInputBufferSize)
+	}
+	if !cfg.FFmpegDiscardCorrupt {
+		t.Fatal("FFmpegDiscardCorrupt = false, want true")
+	}
 	if cfg.FFmpegCopyRegenerateTimestamps {
 		t.Fatal("FFmpegCopyRegenerateTimestamps = true, want false")
 	}
@@ -757,6 +771,26 @@ func TestLoadFailoverSettings(t *testing.T) {
 	}
 	if cfg.ProbeTimeout.String() != "2s" {
 		t.Fatalf("ProbeTimeout = %s, want 2s", cfg.ProbeTimeout)
+	}
+}
+
+func TestLoadAllowsFFmpegInputBufferSizeAt64MiBBoundary(t *testing.T) {
+	clearConfigEnv(t)
+
+	cfg, err := Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--ffmpeg-input-buffer-size=67108864",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.FFmpegInputBufferSize != maxFFmpegInputBufferSize {
+		t.Fatalf(
+			"FFmpegInputBufferSize = %d, want %d",
+			cfg.FFmpegInputBufferSize,
+			maxFFmpegInputBufferSize,
+		)
 	}
 }
 
@@ -1171,6 +1205,37 @@ func TestLoadFFmpegCopyRegenerateTimestampsFromEnvAndFlag(t *testing.T) {
 	}
 }
 
+func TestLoadFFmpegInputBufferAndDiscardCorruptFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("FFMPEG_INPUT_BUFFER_SIZE", "2097152")
+	t.Setenv("FFMPEG_DISCARD_CORRUPT", "true")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if cfg.FFmpegInputBufferSize != 2097152 {
+		t.Fatalf("FFmpegInputBufferSize = %d, want 2097152 from env", cfg.FFmpegInputBufferSize)
+	}
+	if !cfg.FFmpegDiscardCorrupt {
+		t.Fatal("FFmpegDiscardCorrupt = false, want true from env")
+	}
+
+	cfg, err = Load([]string{
+		"--ffmpeg-input-buffer-size=262144",
+		"--ffmpeg-discard-corrupt=false",
+	})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.FFmpegInputBufferSize != 262144 {
+		t.Fatalf("FFmpegInputBufferSize = %d, want 262144 from flag", cfg.FFmpegInputBufferSize)
+	}
+	if cfg.FFmpegDiscardCorrupt {
+		t.Fatal("FFmpegDiscardCorrupt = true, want false from flag")
+	}
+}
+
 func TestLoadRecoveryFillerEnvDefaultsAndOverrides(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("RECOVERY_FILLER_ENABLED", "false")
@@ -1375,6 +1440,24 @@ func TestLoadRejectsInvalidSharedSessionSettings(t *testing.T) {
 	_, err = Load([]string{
 		"--device-id=1234ABCD",
 		"--device-auth=test-token",
+		"--ffmpeg-input-buffer-size=-1",
+	})
+	if err == nil {
+		t.Fatal("expected error for negative ffmpeg-input-buffer-size")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--ffmpeg-input-buffer-size=67108865",
+	})
+	if err == nil {
+		t.Fatal("expected error for ffmpeg-input-buffer-size above 64MiB limit")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
 		"--producer-readrate-catchup=0",
 	})
 	if err == nil {
@@ -1573,6 +1656,8 @@ func clearConfigEnv(t *testing.T) {
 		"FFMPEG_RECONNECT_DELAY_MAX",
 		"FFMPEG_RECONNECT_MAX_RETRIES",
 		"FFMPEG_RECONNECT_HTTP_ERRORS",
+		"FFMPEG_INPUT_BUFFER_SIZE",
+		"FFMPEG_DISCARD_CORRUPT",
 		"FFMPEG_COPY_REGENERATE_TIMESTAMPS",
 		"PRODUCER_READRATE",
 		"PRODUCER_INITIAL_BURST",

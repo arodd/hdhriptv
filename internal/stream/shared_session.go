@@ -488,6 +488,8 @@ type SessionManagerConfig struct {
 	FFmpegReconnectHTTPErrors       string
 	FFmpegStartupProbeSize          int
 	FFmpegStartupAnalyzeDelay       time.Duration
+	FFmpegInputBufferSize           int
+	FFmpegDiscardCorrupt            bool
 	FFmpegCopyRegenerateTimestamps  *bool
 	ProducerReadRate                float64
 	ProducerReadRateCatchup         float64
@@ -538,6 +540,8 @@ type sessionManagerConfig struct {
 	ffmpegReconnectHTTPErrors       string
 	ffmpegStartupProbeSize          int
 	ffmpegStartupAnalyzeDelay       time.Duration
+	ffmpegInputBufferSize           int
+	ffmpegDiscardCorrupt            bool
 	ffmpegCopyRegenerateTimestamps  bool
 	producerReadRate                float64
 	producerReadRateCatchup         float64
@@ -735,6 +739,7 @@ type SharedSessionSourceHistory struct {
 type SharedSessionSubscriberHistory struct {
 	SubscriberID uint64    `json:"subscriber_id"`
 	ClientAddr   string    `json:"client_addr,omitempty"`
+	ClientHost   string    `json:"client_host,omitempty"`
 	ConnectedAt  time.Time `json:"connected_at"`
 	ClosedAt     time.Time `json:"closed_at,omitempty"`
 	CloseReason  string    `json:"close_reason,omitempty"`
@@ -5005,6 +5010,8 @@ func (s *sharedRuntimeSession) startSourceReader(
 		s.manager.cfg.ffmpegReconnectDelayMax,
 		s.manager.cfg.ffmpegReconnectMaxRetries,
 		s.manager.cfg.ffmpegReconnectHTTPErrors,
+		s.manager.cfg.ffmpegInputBufferSize,
+		s.manager.cfg.ffmpegDiscardCorrupt,
 		s.manager.cfg.ffmpegCopyRegenerateTimestamps,
 		startupPTSOffset,
 		requireRandomAccess,
@@ -7855,6 +7862,10 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 		cfg.FFmpegStartupProbeSize,
 		cfg.FFmpegStartupAnalyzeDelay,
 	)
+	ffmpegInputBufferSize := cfg.FFmpegInputBufferSize
+	if ffmpegInputBufferSize < 0 {
+		ffmpegInputBufferSize = 0
+	}
 	ffmpegCopyRegenerateTimestamps := resolveFFmpegCopyRegenerateTimestamps(
 		mode,
 		cfg.FFmpegCopyRegenerateTimestamps,
@@ -7970,6 +7981,8 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 		ffmpegReconnectHTTPErrors:       ffmpegReconnectHTTPErrors,
 		ffmpegStartupProbeSize:          ffmpegStartupProbeSize,
 		ffmpegStartupAnalyzeDelay:       ffmpegStartupAnalyzeDelay,
+		ffmpegInputBufferSize:           ffmpegInputBufferSize,
+		ffmpegDiscardCorrupt:            cfg.FFmpegDiscardCorrupt,
 		ffmpegCopyRegenerateTimestamps:  ffmpegCopyRegenerateTimestamps,
 		producerReadRate:                producerReadRate,
 		producerReadRateCatchup:         producerReadRateCatchup,

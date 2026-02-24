@@ -15782,6 +15782,12 @@ func TestNormalizeSessionManagerConfigRecoveryDefaults(t *testing.T) {
 	if !cfg.ffmpegCopyRegenerateTimestamps {
 		t.Fatal("ffmpegCopyRegenerateTimestamps = false, want true")
 	}
+	if cfg.ffmpegInputBufferSize != 0 {
+		t.Fatalf("ffmpegInputBufferSize = %d, want 0", cfg.ffmpegInputBufferSize)
+	}
+	if cfg.ffmpegDiscardCorrupt {
+		t.Fatal("ffmpegDiscardCorrupt = true, want false")
+	}
 	if cfg.producerReadRate != 1 {
 		t.Fatalf("producerReadRate = %v, want 1", cfg.producerReadRate)
 	}
@@ -15821,6 +15827,26 @@ func TestNormalizeSessionManagerConfigSessionDrainTimeoutOverride(t *testing.T) 
 	})
 	if cfg.ffmpegCopyRegenerateTimestamps {
 		t.Fatal("ffmpegCopyRegenerateTimestamps = true, want false override")
+	}
+
+	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:                  "ffmpeg-copy",
+		FFmpegInputBufferSize: 262144,
+		FFmpegDiscardCorrupt:  true,
+	})
+	if cfg.ffmpegInputBufferSize != 262144 {
+		t.Fatalf("ffmpegInputBufferSize = %d, want 262144", cfg.ffmpegInputBufferSize)
+	}
+	if !cfg.ffmpegDiscardCorrupt {
+		t.Fatal("ffmpegDiscardCorrupt = false, want true")
+	}
+
+	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:                  "ffmpeg-copy",
+		FFmpegInputBufferSize: -1,
+	})
+	if cfg.ffmpegInputBufferSize != 0 {
+		t.Fatalf("ffmpegInputBufferSize = %d, want 0 when negative", cfg.ffmpegInputBufferSize)
 	}
 }
 

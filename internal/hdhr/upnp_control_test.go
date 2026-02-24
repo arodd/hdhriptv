@@ -495,6 +495,153 @@ func TestCurrentContentDirectoryUpdateIDFollowerRetriesAfterLeaderCancellation(t
 	}
 }
 
+func TestCurrentContentDirectoryUpdateIDRetriesAcrossMultipleConsecutiveCanceledRefreshes(t *testing.T) {
+	provider := &canceledRefreshesThenSuccessProvider{
+		items: []channels.Channel{
+			{ChannelID: 11, GuideNumber: "101", GuideName: "Alpha", Enabled: true},
+		},
+		canceledCalls: 2,
+	}
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, provider)
+	h.contentDirectoryUpdateIDCacheTTL = 0
+
+	retryCountBefore := contentDirectoryUpdateIDRefreshRetryCountSnapshot()
+	updateID, err := h.currentContentDirectoryUpdateID(context.Background(), "http://example.local:5004")
+	if err != nil {
+		t.Fatalf("currentContentDirectoryUpdateID error = %v, want nil", err)
+	}
+	if updateID <= 0 {
+		t.Fatalf("update id = %d, want > 0", updateID)
+	}
+	if calls := provider.callsSnapshot(); calls != 3 {
+		t.Fatalf("ListEnabled calls = %d, want 3 (2 canceled retries + success)", calls)
+	}
+
+	retryCountAfter := contentDirectoryUpdateIDRefreshRetryCountSnapshot()
+	retriesDelta := retryCountAfter - retryCountBefore
+	if retriesDelta < 2 {
+		t.Fatalf("retry counter delta = %d, want at least 2", retriesDelta)
+	}
+}
+
+func TestCurrentContentDirectoryUpdateIDRetryCapExceeded(t *testing.T) {
+	provider := &canceledRefreshesThenSuccessProvider{
+		items: []channels.Channel{
+			{ChannelID: 11, GuideNumber: "101", GuideName: "Alpha", Enabled: true},
+		},
+		canceledCalls: contentDirectoryUpdateIDRefreshRetryMax + 8,
+	}
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, provider)
+	h.contentDirectoryUpdateIDCacheTTL = 0
+
+	retryCountBefore := contentDirectoryUpdateIDRefreshRetryCountSnapshot()
+	updateID, err := h.currentContentDirectoryUpdateID(context.Background(), "http://example.local:5004")
+	if err == nil {
+		t.Fatal("currentContentDirectoryUpdateID error = nil, want retry-cap failure")
+	}
+	if !strings.Contains(err.Error(), "retry cap exceeded") {
+		t.Fatalf("error = %v, want retry-cap exceeded message", err)
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want wrapped context canceled", err)
+	}
+	if updateID != 0 {
+		t.Fatalf("update id = %d, want 0 on retry-cap failure", updateID)
+	}
+	if calls := provider.callsSnapshot(); calls != contentDirectoryUpdateIDRefreshRetryMax+1 {
+		t.Fatalf(
+			"ListEnabled calls = %d, want %d (initial attempt + retry budget)",
+			calls,
+			contentDirectoryUpdateIDRefreshRetryMax+1,
+		)
+	}
+
+	retryCountAfter := contentDirectoryUpdateIDRefreshRetryCountSnapshot()
+	retriesDelta := retryCountAfter - retryCountBefore
+	if retriesDelta < uint64(contentDirectoryUpdateIDRefreshRetryMax) {
+		t.Fatalf(
+			"retry counter delta = %d, want at least %d",
+			retriesDelta,
+			contentDirectoryUpdateIDRefreshRetryMax,
+		)
+	}
+}
+
+func TestCurrentContentDirectoryUpdateIDClearsStaleRefreshResultBeforeLeaderCycle(t *testing.T) {
+	provider := &blockingChannelsProvider{
+		items: []channels.Channel{
+			{ChannelID: 11, GuideNumber: "101", GuideName: "Alpha", Enabled: true},
+		},
+		started: make(chan struct{}, 1),
+		release: make(chan struct{}),
+	}
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, provider)
+	h.contentDirectoryUpdateIDCacheTTL = 0
+
+	h.contentDirectoryUpdateIDRefreshMu.Lock()
+	h.contentDirectoryUpdateIDRefreshValue = 12345
+	h.contentDirectoryUpdateIDRefreshErr = errors.New("stale refresh error")
+	h.contentDirectoryUpdateIDRefreshMu.Unlock()
+
+	type refreshResult struct {
+		updateID int
+		err      error
+	}
+
+	resultCh := make(chan refreshResult, 1)
+	go func() {
+		updateID, err := h.currentContentDirectoryUpdateID(context.Background(), "http://example.local:5004")
+		resultCh <- refreshResult{updateID: updateID, err: err}
+	}()
+
+	select {
+	case <-provider.started:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader refresh call")
+	}
+
+	h.contentDirectoryUpdateIDRefreshMu.Lock()
+	intermediateValue := h.contentDirectoryUpdateIDRefreshValue
+	intermediateErr := h.contentDirectoryUpdateIDRefreshErr
+	h.contentDirectoryUpdateIDRefreshMu.Unlock()
+
+	if intermediateValue != 0 {
+		t.Fatalf("in-flight refresh value = %d, want 0 after stale clear", intermediateValue)
+	}
+	if intermediateErr != nil {
+		t.Fatalf("in-flight refresh err = %v, want nil after stale clear", intermediateErr)
+	}
+
+	close(provider.release)
+
+	select {
+	case result := <-resultCh:
+		if result.err != nil {
+			t.Fatalf("currentContentDirectoryUpdateID error = %v, want nil", result.err)
+		}
+		if result.updateID <= 0 {
+			t.Fatalf("update id = %d, want > 0", result.updateID)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for leader result")
+	}
+}
+
 func TestCurrentContentDirectoryUpdateIDFollowerCancellationWhileWaiting(t *testing.T) {
 	provider := &blockingChannelsProvider{
 		items: []channels.Channel{
@@ -891,6 +1038,41 @@ func (p *leaderCanceledThenSuccessProvider) ListEnabled(ctx context.Context) ([]
 }
 
 func (p *leaderCanceledThenSuccessProvider) callsSnapshot() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.calls
+}
+
+type canceledRefreshesThenSuccessProvider struct {
+	mu sync.Mutex
+
+	items []channels.Channel
+	calls int
+
+	canceledCalls int
+}
+
+func (p *canceledRefreshesThenSuccessProvider) ListEnabled(ctx context.Context) ([]channels.Channel, error) {
+	p.mu.Lock()
+	p.calls++
+	callNumber := p.calls
+	p.mu.Unlock()
+
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if callNumber <= p.canceledCalls {
+		return nil, context.Canceled
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]channels.Channel, len(p.items))
+	copy(out, p.items)
+	return out, nil
+}
+
+func (p *canceledRefreshesThenSuccessProvider) callsSnapshot() int {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.calls

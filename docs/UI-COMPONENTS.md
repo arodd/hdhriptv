@@ -232,7 +232,7 @@ Route registration happens in `admin_routes.go:259-274`.
 
 3. **Active Sessions** (full-width) — Table with columns: Tuner, State (with colored tags), Channel, Source, Throughput, Subscribers, Last Push, Actions (Trigger Recovery button). Rows are selectable — clicking a row populates the "Selected Active Session" detail aside.
 
-4. **Client Streams** (8/12 grid) — Grouped by session using collapsible `<details>` elements. Each group shows subscriber count and a table of client connections.
+4. **Client Streams** (8/12 grid) — Grouped by session using collapsible `<details>` elements. Each group shows subscriber count and a table of client connections. The panel header includes a **Resolve IP** checkbox that opt-in enables reverse-DNS hostname display for both live client rows and history subscriber rows.
 
 5. **Selected Active Session** (4/12 grid aside) — Detail card grid showing full metrics for the clicked session row.
 
@@ -242,12 +242,13 @@ Route registration happens in `admin_routes.go:259-274`.
 
 **Key patterns:**
 - Auto-refresh polls `GET /api/admin/tuners` every 3 seconds when enabled (checkbox defaults to checked)
+- When **Resolve IP** is checked, status polling appends `resolve_ip=1` so the backend resolves client hosts and the UI renders host + address together.
 - Trigger Recovery button sends `POST /api/admin/tuners/recovery` with `channel_id` and `reason: "ui_manual_trigger"`
 - Complex client-side filtering, sorting, and search across all panels using the shared `uiState.searchQuery`
 - `formatDurationMs()`, `formatBitrate()`, `formatFPS()` utility functions for human-readable display
 
 **API endpoints used:**
-- `GET /api/admin/tuners` — full tuner status snapshot (active sessions, history, alerts, summary)
+- `GET /api/admin/tuners` — full tuner status snapshot (active sessions, history, alerts, summary); supports optional `resolve_ip` boolean query for reverse-DNS host enrichment
 - `POST /api/admin/tuners/recovery` — trigger session recovery
 
 ---

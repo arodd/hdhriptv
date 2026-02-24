@@ -17,7 +17,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -61,9 +60,11 @@ const (
 	defaultFFmpegCopyRegenerateTimestamps = true
 	ffmpegReadrateInitialBurstOption      = "-readrate_initial_burst"
 	ffmpegReadrateCatchupOption           = "-readrate_catchup"
+	ffmpegInputBufferSizeOption           = "-buffer_size"
 	ffmpegInputFlagsOption                = "-fflags"
 	ffmpegOutputTSOffsetOption            = "-output_ts_offset"
 	ffmpegGenPTSFlag                      = "+genpts"
+	ffmpegDiscardCorruptFlag              = "+discardcorrupt"
 	minFFmpegStartupProbeSize             = 128_000
 	minFFmpegStartupAnalyzeDelay          = 1 * time.Second
 	defaultFFmpegStartupProbeSize         = 1_000_000
@@ -1244,6 +1245,50 @@ func startDirectWithContexts(
 	}, nil
 }
 
+type ffmpegStartupOptions struct {
+	ffmpegPath  string
+	upstreamURL string
+	mode        string
+
+	startupTimeout         time.Duration
+	minProbeBytes          int
+	readRate               float64
+	readRateCatchup        float64
+	initialBurst           int
+	startupProbeSize       int
+	startupAnalyzeDuration time.Duration
+	reconnectEnabled       bool
+	reconnectDelayMax      time.Duration
+	reconnectMaxRetries    int
+	reconnectHTTPErrors    string
+	copyRegenerateTS       bool
+	outputTSOffset         time.Duration
+	inputBufferSize        int
+	discardCorrupt         bool
+	requireRandomAccess    bool
+}
+
+func (o ffmpegStartupOptions) withReadRateCatchup(readRateCatchup float64) ffmpegStartupOptions {
+	o.readRateCatchup = readRateCatchup
+	return o
+}
+
+func (o ffmpegStartupOptions) withStartupTimeout(startupTimeout time.Duration) ffmpegStartupOptions {
+	o.startupTimeout = startupTimeout
+	return o
+}
+
+func (o ffmpegStartupOptions) withStartupDetection(startupProbeSize int, startupAnalyzeDuration time.Duration) ffmpegStartupOptions {
+	o.startupProbeSize = startupProbeSize
+	o.startupAnalyzeDuration = startupAnalyzeDuration
+	return o
+}
+
+func (o ffmpegStartupOptions) withInitialBurst(initialBurst int) ffmpegStartupOptions {
+	o.initialBurst = initialBurst
+	return o
+}
+
 func startFFmpeg(
 	ctx context.Context,
 	ffmpegPath, upstreamURL, mode string,
@@ -1262,22 +1307,23 @@ func startFFmpeg(
 	return startFFmpegWithContextsConfigured(
 		ctx,
 		ctx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		defaultFFmpegCopyRegenerateTimestamps,
-		0,
-		requireRandomAccess,
+		ffmpegStartupOptions{
+			ffmpegPath:             ffmpegPath,
+			upstreamURL:            upstreamURL,
+			mode:                   mode,
+			startupTimeout:         startupTimeout,
+			minProbeBytes:          minProbeBytes,
+			readRate:               readRate,
+			initialBurst:           initialBurst,
+			startupProbeSize:       startupProbeSize,
+			startupAnalyzeDuration: startupAnalyzeDuration,
+			reconnectEnabled:       reconnectEnabled,
+			reconnectDelayMax:      reconnectDelayMax,
+			reconnectMaxRetries:    reconnectMaxRetries,
+			reconnectHTTPErrors:    reconnectHTTPErrors,
+			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
+			requireRandomAccess:    requireRandomAccess,
+		},
 	)
 }
 
@@ -1300,111 +1346,45 @@ func startFFmpegWithContexts(
 	return startFFmpegWithContextsConfigured(
 		startupCtx,
 		streamCtx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		defaultFFmpegCopyRegenerateTimestamps,
-		0,
-		requireRandomAccess,
+		ffmpegStartupOptions{
+			ffmpegPath:             ffmpegPath,
+			upstreamURL:            upstreamURL,
+			mode:                   mode,
+			startupTimeout:         startupTimeout,
+			minProbeBytes:          minProbeBytes,
+			readRate:               readRate,
+			initialBurst:           initialBurst,
+			startupProbeSize:       startupProbeSize,
+			startupAnalyzeDuration: startupAnalyzeDuration,
+			reconnectEnabled:       reconnectEnabled,
+			reconnectDelayMax:      reconnectDelayMax,
+			reconnectMaxRetries:    reconnectMaxRetries,
+			reconnectHTTPErrors:    reconnectHTTPErrors,
+			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
+			requireRandomAccess:    requireRandomAccess,
+		},
 	)
 }
 
 func startFFmpegWithContextsConfigured(
 	startupCtx context.Context,
 	streamCtx context.Context,
-	ffmpegPath, upstreamURL, mode string,
-	startupTimeout time.Duration,
-	minProbeBytes int,
-	readRate float64,
-	initialBurst int,
-	startupProbeSize int,
-	startupAnalyzeDuration time.Duration,
-	reconnectEnabled bool,
-	reconnectDelayMax time.Duration,
-	reconnectMaxRetries int,
-	reconnectHTTPErrors string,
-	copyRegenerateTimestamps bool,
-	outputTSOffset time.Duration,
-	requireRandomAccess bool,
+	opts ffmpegStartupOptions,
 ) (*streamSession, error) {
-	return startFFmpegWithContextsConfiguredReadrateCatchup(
-		startupCtx,
-		streamCtx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		readRate,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		copyRegenerateTimestamps,
-		outputTSOffset,
-		requireRandomAccess,
-	)
+	return startFFmpegWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, opts.withReadRateCatchup(opts.readRate))
 }
 
 func startFFmpegWithContextsConfiguredReadrateCatchup(
 	startupCtx context.Context,
 	streamCtx context.Context,
-	ffmpegPath, upstreamURL, mode string,
-	startupTimeout time.Duration,
-	minProbeBytes int,
-	readRate float64,
-	readRateCatchup float64,
-	initialBurst int,
-	startupProbeSize int,
-	startupAnalyzeDuration time.Duration,
-	reconnectEnabled bool,
-	reconnectDelayMax time.Duration,
-	reconnectMaxRetries int,
-	reconnectHTTPErrors string,
-	copyRegenerateTimestamps bool,
-	outputTSOffset time.Duration,
-	requireRandomAccess bool,
+	opts ffmpegStartupOptions,
 ) (*streamSession, error) {
 	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
 
-	startupProbeSize, startupAnalyzeDuration = normalizeFFmpegStartupDetection(startupProbeSize, startupAnalyzeDuration)
+	opts.startupProbeSize, opts.startupAnalyzeDuration = normalizeFFmpegStartupDetection(opts.startupProbeSize, opts.startupAnalyzeDuration)
 
 	startedAt := time.Now()
-	session, err := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
-		startupCtx,
-		streamCtx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		readRateCatchup,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		copyRegenerateTimestamps,
-		outputTSOffset,
-		requireRandomAccess,
-	)
+	session, err := startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -1414,8 +1394,8 @@ func startFFmpegWithContextsConfiguredReadrateCatchup(
 		return session, nil
 	}
 
-	relaxedProbeSize, relaxedAnalyzeDuration := relaxedFFmpegStartupDetection(startupProbeSize, startupAnalyzeDuration)
-	if relaxedProbeSize <= startupProbeSize && relaxedAnalyzeDuration <= startupAnalyzeDuration {
+	relaxedProbeSize, relaxedAnalyzeDuration := relaxedFFmpegStartupDetection(opts.startupProbeSize, opts.startupAnalyzeDuration)
+	if relaxedProbeSize <= opts.startupProbeSize && relaxedAnalyzeDuration <= opts.startupAnalyzeDuration {
 		session.close()
 		return nil, &streamFailure{
 			status:          http.StatusBadGateway,
@@ -1424,7 +1404,7 @@ func startFFmpegWithContextsConfiguredReadrateCatchup(
 		}
 	}
 
-	remaining := startupTimeout - time.Since(startedAt)
+	remaining := opts.startupTimeout - time.Since(startedAt)
 	if remaining <= ffmpegRetryStartupTimeoutFloor {
 		session.close()
 		return nil, &streamFailure{
@@ -1434,27 +1414,8 @@ func startFFmpegWithContextsConfiguredReadrateCatchup(
 		}
 	}
 
-	retrySession, retryErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
-		startupCtx,
-		streamCtx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		remaining,
-		minProbeBytes,
-		readRate,
-		readRateCatchup,
-		initialBurst,
-		relaxedProbeSize,
-		relaxedAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		copyRegenerateTimestamps,
-		outputTSOffset,
-		requireRandomAccess,
-	)
+	retryOpts := opts.withStartupTimeout(remaining).withStartupDetection(relaxedProbeSize, relaxedAnalyzeDuration)
+	retrySession, retryErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, retryOpts)
 	if retryErr != nil {
 		session.close()
 		return nil, retryErr
@@ -1492,22 +1453,23 @@ func startFFmpegOnce(
 	return startFFmpegOnceWithContextsConfigured(
 		ctx,
 		ctx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		defaultFFmpegCopyRegenerateTimestamps,
-		0,
-		requireRandomAccess,
+		ffmpegStartupOptions{
+			ffmpegPath:             ffmpegPath,
+			upstreamURL:            upstreamURL,
+			mode:                   mode,
+			startupTimeout:         startupTimeout,
+			minProbeBytes:          minProbeBytes,
+			readRate:               readRate,
+			initialBurst:           initialBurst,
+			startupProbeSize:       startupProbeSize,
+			startupAnalyzeDuration: startupAnalyzeDuration,
+			reconnectEnabled:       reconnectEnabled,
+			reconnectDelayMax:      reconnectDelayMax,
+			reconnectMaxRetries:    reconnectMaxRetries,
+			reconnectHTTPErrors:    reconnectHTTPErrors,
+			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
+			requireRandomAccess:    requireRandomAccess,
+		},
 	)
 }
 
@@ -1530,113 +1492,69 @@ func startFFmpegOnceWithContexts(
 	return startFFmpegOnceWithContextsConfigured(
 		startupCtx,
 		streamCtx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		defaultFFmpegCopyRegenerateTimestamps,
-		0,
-		requireRandomAccess,
+		ffmpegStartupOptions{
+			ffmpegPath:             ffmpegPath,
+			upstreamURL:            upstreamURL,
+			mode:                   mode,
+			startupTimeout:         startupTimeout,
+			minProbeBytes:          minProbeBytes,
+			readRate:               readRate,
+			initialBurst:           initialBurst,
+			startupProbeSize:       startupProbeSize,
+			startupAnalyzeDuration: startupAnalyzeDuration,
+			reconnectEnabled:       reconnectEnabled,
+			reconnectDelayMax:      reconnectDelayMax,
+			reconnectMaxRetries:    reconnectMaxRetries,
+			reconnectHTTPErrors:    reconnectHTTPErrors,
+			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
+			requireRandomAccess:    requireRandomAccess,
+		},
 	)
 }
 
 func startFFmpegOnceWithContextsConfigured(
 	startupCtx context.Context,
 	streamCtx context.Context,
-	ffmpegPath, upstreamURL, mode string,
-	startupTimeout time.Duration,
-	minProbeBytes int,
-	readRate float64,
-	initialBurst int,
-	startupProbeSize int,
-	startupAnalyzeDuration time.Duration,
-	reconnectEnabled bool,
-	reconnectDelayMax time.Duration,
-	reconnectMaxRetries int,
-	reconnectHTTPErrors string,
-	copyRegenerateTimestamps bool,
-	outputTSOffset time.Duration,
-	requireRandomAccess bool,
+	opts ffmpegStartupOptions,
 ) (*streamSession, error) {
-	return startFFmpegOnceWithContextsConfiguredReadrateCatchup(
-		startupCtx,
-		streamCtx,
-		ffmpegPath,
-		upstreamURL,
-		mode,
-		startupTimeout,
-		minProbeBytes,
-		readRate,
-		readRate,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		copyRegenerateTimestamps,
-		outputTSOffset,
-		requireRandomAccess,
-	)
+	return startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, opts.withReadRateCatchup(opts.readRate))
 }
 
 func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 	startupCtx context.Context,
 	streamCtx context.Context,
-	ffmpegPath, upstreamURL, mode string,
-	startupTimeout time.Duration,
-	minProbeBytes int,
-	readRate float64,
-	readRateCatchup float64,
-	initialBurst int,
-	startupProbeSize int,
-	startupAnalyzeDuration time.Duration,
-	reconnectEnabled bool,
-	reconnectDelayMax time.Duration,
-	reconnectMaxRetries int,
-	reconnectHTTPErrors string,
-	copyRegenerateTimestamps bool,
-	outputTSOffset time.Duration,
-	requireRandomAccess bool,
+	opts ffmpegStartupOptions,
 ) (*streamSession, error) {
 	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
 	startedAt := time.Now()
 
 	args := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
-		mode,
-		upstreamURL,
-		readRate,
-		readRateCatchup,
-		initialBurst,
-		startupProbeSize,
-		startupAnalyzeDuration,
-		reconnectEnabled,
-		reconnectDelayMax,
-		reconnectMaxRetries,
-		reconnectHTTPErrors,
-		copyRegenerateTimestamps,
-		outputTSOffset,
+		opts.mode,
+		opts.upstreamURL,
+		opts.readRate,
+		opts.readRateCatchup,
+		opts.initialBurst,
+		opts.startupProbeSize,
+		opts.startupAnalyzeDuration,
+		opts.reconnectEnabled,
+		opts.reconnectDelayMax,
+		opts.reconnectMaxRetries,
+		opts.reconnectHTTPErrors,
+		opts.copyRegenerateTS,
+		opts.outputTSOffset,
+		opts.inputBufferSize,
+		opts.discardCorrupt,
 	)
 	if len(args) == 0 {
 		return nil, &streamFailure{
 			status:          http.StatusInternalServerError,
 			responseStarted: false,
-			err:             fmt.Errorf("unsupported ffmpeg mode %q", mode),
+			err:             fmt.Errorf("unsupported ffmpeg mode %q", opts.mode),
 		}
 	}
 
-	cmd := exec.CommandContext(streamCtx, ffmpegPath, args...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd := exec.CommandContext(streamCtx, opts.ffmpegPath, args...)
+	configureFFmpegCommand(cmd)
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -1667,9 +1585,9 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 	probe, randomAccessReady, randomAccessCodec, inventoryProbe, probeTelemetry, err := readStartupProbeWithRandomAccess(
 		startupCtx,
 		stdout,
-		minProbeBytes,
-		startupTimeout,
-		requireRandomAccess,
+		opts.minProbeBytes,
+		opts.startupTimeout,
+		opts.requireRandomAccess,
 		func() {
 			killCommand(cmd)
 		},
@@ -1679,32 +1597,13 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 		waitErr := waitFFmpeg(cmd, stderr)
 		if waitErr != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			if ffmpegReadrateInitialBurstUnsupported(waitErr) && ffmpegArgsContains(args, ffmpegReadrateInitialBurstOption) {
-				remaining := startupTimeout
-				if startupTimeout > 0 {
-					remaining = startupTimeout - time.Since(startedAt)
+				remaining := opts.startupTimeout
+				if opts.startupTimeout > 0 {
+					remaining = opts.startupTimeout - time.Since(startedAt)
 				}
-				if remaining > 0 || startupTimeout <= 0 {
-					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
-						startupCtx,
-						streamCtx,
-						ffmpegPath,
-						upstreamURL,
-						mode,
-						remaining,
-						minProbeBytes,
-						readRate,
-						readRateCatchup,
-						-1,
-						startupProbeSize,
-						startupAnalyzeDuration,
-						reconnectEnabled,
-						reconnectDelayMax,
-						reconnectMaxRetries,
-						reconnectHTTPErrors,
-						copyRegenerateTimestamps,
-						outputTSOffset,
-						requireRandomAccess,
-					)
+				if remaining > 0 || opts.startupTimeout <= 0 {
+					fallbackOpts := opts.withStartupTimeout(remaining).withInitialBurst(-1)
+					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, fallbackOpts)
 					if fallbackErr == nil {
 						fallbackSession.startupNoInitialBurstFallback = true
 						return fallbackSession, nil
@@ -1713,32 +1612,13 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 				}
 			}
 			if ffmpegReadrateCatchupUnsupported(waitErr) && ffmpegArgsContains(args, ffmpegReadrateCatchupOption) {
-				remaining := startupTimeout
-				if startupTimeout > 0 {
-					remaining = startupTimeout - time.Since(startedAt)
+				remaining := opts.startupTimeout
+				if opts.startupTimeout > 0 {
+					remaining = opts.startupTimeout - time.Since(startedAt)
 				}
-				if remaining > 0 || startupTimeout <= 0 {
-					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(
-						startupCtx,
-						streamCtx,
-						ffmpegPath,
-						upstreamURL,
-						mode,
-						remaining,
-						minProbeBytes,
-						readRate,
-						-1,
-						initialBurst,
-						startupProbeSize,
-						startupAnalyzeDuration,
-						reconnectEnabled,
-						reconnectDelayMax,
-						reconnectMaxRetries,
-						reconnectHTTPErrors,
-						copyRegenerateTimestamps,
-						outputTSOffset,
-						requireRandomAccess,
-					)
+				if remaining > 0 || opts.startupTimeout <= 0 {
+					fallbackOpts := opts.withStartupTimeout(remaining).withReadRateCatchup(-1)
+					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, fallbackOpts)
 					if fallbackErr == nil {
 						fallbackSession.startupNoReadrateCatchupFallback = true
 						return fallbackSession, nil
@@ -2893,13 +2773,7 @@ func killCommand(cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	// Kill the entire process group (negative PID) so wrapper-script children
-	// that inherited pipe FDs are terminated together with the parent.
-	// This prevents cmd.Wait() from blocking on pipe-copy goroutines when
-	// orphaned children hold stdout/stderr FDs open.
-	_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	// Also kill the direct process in case Setpgid was not effective.
-	_ = cmd.Process.Kill()
+	terminateFFmpegCommand(cmd)
 }
 
 func waitFFmpeg(cmd *exec.Cmd, stderr *boundedTailBuffer) error {
@@ -3099,6 +2973,8 @@ func ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
 		reconnectHTTPErrors,
 		copyRegenerateTimestamps,
 		outputTSOffset,
+		0,
+		false,
 	)
 }
 
@@ -3115,6 +2991,8 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 	reconnectHTTPErrors string,
 	copyRegenerateTimestamps bool,
 	outputTSOffset time.Duration,
+	inputBufferSize int,
+	discardCorrupt bool,
 ) []string {
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
 	readRateArg := formatReadRate(readRate)
@@ -3144,6 +3022,9 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 	if includeInitialBurst {
 		inputArgs = append(inputArgs, ffmpegReadrateInitialBurstOption, strconv.Itoa(initialBurst))
 	}
+	if inputBufferSize > 0 {
+		inputArgs = append(inputArgs, ffmpegInputBufferSizeOption, strconv.Itoa(inputBufferSize))
+	}
 	if startupProbeSize > 0 {
 		inputArgs = append(inputArgs, "-probesize", strconv.Itoa(startupProbeSize))
 	}
@@ -3158,9 +3039,7 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 	)
-	if normalizedMode == "ffmpeg-copy" && copyRegenerateTimestamps {
-		inputArgs = append(inputArgs, ffmpegInputFlagsOption, ffmpegGenPTSFlag)
-	}
+	inputArgs = appendFFmpegInputFlagsArg(inputArgs, normalizedMode, copyRegenerateTimestamps, discardCorrupt)
 	inputArgs = append(inputArgs, "-i", upstreamURL)
 
 	switch normalizedMode {
@@ -3218,6 +3097,20 @@ func formatFFmpegOutputTSOffset(outputTSOffset time.Duration) string {
 		return ""
 	}
 	return strconv.FormatFloat(seconds, 'f', 6, 64)
+}
+
+func appendFFmpegInputFlagsArg(args []string, normalizedMode string, copyRegenerateTimestamps bool, discardCorrupt bool) []string {
+	flags := make([]string, 0, 2)
+	if normalizedMode == "ffmpeg-copy" && copyRegenerateTimestamps {
+		flags = append(flags, strings.TrimPrefix(ffmpegGenPTSFlag, "+"))
+	}
+	if discardCorrupt {
+		flags = append(flags, strings.TrimPrefix(ffmpegDiscardCorruptFlag, "+"))
+	}
+	if len(flags) == 0 {
+		return args
+	}
+	return append(args, ffmpegInputFlagsOption, "+"+strings.Join(flags, "+"))
 }
 
 func appendFFmpegReconnectInputArgs(args []string, enabled bool, delayMax time.Duration, maxRetries int, httpErrors string) []string {
@@ -3365,6 +3258,8 @@ func startSourceSession(
 		reconnectDelayMax,
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
+		0,
+		false,
 		defaultFFmpegCopyRegenerateTimestamps,
 		0,
 		requireRandomAccess,
@@ -3409,6 +3304,8 @@ func startSourceSessionWithContexts(
 		reconnectDelayMax,
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
+		0,
+		false,
 		defaultFFmpegCopyRegenerateTimestamps,
 		0,
 		requireRandomAccess,
@@ -3433,6 +3330,8 @@ func startSourceSessionWithContextsConfigured(
 	reconnectDelayMax time.Duration,
 	reconnectMaxRetries int,
 	reconnectHTTPErrors string,
+	inputBufferSize int,
+	discardCorrupt bool,
 	copyRegenerateTimestamps bool,
 	outputTSOffset time.Duration,
 	requireRandomAccess bool,
@@ -3448,49 +3347,31 @@ func startSourceSessionWithContextsConfigured(
 			minProbeBytes,
 			false,
 		)
-	case "ffmpeg-copy":
+	case "ffmpeg-copy", "ffmpeg-transcode":
 		return startFFmpegWithContextsConfiguredReadrateCatchup(
 			startupCtx,
 			streamCtx,
-			ffmpegPath,
-			streamURL,
-			"ffmpeg-copy",
-			startupTimeout,
-			minProbeBytes,
-			readRate,
-			readRateCatchup,
-			initialBurst,
-			startupProbeSize,
-			startupAnalyzeDuration,
-			reconnectEnabled,
-			reconnectDelayMax,
-			reconnectMaxRetries,
-			reconnectHTTPErrors,
-			copyRegenerateTimestamps,
-			outputTSOffset,
-			requireRandomAccess,
-		)
-	case "ffmpeg-transcode":
-		return startFFmpegWithContextsConfiguredReadrateCatchup(
-			startupCtx,
-			streamCtx,
-			ffmpegPath,
-			streamURL,
-			"ffmpeg-transcode",
-			startupTimeout,
-			minProbeBytes,
-			readRate,
-			readRateCatchup,
-			initialBurst,
-			startupProbeSize,
-			startupAnalyzeDuration,
-			reconnectEnabled,
-			reconnectDelayMax,
-			reconnectMaxRetries,
-			reconnectHTTPErrors,
-			copyRegenerateTimestamps,
-			outputTSOffset,
-			requireRandomAccess,
+			ffmpegStartupOptions{
+				ffmpegPath:             ffmpegPath,
+				upstreamURL:            streamURL,
+				mode:                   mode,
+				startupTimeout:         startupTimeout,
+				minProbeBytes:          minProbeBytes,
+				readRate:               readRate,
+				readRateCatchup:        readRateCatchup,
+				initialBurst:           initialBurst,
+				startupProbeSize:       startupProbeSize,
+				startupAnalyzeDuration: startupAnalyzeDuration,
+				reconnectEnabled:       reconnectEnabled,
+				reconnectDelayMax:      reconnectDelayMax,
+				reconnectMaxRetries:    reconnectMaxRetries,
+				reconnectHTTPErrors:    reconnectHTTPErrors,
+				copyRegenerateTS:       copyRegenerateTimestamps,
+				outputTSOffset:         outputTSOffset,
+				inputBufferSize:        inputBufferSize,
+				discardCorrupt:         discardCorrupt,
+				requireRandomAccess:    requireRandomAccess,
+			},
 		)
 	default:
 		return nil, &streamFailure{

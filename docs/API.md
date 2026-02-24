@@ -109,7 +109,7 @@ All routes below are protected by Basic Auth when `ADMIN_AUTH` is configured.
 | `DELETE` | `/api/channels/{channelID}/sources/{sourceID}` | Delete source |
 | `POST` | `/api/channels/sources/health/clear` | Clear health/cooldown state for all channel sources |
 | `GET` | `/api/suggestions/duplicates?min=2&q=cnn.us&limit=100&offset=0` | Paged duplicate catalog suggestions grouped by `channel_key` (optional case-insensitive search across `channel_key` and `tvg_id`) |
-| `GET` | `/api/admin/tuners` | Runtime tuner/session snapshot including shared-session subscriber mappings, bounded `session_history` timelines, and process-lifetime `drain_wait` / `probe_close` telemetry counters |
+| `GET` | `/api/admin/tuners` | Runtime tuner/session snapshot including shared-session subscriber mappings, bounded `session_history` timelines, process-lifetime `drain_wait` / `probe_close` telemetry counters, and optional reverse-DNS client host resolution via `resolve_ip` |
 | `POST` | `/api/admin/tuners/recovery` | Trigger manual shared-session recovery for an active channel (`channel_id`, optional `reason`) |
 | `GET` | `/api/admin/automation` | Current automation state (`playlist_url`, schedule config, analyzer settings, next/last run) |
 | `PUT` | `/api/admin/automation` | Update automation schedule/timezone/analyzer and playlist URL settings |
@@ -182,6 +182,20 @@ Admin mutation routes that decode JSON bodies use strict single-object parsing:
 ### Tuner Status (`GET /api/admin/tuners`)
 
 - `/api/admin/tuners` and `/ui/tuners` intentionally redact `source_stream_url` values. The status payload preserves scheme/host/path but strips URL userinfo, query, and fragment fields.
+- `/api/admin/tuners` supports optional `resolve_ip` boolean query semantics:
+  - accepted true values: `1`, `true`, `yes`, `on`
+  - accepted false values: `0`, `false`, `no`, `off`
+  - default is `false`
+  - malformed values return HTTP `400`
+  - when `resolve_ip=true`, the response populates `client_host` for:
+    - `client_streams[*]`
+    - `session_history[*].subscribers[*]`
+  - reverse lookups run per unique IP and are memoized within a single response payload.
+  - resolved hostnames (and lookup failures) are also memoized across requests via an in-process short TTL cache (`~2m`).
+  - each lookup is bounded by a per-lookup timeout (`2s`) to avoid request-path stalls from long DNS waits.
+  - the full resolve phase is bounded by a total request timeout budget (`8s`).
+  - lookups still execute sequentially in request scope; large numbers of unique client IPs can increase endpoint latency.
+  - reverse lookup failures are non-fatal and keep `client_host` empty for that address.
 - `/api/admin/tuners` includes bounded history fields: `session_history` (newest-first), `session_history_limit`, and `session_history_truncated_count`.
   - `session_history` combines active shared sessions plus recently closed sessions retained in-memory for diagnostics.
   - each history session includes lifecycle/recovery aggregates (`opened_at`, optional `closed_at`, `active`, `terminal_status`, `peak_subscribers`, `recovery_cycle_count`, `same_source_reselect_count`) and nested `sources` / `subscribers` timelines.

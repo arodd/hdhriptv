@@ -120,6 +120,32 @@ Useful fields:
 - `duration` on both `completed` and `failed` phase events, including readiness-gate failures.
 - `error` on `failed` events.
 
+## UPnP ContentDirectory Update-ID Coalescing
+
+`GetSystemUpdateID` requests (`POST /upnp/control/content-directory`) use a
+coalesced refresh path to avoid fan-out lineup reads under burst polling.
+
+- Cache hit behavior is controlled by
+  `--upnp-content-directory-update-id-cache-ttl` /
+  `UPNP_CONTENT_DIRECTORY_UPDATE_ID_CACHE_TTL`.
+- On cache miss, one caller becomes the in-flight refresh leader while other
+  callers wait for that leader's result.
+- If a leader refresh exits with `context canceled` or `deadline exceeded`,
+  callers with still-live contexts retry using bounded exponential backoff
+  (`5ms`, `10ms`, `20ms`, `40ms`, capped at 4 retries) instead of spinning in
+  a tight loop.
+- A retry-cap exhaustion returns an `Action Failed` SOAP fault and includes the
+  canceled/deadline root cause in logs.
+
+Observability:
+
+- Prometheus counter:
+  `hdhr_content_directory_update_id_refresh_retries_total`
+  (increments on each retry attempt after a canceled/deadline refresh).
+- Debug log:
+  `msg="upnp content directory update-id refresh retrying after canceled refresh"`
+  with `attempt`, `max_attempts`, `backoff`, and `error` fields.
+
 ## Public Mirror Publish Runbook
 
 `make publish-github` mirrors internal `main` to the public repo as squash
@@ -214,6 +240,7 @@ Before running the release command:
    - `dist/hdhriptv-linux-arm64`
    - `dist/hdhriptv-darwin-amd64`
    - `dist/hdhriptv-darwin-arm64`
+   - `dist/hdhriptv-windows-amd64.exe`
    - `dist/SHA256SUMS`
 3. Run `make publish-github` to synchronize public mirror commit.
    - Default squash commit subject is `public(<SYNC_BRANCH>): release <RELEASE_TAG>` unless overridden.
@@ -442,6 +469,23 @@ surfaces and can be changed in one place.
 
 `internal/stream/status.go` provides the structured status snapshot served
 by `GET /api/admin/tuners` and rendered in `/ui/tuners`.
+
+Optional query behavior:
+
+- `GET /api/admin/tuners?resolve_ip=1` enables reverse-DNS enrichment for
+  client addresses and populates `client_host` on:
+  - `client_streams[*]`
+  - `session_history[*].subscribers[*]`
+- The default (`resolve_ip` omitted/false) skips reverse lookups.
+- Reverse lookups are bounded in two ways to protect request latency:
+  - per-lookup timeout: `2s` per unique IP.
+  - total resolve budget: `8s` for the full request's `resolve_ip` pass.
+- Reverse lookups run sequentially and are memoized:
+  - within a single response payload (duplicate IPs are resolved once),
+  - across requests via a short-lived in-process cache (successes and failures are cached for `~2m`).
+- For deployments with many unique clients or slow upstream PTR infrastructure,
+  use a local caching resolver (`systemd-resolved`, `dnsmasq`, `unbound`, etc.)
+  to keep reverse lookups fast and stable.
 
 ### Core types
 
@@ -764,6 +808,17 @@ Practical guidance:
   overshoot.
 - Config validation rejects `PRODUCER_READRATE_CATCHUP` values below
   `PRODUCER_READRATE` to avoid contradictory pacing inputs.
+
+Additional ffmpeg startup toggles:
+
+- `FFMPEG_INPUT_BUFFER_SIZE` maps to ffmpeg `-buffer_size` in ffmpeg stream modes.
+  - `0` disables explicit buffer sizing.
+  - values are bounded to `64 MiB` (`67108864`) and validated at startup.
+  - the limit is per active ffmpeg stream; estimate aggregate memory as
+    `active_streams * buffer_size` (for example, `50 * 64 MiB ~= 3.2 GiB`).
+- `FFMPEG_DISCARD_CORRUPT=true` appends `-fflags +discardcorrupt` so ffmpeg drops packets flagged as corrupt instead of attempting to decode them.
+  - this can reduce corruption cascades on noisy inputs, but may introduce visible or audible gaps where packets are discarded.
+  - leave disabled unless upstream source-side packet corruption is a known issue.
 
 ## Observability and Hardening
 

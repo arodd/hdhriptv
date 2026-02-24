@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +29,9 @@ const defaultDynamicSyncTimeout = 30 * time.Second
 const defaultDVRSyncTimeout = 2 * time.Minute
 const defaultDVRMutationTimeout = 30 * time.Second
 const defaultAutomationMutationTimeout = 30 * time.Second
+const defaultResolveClientHostLookupTimeout = 2 * time.Second
+const defaultResolveClientHostsTotalTimeout = 8 * time.Second
+const defaultResolveClientHostCacheTTL = 2 * time.Minute
 const defaultGroupsListLimit = 200
 const maxGroupsListLimit = 1000
 const defaultChannelsListLimit = 200
@@ -133,24 +137,30 @@ type DVRScheduler interface {
 
 // AdminHandler serves admin UI and admin JSON APIs.
 type AdminHandler struct {
-	catalog                  CatalogStore
-	channels                 ChannelsService
-	templates                *template.Template
-	automation               *AutomationDeps
-	tunerStatus              TunerStatusProvider
-	sourceHealthClearRuntime SourceHealthClearRuntime
-	dvr                      DVRService
-	dvrScheduler             DVRScheduler
-	logger                   *slog.Logger
-	adminJSONBodyLimitBytes  int64
-	dynamicSyncTimeout       time.Duration
-	dynamicBlockSyncTimeout  time.Duration
-	dvrSyncTimeout           time.Duration
-	adminConfigMutationMu    sync.Mutex
-	dynamicSyncMu            sync.Mutex
-	dynamicSyncStates        map[int64]*dynamicChannelSyncState
-	dynamicBlockSyncMu       sync.Mutex
-	dynamicBlockSyncState    dynamicBlockSyncState
+	catalog                   CatalogStore
+	channels                  ChannelsService
+	templates                 *template.Template
+	automation                *AutomationDeps
+	tunerStatus               TunerStatusProvider
+	lookupAddr                func(ctx context.Context, addr string) ([]string, error)
+	sourceHealthClearRuntime  SourceHealthClearRuntime
+	dvr                       DVRService
+	dvrScheduler              DVRScheduler
+	logger                    *slog.Logger
+	adminJSONBodyLimitBytes   int64
+	dynamicSyncTimeout        time.Duration
+	dynamicBlockSyncTimeout   time.Duration
+	dvrSyncTimeout            time.Duration
+	resolveClientHostsTimeout time.Duration
+	resolveClientHostCacheTTL time.Duration
+	resolveClientHostCacheNow func() time.Time
+	resolveClientHostCacheMu  sync.Mutex
+	resolveClientHostCache    map[string]resolveClientHostCacheEntry
+	adminConfigMutationMu     sync.Mutex
+	dynamicSyncMu             sync.Mutex
+	dynamicSyncStates         map[int64]*dynamicChannelSyncState
+	dynamicBlockSyncMu        sync.Mutex
+	dynamicBlockSyncState     dynamicBlockSyncState
 
 	closeOnce sync.Once
 	closeCh   chan struct{} // closed on Close() to signal background workers
@@ -178,6 +188,11 @@ type dynamicBlockSyncState struct {
 	runCancel     context.CancelFunc
 }
 
+type resolveClientHostCacheEntry struct {
+	host      string
+	expiresAt time.Time
+}
+
 func NewAdminHandler(catalog CatalogStore, channelsSvc ChannelsService, automation ...AutomationDeps) (*AdminHandler, error) {
 	tmpls, err := ui.ParseTemplates()
 	if err != nil {
@@ -194,17 +209,22 @@ func NewAdminHandler(catalog CatalogStore, channelsSvc ChannelsService, automati
 	}
 
 	return &AdminHandler{
-		catalog:                 catalog,
-		channels:                channelsSvc,
-		templates:               tmpls,
-		automation:              auto,
-		logger:                  slog.Default(),
-		adminJSONBodyLimitBytes: defaultAdminJSONBodyLimitBytes,
-		dynamicSyncTimeout:      defaultDynamicSyncTimeout,
-		dynamicBlockSyncTimeout: defaultDynamicSyncTimeout,
-		dvrSyncTimeout:          defaultDVRSyncTimeout,
-		dynamicSyncStates:       make(map[int64]*dynamicChannelSyncState),
-		closeCh:                 make(chan struct{}),
+		catalog:                   catalog,
+		channels:                  channelsSvc,
+		templates:                 tmpls,
+		automation:                auto,
+		lookupAddr:                net.DefaultResolver.LookupAddr,
+		logger:                    slog.Default(),
+		adminJSONBodyLimitBytes:   defaultAdminJSONBodyLimitBytes,
+		dynamicSyncTimeout:        defaultDynamicSyncTimeout,
+		dynamicBlockSyncTimeout:   defaultDynamicSyncTimeout,
+		dvrSyncTimeout:            defaultDVRSyncTimeout,
+		resolveClientHostsTimeout: defaultResolveClientHostsTotalTimeout,
+		resolveClientHostCacheTTL: defaultResolveClientHostCacheTTL,
+		resolveClientHostCacheNow: time.Now,
+		resolveClientHostCache:    make(map[string]resolveClientHostCacheEntry),
+		dynamicSyncStates:         make(map[int64]*dynamicChannelSyncState),
+		closeCh:                   make(chan struct{}),
 	}, nil
 }
 
@@ -1981,12 +2001,25 @@ func (h *AdminHandler) handleDuplicateSuggestions(w http.ResponseWriter, r *http
 	})
 }
 
-func (h *AdminHandler) handleTunerStatus(w http.ResponseWriter, _ *http.Request) {
+func (h *AdminHandler) handleTunerStatus(w http.ResponseWriter, r *http.Request) {
 	if h.tunerStatus == nil {
 		http.Error(w, "tuner status is not configured", http.StatusServiceUnavailable)
 		return
 	}
-	writeJSON(w, http.StatusOK, h.tunerStatus.TunerStatusSnapshot())
+
+	resolveIP, err := parseOptionalBoolQueryParam(r, "resolve_ip", false)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	snapshot := h.tunerStatus.TunerStatusSnapshot()
+	if resolveIP {
+		resolveCtx, cancel := context.WithTimeout(r.Context(), h.resolveClientHostsTimeoutBudget())
+		snapshot = h.resolveClientHostsInSnapshot(resolveCtx, snapshot)
+		cancel()
+	}
+	writeJSON(w, http.StatusOK, snapshot)
 }
 
 func (h *AdminHandler) handleTriggerTunerRecovery(w http.ResponseWriter, r *http.Request) {
@@ -2216,6 +2249,222 @@ func parseOptionalBoolQueryParam(r *http.Request, name string, defaultValue bool
 	default:
 		return false, fmt.Errorf("%s must be a boolean", name)
 	}
+}
+
+func (h *AdminHandler) resolveClientHostsTimeoutBudget() time.Duration {
+	if h == nil || h.resolveClientHostsTimeout <= 0 {
+		return defaultResolveClientHostsTotalTimeout
+	}
+	return h.resolveClientHostsTimeout
+}
+
+func (h *AdminHandler) resolveClientHostsInSnapshot(
+	ctx context.Context,
+	snapshot stream.TunerStatusSnapshot,
+) stream.TunerStatusSnapshot {
+	if h == nil {
+		return snapshot
+	}
+	return resolveClientHostsInSnapshotWithCache(
+		ctx,
+		snapshot,
+		h.lookupAddr,
+		h.loadCachedResolvedClientHost,
+		h.storeCachedResolvedClientHost,
+	)
+}
+
+func (h *AdminHandler) loadCachedResolvedClientHost(ip string) (string, bool) {
+	if h == nil || ip == "" || h.resolveClientHostCacheTTL <= 0 {
+		return "", false
+	}
+
+	nowFn := h.resolveClientHostCacheNow
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+
+	h.resolveClientHostCacheMu.Lock()
+	defer h.resolveClientHostCacheMu.Unlock()
+
+	entry, ok := h.resolveClientHostCache[ip]
+	if !ok {
+		return "", false
+	}
+	if !entry.expiresAt.After(now) {
+		delete(h.resolveClientHostCache, ip)
+		return "", false
+	}
+	return entry.host, true
+}
+
+func (h *AdminHandler) storeCachedResolvedClientHost(ip, host string) {
+	if h == nil || ip == "" || h.resolveClientHostCacheTTL <= 0 {
+		return
+	}
+
+	nowFn := h.resolveClientHostCacheNow
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	expiresAt := nowFn().Add(h.resolveClientHostCacheTTL)
+
+	h.resolveClientHostCacheMu.Lock()
+	if h.resolveClientHostCache == nil {
+		h.resolveClientHostCache = make(map[string]resolveClientHostCacheEntry)
+	}
+	h.resolveClientHostCache[ip] = resolveClientHostCacheEntry{host: host, expiresAt: expiresAt}
+	h.resolveClientHostCacheMu.Unlock()
+}
+
+func resolveClientHostsInSnapshotWithCache(
+	ctx context.Context,
+	snapshot stream.TunerStatusSnapshot,
+	lookupAddr func(ctx context.Context, addr string) ([]string, error),
+	loadCachedHost func(ip string) (string, bool),
+	storeCachedHost func(ip, host string),
+) stream.TunerStatusSnapshot {
+	if lookupAddr == nil {
+		return snapshot
+	}
+
+	if len(snapshot.ClientStreams) == 0 && len(snapshot.SessionHistory) == 0 {
+		return snapshot
+	}
+
+	// Clone slices so we do not mutate shared backing arrays from providers.
+	if len(snapshot.ClientStreams) > 0 {
+		snapshot.ClientStreams = append([]stream.ClientStreamStatus(nil), snapshot.ClientStreams...)
+	}
+	if len(snapshot.SessionHistory) > 0 {
+		snapshot.SessionHistory = append([]stream.SharedSessionHistory(nil), snapshot.SessionHistory...)
+		for i := range snapshot.SessionHistory {
+			if len(snapshot.SessionHistory[i].Subscribers) == 0 {
+				continue
+			}
+			snapshot.SessionHistory[i].Subscribers = append(
+				[]stream.SharedSessionSubscriberHistory(nil),
+				snapshot.SessionHistory[i].Subscribers...,
+			)
+		}
+	}
+
+	resolvedByIP := make(map[string]string, len(snapshot.ClientStreams))
+	for i := range snapshot.ClientStreams {
+		if ctx != nil && ctx.Err() != nil {
+			return snapshot
+		}
+		if host := resolveClientHost(
+			ctx,
+			snapshot.ClientStreams[i].ClientAddr,
+			resolvedByIP,
+			lookupAddr,
+			loadCachedHost,
+			storeCachedHost,
+		); host != "" {
+			snapshot.ClientStreams[i].ClientHost = host
+		}
+	}
+	for i := range snapshot.SessionHistory {
+		if ctx != nil && ctx.Err() != nil {
+			return snapshot
+		}
+		for j := range snapshot.SessionHistory[i].Subscribers {
+			if ctx != nil && ctx.Err() != nil {
+				return snapshot
+			}
+			if host := resolveClientHost(
+				ctx,
+				snapshot.SessionHistory[i].Subscribers[j].ClientAddr,
+				resolvedByIP,
+				lookupAddr,
+				loadCachedHost,
+				storeCachedHost,
+			); host != "" {
+				snapshot.SessionHistory[i].Subscribers[j].ClientHost = host
+			}
+		}
+	}
+
+	return snapshot
+}
+
+func resolveClientHost(
+	ctx context.Context,
+	clientAddr string,
+	resolvedByIP map[string]string,
+	lookupAddr func(ctx context.Context, addr string) ([]string, error),
+	loadCachedHost func(ip string) (string, bool),
+	storeCachedHost func(ip, host string),
+) string {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	ip, ok := parseClientAddressIP(clientAddr)
+	if !ok {
+		return ""
+	}
+	if resolved, seen := resolvedByIP[ip]; seen {
+		return resolved
+	}
+	if loadCachedHost != nil {
+		if cachedHost, ok := loadCachedHost(ip); ok {
+			resolvedByIP[ip] = cachedHost
+			return cachedHost
+		}
+	}
+
+	lookupCtx, cancel := context.WithTimeout(ctx, defaultResolveClientHostLookupTimeout)
+	defer cancel()
+
+	names, err := lookupAddr(lookupCtx, ip)
+	if err != nil {
+		resolvedByIP[ip] = ""
+		if storeCachedHost != nil {
+			storeCachedHost(ip, "")
+		}
+		return ""
+	}
+	host := firstResolvedHostname(names)
+	resolvedByIP[ip] = host
+	if storeCachedHost != nil {
+		storeCachedHost(ip, host)
+	}
+	return host
+}
+
+func parseClientAddressIP(clientAddr string) (string, bool) {
+	addr := strings.TrimSpace(clientAddr)
+	if addr == "" {
+		return "", false
+	}
+
+	host := addr
+	if splitHost, _, err := net.SplitHostPort(addr); err == nil {
+		host = splitHost
+	}
+	host = strings.Trim(strings.TrimSpace(host), "[]")
+	if zoneSep := strings.Index(host, "%"); zoneSep >= 0 {
+		host = host[:zoneSep]
+	}
+
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return "", false
+	}
+	return ip.String(), true
+}
+
+func firstResolvedHostname(names []string) string {
+	for _, name := range names {
+		trimmed := strings.TrimSuffix(strings.TrimSpace(name), ".")
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, code int, payload any) {

@@ -88,6 +88,7 @@ Behavior summary:
   - `dist/hdhriptv-linux-arm64`
   - `dist/hdhriptv-darwin-amd64`
   - `dist/hdhriptv-darwin-arm64`
+  - `dist/hdhriptv-windows-amd64.exe`
 - Uses `public(<SYNC_BRANCH>): release <RELEASE_TAG>` for the mirror squash
   commit subject unless `PUBLISH_GITHUB_COMMIT_MESSAGE` is explicitly set.
 - Runs `make publish-github` and verifies internal/public trees match.

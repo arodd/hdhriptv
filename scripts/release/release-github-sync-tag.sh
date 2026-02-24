@@ -359,12 +359,14 @@ release_artifacts=(
   hdhriptv-linux-arm64
   hdhriptv-darwin-amd64
   hdhriptv-darwin-arm64
+  hdhriptv-windows-amd64.exe
 )
 
 build_target linux amd64 hdhriptv-linux-amd64
 build_target linux arm64 hdhriptv-linux-arm64
 build_target darwin amd64 hdhriptv-darwin-amd64
 build_target darwin arm64 hdhriptv-darwin-arm64
+build_target windows amd64 hdhriptv-windows-amd64.exe
 
 (
   cd "$RELEASE_DIST_DIR"

@@ -14,10 +14,12 @@ build_binary:
     - mkdir -p dist
     - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/hdhriptv-linux-amd64 ./cmd/hdhriptv
     - CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/hdhriptv-linux-arm64 ./cmd/hdhriptv
+    - CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/hdhriptv-windows-amd64.exe ./cmd/hdhriptv
   artifacts:
     paths:
       - dist/hdhriptv-linux-amd64
       - dist/hdhriptv-linux-arm64
+      - dist/hdhriptv-windows-amd64.exe
     expire_in: 1 week
 
 build_and_publish_container:
