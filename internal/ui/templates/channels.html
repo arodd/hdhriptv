@@ -1248,7 +1248,7 @@
           method: "PATCH",
           body: JSON.stringify({ channel_ids: next.map((c) => c.channel_id) }),
         });
-        state.traditionalChannels = next;
+        await loadTraditionalChannels();
         showStatus("Channels reordered");
       } finally {
         state.reorderBusy = false;

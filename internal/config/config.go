@@ -18,6 +18,7 @@ const (
 	streamModeFFmpegTranscode = "ffmpeg-transcode"
 
 	defaultUPnPContentDirectoryUpdateIDCacheTTL = time.Second
+	defaultDVRLineupReloadTimeout               = 30 * time.Second
 	maxFFmpegInputBufferSize                    = 64 << 20
 
 	defaultCatalogSearchMaxTerms      = 12
@@ -53,6 +54,7 @@ type Config struct {
 	RefreshSchedule                      string
 	ReconcileDynamicRulePaged            bool
 	FFmpegPath                           string
+	FFprobePath                          string
 	StreamMode                           string
 	StartupTimeout                       time.Duration
 	StartupRandomAccessRecoveryOnly      bool
@@ -102,6 +104,7 @@ type Config struct {
 	ProbeTimeout                         time.Duration
 	AdminBasicAuth                       string
 	AdminJSONBodyLimitBytes              int64
+	DVRLineupReloadTimeout               time.Duration
 	RequestTimeout                       time.Duration
 	RateLimitRPS                         float64
 	RateLimitBurst                       int
@@ -137,6 +140,7 @@ type RedactedConfig struct {
 	RefreshSchedule                      string   `json:"refresh_schedule,omitempty"`
 	ReconcileDynamicRulePaged            bool     `json:"reconcile_dynamic_rule_paged"`
 	FFmpegPath                           string   `json:"ffmpeg_path"`
+	FFprobePath                          string   `json:"ffprobe_path"`
 	StreamMode                           string   `json:"stream_mode"`
 	StartupTimeout                       string   `json:"startup_timeout"`
 	StartupRandomAccessRecoveryOnly      bool     `json:"startup_random_access_recovery_only"`
@@ -186,6 +190,7 @@ type RedactedConfig struct {
 	ProbeTimeout                         string   `json:"probe_timeout"`
 	AdminAuthConfigured                  bool     `json:"admin_auth_configured"`
 	AdminJSONBodyLimitBytes              int64    `json:"admin_json_body_limit_bytes"`
+	DVRLineupReloadTimeout               string   `json:"dvr_lineup_reload_timeout"`
 	RequestTimeout                       string   `json:"request_timeout"`
 	RateLimitRPS                         string   `json:"rate_limit_rps"`
 	RateLimitBurst                       int      `json:"rate_limit_burst"`
@@ -221,6 +226,7 @@ func (c Config) Redacted() RedactedConfig {
 		RefreshSchedule:                      c.RefreshSchedule,
 		ReconcileDynamicRulePaged:            c.ReconcileDynamicRulePaged,
 		FFmpegPath:                           c.FFmpegPath,
+		FFprobePath:                          c.FFprobePath,
 		StreamMode:                           c.StreamMode,
 		StartupTimeout:                       c.StartupTimeout.String(),
 		StartupRandomAccessRecoveryOnly:      c.StartupRandomAccessRecoveryOnly,
@@ -270,6 +276,7 @@ func (c Config) Redacted() RedactedConfig {
 		ProbeTimeout:                         c.ProbeTimeout.String(),
 		AdminAuthConfigured:                  strings.TrimSpace(c.AdminBasicAuth) != "",
 		AdminJSONBodyLimitBytes:              c.AdminJSONBodyLimitBytes,
+		DVRLineupReloadTimeout:               c.DVRLineupReloadTimeout.String(),
 		RequestTimeout:                       c.RequestTimeout.String(),
 		RateLimitRPS:                         strconv.FormatFloat(c.RateLimitRPS, 'f', -1, 64),
 		RateLimitBurst:                       c.RateLimitBurst,
@@ -318,6 +325,7 @@ func Load(args []string) (Config, error) {
 		RefreshSchedule:                      refreshSchedule,
 		ReconcileDynamicRulePaged:            getenvBool("RECONCILE_DYNAMIC_RULE_PAGED", false),
 		FFmpegPath:                           getenv("FFMPEG_PATH", "ffmpeg"),
+		FFprobePath:                          getenv("FFPROBE_PATH", "ffprobe"),
 		StreamMode:                           getenv("STREAM_MODE", streamModeFFmpegCopy),
 		StartupTimeout:                       getenvDuration("STARTUP_TIMEOUT", 6*time.Second),
 		StartupRandomAccessRecoveryOnly:      getenvBool("STARTUP_RANDOM_ACCESS_RECOVERY_ONLY", true),
@@ -367,6 +375,7 @@ func Load(args []string) (Config, error) {
 		ProbeTimeout:                         getenvDuration("PROBE_TIMEOUT", 3*time.Second),
 		AdminBasicAuth:                       getenv("ADMIN_AUTH", ""),
 		AdminJSONBodyLimitBytes:              getenvInt64("ADMIN_JSON_BODY_LIMIT_BYTES", 1<<20),
+		DVRLineupReloadTimeout:               getenvDuration("DVR_LINEUP_RELOAD_TIMEOUT", defaultDVRLineupReloadTimeout),
 		RequestTimeout:                       getenvDuration("REQUEST_TIMEOUT", 15*time.Second),
 		RateLimitRPS:                         getenvFloat("RATE_LIMIT_RPS", 8),
 		RateLimitBurst:                       getenvInt("RATE_LIMIT_BURST", 32),
@@ -401,6 +410,7 @@ func Load(args []string) (Config, error) {
 	fs.BoolVar(&cfg.ReconcileDynamicRulePaged, "reconcile-dynamic-rule-paged", cfg.ReconcileDynamicRulePaged, "Enable paged catalog-filter sync for one-off dynamic reconcile rules (default false uses legacy slice mode)")
 	fs.DurationVar(&legacyRefreshInterval, "refresh-interval", legacyRefreshInterval, "Deprecated: playlist refresh interval duration (converted to --refresh-schedule when representable)")
 	fs.StringVar(&cfg.FFmpegPath, "ffmpeg-path", cfg.FFmpegPath, "Path to ffmpeg executable")
+	fs.StringVar(&cfg.FFprobePath, "ffprobe-path", cfg.FFprobePath, "Path to ffprobe executable")
 	fs.StringVar(&cfg.StreamMode, "stream-mode", cfg.StreamMode, "Stream mode: direct|ffmpeg-copy|ffmpeg-transcode")
 	fs.DurationVar(&cfg.StartupTimeout, "startup-timeout", cfg.StartupTimeout, "Per-source startup timeout before failover")
 	fs.BoolVar(&cfg.StartupRandomAccessRecoveryOnly, "startup-random-access-recovery-only", cfg.StartupRandomAccessRecoveryOnly, "When enabled, enforce startup random-access gating only during recovery cycles (not initial startup)")
@@ -450,6 +460,7 @@ func Load(args []string) (Config, error) {
 	fs.DurationVar(&cfg.ProbeTimeout, "probe-timeout", cfg.ProbeTimeout, "Per-source timeout for background probes")
 	fs.StringVar(&cfg.AdminBasicAuth, "admin-auth", cfg.AdminBasicAuth, "Admin basic auth in user:pass format")
 	fs.Int64Var(&cfg.AdminJSONBodyLimitBytes, "admin-json-body-limit-bytes", cfg.AdminJSONBodyLimitBytes, "Maximum JSON request body bytes accepted by admin mutation endpoints")
+	fs.DurationVar(&cfg.DVRLineupReloadTimeout, "dvr-lineup-reload-timeout", cfg.DVRLineupReloadTimeout, "Timeout budget for coalesced DVR lineup reload runs triggered by admin lineup-changing mutations")
 	fs.DurationVar(&cfg.RequestTimeout, "request-timeout", cfg.RequestTimeout, "HTTP request timeout for metadata/admin routes (0 to disable)")
 	fs.Float64Var(&cfg.RateLimitRPS, "rate-limit-rps", cfg.RateLimitRPS, "Per-client request rate limit in requests/second (0 to disable)")
 	fs.IntVar(&cfg.RateLimitBurst, "rate-limit-burst", cfg.RateLimitBurst, "Per-client request burst size")
@@ -505,6 +516,7 @@ func (c *Config) normalize() error {
 	c.DeviceAuth = strings.TrimSpace(c.DeviceAuth)
 	c.RefreshSchedule = strings.TrimSpace(c.RefreshSchedule)
 	c.FFmpegPath = strings.TrimSpace(c.FFmpegPath)
+	c.FFprobePath = strings.TrimSpace(c.FFprobePath)
 	c.FFmpegReconnectHTTPErrors = strings.TrimSpace(c.FFmpegReconnectHTTPErrors)
 	c.StreamMode = strings.ToLower(strings.TrimSpace(c.StreamMode))
 	c.StallPolicy = strings.ToLower(strings.TrimSpace(c.StallPolicy))
@@ -537,6 +549,9 @@ func (c *Config) normalize() error {
 	}
 	if c.FFmpegPath == "" {
 		c.FFmpegPath = "ffmpeg"
+	}
+	if c.FFprobePath == "" {
+		c.FFprobePath = "ffprobe"
 	}
 	if c.LogLevel == "" {
 		c.LogLevel = "info"
@@ -700,6 +715,9 @@ func (c *Config) normalize() error {
 	}
 	if c.AdminJSONBodyLimitBytes <= 0 {
 		return fmt.Errorf("admin-json-body-limit-bytes must be positive")
+	}
+	if c.DVRLineupReloadTimeout <= 0 {
+		return fmt.Errorf("dvr-lineup-reload-timeout must be positive")
 	}
 	if c.RequestTimeout < 0 {
 		return fmt.Errorf("request-timeout must be zero or positive")

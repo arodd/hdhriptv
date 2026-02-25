@@ -87,15 +87,28 @@ hdhriptv works with any software that supports HDHomeRun tuners. It is tested wi
   - `STREAM_MODE=ffmpeg-transcode`
 - No `ffmpeg` required if using `STREAM_MODE=direct`
 
-### Run Locally
+### Run Locally (Linux and Mac)
 
-1. Build:
+You can either download a prebuilt release binary for Linux
+(`hdhriptv-linux-amd64` / `hdhriptv-linux-arm64`) or macOS
+(`hdhriptv-darwin-amd64` / `hdhriptv-darwin-arm64`) from:
+<https://github.com/arodd/hdhriptv/releases>
+
+1. Download the release binary for your platform from the release page above.
+
+2. Make the downloaded binary executable:
+
+```bash
+chmod +x ./hdhriptv-*
+```
+
+3. Or build locally from source instead:
 
 ```bash
 go build -o hdhriptv ./cmd/hdhriptv
 ```
 
-2. Run with minimum practical settings:
+4. Run with minimum practical settings (replace `./hdhriptv` with your downloaded filename if not building locally):
 
 ```bash
 PLAYLIST_URL="https://example.com/playlist.m3u" \
@@ -103,7 +116,7 @@ ADMIN_AUTH="admin:change-me" \
 ./hdhriptv
 ```
 
-3. Verify service health and discovery:
+5. Verify service health and discovery:
 
 ```bash
 curl -s http://127.0.0.1:5004/healthz
@@ -111,15 +124,15 @@ curl -s http://127.0.0.1:5004/discover.json
 curl -s http://127.0.0.1:5004/lineup.json
 ```
 
-4. Open `http://127.0.0.1:5004/ui/catalog` and publish channels from catalog items.
+6. Open `http://127.0.0.1:5004/ui/catalog` and publish channels from catalog items.
    `lineup.json` is channel-only and remains empty until at least one channel is published.
 
 ### Run With Docker
 
-Build image:
+By default, use the public Docker Hub image:
 
 ```bash
-docker build -t hdhriptv:local .
+docker pull arodd/hdhriptv:latest
 ```
 
 Run container:
@@ -133,7 +146,7 @@ docker run --rm -it \
   -e PLAYLIST_URL="https://example.com/playlist.m3u" \
   -e ADMIN_AUTH="admin:change-me" \
   -e UPNP_ENABLED=true \
-  hdhriptv:local
+  arodd/hdhriptv:latest
 ```
 
 Notes:
@@ -144,10 +157,48 @@ Notes:
 - SQLite state persists in `/data` when a volume is mounted.
 - Add `-p 80:80/tcp -e HTTP_ADDR_LEGACY=:80` if you need legacy client compatibility.
 
+Optionally, build and run from the local Dockerfile instead:
+
+```bash
+docker build -t hdhriptv:local .
+docker run --rm -it \
+  -p 5004:5004/tcp \
+  -p 65001:65001/udp \
+  -p 1900:1900/udp \
+  -v hdhriptv-data:/data \
+  -e PLAYLIST_URL="https://example.com/playlist.m3u" \
+  -e ADMIN_AUTH="admin:change-me" \
+  -e UPNP_ENABLED=true \
+  hdhriptv:local
+```
+
 Build and publish the same multi-arch image flow used in GitLab CI from your local machine (run `docker login` first):
 
 ```bash
 make release-local REGISTRY_IMAGE=registry.example.com/org/hdhriptv IMAGE_TAG=latest
+```
+
+### Run on Windows
+
+1. Download the Windows binary release (`hdhriptv-windows-amd64.exe`).
+
+2. Install `ffmpeg` and `ffprobe` (Windows builds):
+   - Gyan release builds: <https://www.gyan.dev/ffmpeg/builds/#release-builds>
+   - BtbN release builds: <https://github.com/BtbN/FFmpeg-Builds/releases>
+
+3. Extract the build and point both flags to executable paths (not just the `bin` directory):
+   - `--ffmpeg-path C:\Users\<you>\ffmpeg\bin\ffmpeg.exe`
+   - `--ffprobe-path C:\Users\<you>\ffmpeg\bin\ffprobe.exe`
+
+4. Common startup pattern:
+
+```powershell
+.\hdhriptv.exe `
+  --playlist-url https://example.com/playlist `
+  --ffmpeg-path C:\users\person\ffmpeg\bin\ffmpeg.exe `
+  --ffprobe-path C:\users\person\ffmpeg\bin\ffprobe.exe `
+  --http-addr-legacy :80 `
+  --friendly-name "HDHRIPTV Windows"
 ```
 
 ## Stream Modes and Tradeoffs
@@ -172,6 +223,7 @@ The most common settings are listed below. For the full reference including all 
 | `--friendly-name` | `FRIENDLY_NAME` | `HDHR IPTV` | Displayed in discover payloads and DVR UIs. |
 | `--stream-mode` | `STREAM_MODE` | `ffmpeg-copy` | `direct`, `ffmpeg-copy`, `ffmpeg-transcode`. |
 | `--ffmpeg-path` | `FFMPEG_PATH` | `ffmpeg` | Executable used for ffmpeg stream modes. |
+| `--ffprobe-path` | `FFPROBE_PATH` | `ffprobe` | Executable used by auto-prioritize analysis and shared-session stream profile probes. |
 | `--admin-auth` | `ADMIN_AUTH` | empty | `user:pass` format. If empty, admin routes are open. |
 | `--refresh-schedule` | `REFRESH_SCHEDULE` | empty | Cron expression for playlist sync. |
 | `--upnp-enabled` | `UPNP_ENABLED` | `true` | Enable UPnP/SSDP discovery on UDP `1900`. |

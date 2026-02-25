@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -229,9 +230,12 @@ func TestAdminRoutesUIReorderScriptsDoNotDependOnReorderListPayloads(t *testing.
 	if strings.Contains(channelsBody, "payload.channels") {
 		t.Fatal("ui/channels script still depends on reorder response list payload")
 	}
+	if strings.Contains(channelsBody, "state.traditionalChannels = next;") {
+		t.Fatal("ui/channels reorder script still relies on optimistic post-success assignment")
+	}
 	for _, marker := range []string{
 		`await api("/api/channels/reorder"`,
-		`state.traditionalChannels = next;`,
+		`await loadTraditionalChannels();`,
 	} {
 		if !strings.Contains(channelsBody, marker) {
 			t.Fatalf("GET /ui/channels missing marker %q", marker)
@@ -311,7 +315,6 @@ func TestAdminRoutesReorderEndpointsReturnNoContentAndBoundedPayloads(t *testing
 	if err != nil {
 		t.Fatalf("NewAdminHandler() error = %v", err)
 	}
-	handler.SetDVRService(&fakeDVRService{})
 
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux, "")
@@ -491,6 +494,73 @@ func TestAdminRoutesReorderEndpointsReturnNoContentAndBoundedPayloads(t *testing
 		dynamicReorderRec.Body.Len(),
 		dynamicReorderLatency.Milliseconds(),
 	)
+}
+
+func TestAdminRoutesReorderChannelsQueuesDVRLineupReload(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:queue:one",
+			ChannelKey: "name:queue one",
+			Name:       "Queue One",
+			Group:      "Queue",
+			StreamURL:  "http://example.com/queue-one.ts",
+		},
+		{
+			ItemKey:    "src:queue:two",
+			ChannelKey: "name:queue two",
+			Name:       "Queue Two",
+			Group:      "Queue",
+			StreamURL:  "http://example.com/queue-two.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	defer handler.Close()
+
+	fakeDVR := &fakeDVRService{}
+	handler.SetDVRService(fakeDVR)
+	handler.dvrLineupReloadDebounce = 20 * time.Millisecond
+	handler.dvrLineupReloadMaxWait = 150 * time.Millisecond
+
+	chOne, err := channelsSvc.Create(ctx, "src:queue:one", "", "", nil)
+	if err != nil {
+		t.Fatalf("Create(channel one) error = %v", err)
+	}
+	chTwo, err := channelsSvc.Create(ctx, "src:queue:two", "", "", nil)
+	if err != nil {
+		t.Fatalf("Create(channel two) error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	rec := doRaw(t, mux, http.MethodPatch, "/api/channels/reorder", map[string]any{
+		"channel_ids": []int64{chTwo.ChannelID, chOne.ChannelID},
+	})
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("PATCH /api/channels/reorder status = %d, want %d", rec.Code, http.StatusNoContent)
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("PATCH /api/channels/reorder body length = %d, want 0", rec.Body.Len())
+	}
+
+	waitForCondition(t, 2*time.Second, "traditional reorder queued dvr lineup reload", func() bool {
+		return fakeDVR.ReloadCallCount() >= 1
+	})
 }
 
 func TestAdminRoutesChannelSourceFlow(t *testing.T) {
@@ -1386,6 +1456,9 @@ func TestAdminRoutesChannelsPaginationAndValidation(t *testing.T) {
 	}
 	fakeDVR := &fakeDVRService{}
 	handler.SetDVRService(fakeDVR)
+	handler.dvrLineupReloadDebounce = 25 * time.Millisecond
+	handler.dvrLineupReloadMaxWait = 125 * time.Millisecond
+	defer handler.Close()
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux, "")
 
@@ -1682,6 +1755,9 @@ func TestAdminRoutesDynamicChannelQueryFlowAndImmediateSync(t *testing.T) {
 	}
 	fakeDVR := &fakeDVRService{}
 	handler.SetDVRService(fakeDVR)
+	handler.dvrLineupReloadDebounce = 25 * time.Millisecond
+	handler.dvrLineupReloadMaxWait = 125 * time.Millisecond
+	defer handler.Close()
 	mux := http.NewServeMux()
 	handler.RegisterRoutes(mux, "")
 
@@ -1856,6 +1932,311 @@ func TestAdminRoutesDynamicChannelQueryFlowAndImmediateSync(t *testing.T) {
 	rec := doRaw(t, mux, http.MethodGet, basePath, nil)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("GET deleted dynamic query channels status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestAdminDVRLineupReloadQueueSemantics(t *testing.T) {
+	newHarness := func(t *testing.T) (*AdminHandler, *fakeDVRService, func()) {
+		t.Helper()
+
+		store, err := sqlite.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+
+		channelsSvc := channels.NewService(store)
+		handler, err := NewAdminHandler(store, channelsSvc)
+		if err != nil {
+			store.Close()
+			t.Fatalf("NewAdminHandler() error = %v", err)
+		}
+		handler.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+		fakeDVR := &fakeDVRService{}
+		handler.SetDVRService(fakeDVR)
+
+		cleanup := func() {
+			handler.Close()
+			store.Close()
+		}
+		return handler, fakeDVR, cleanup
+	}
+
+	t.Run("BurstCoalescing", func(t *testing.T) {
+		handler, fakeDVR, cleanup := newHarness(t)
+		defer cleanup()
+
+		handler.dvrLineupReloadDebounce = 35 * time.Millisecond
+		handler.dvrLineupReloadMaxWait = 200 * time.Millisecond
+		fakeDVR.reloadStartedCh = make(chan struct{}, 4)
+
+		handler.enqueueDVRLineupReload("burst_a")
+		handler.enqueueDVRLineupReload("burst_b")
+		handler.enqueueDVRLineupReload("burst_c")
+
+		select {
+		case <-fakeDVR.reloadStartedCh:
+		case <-time.After(time.Second):
+			t.Fatal("coalesced reload did not start")
+		}
+		select {
+		case <-fakeDVR.reloadStartedCh:
+			t.Fatal("burst coalescing started an unexpected second reload")
+		case <-time.After(4 * handler.dvrLineupReloadDebounce):
+		}
+		if got := fakeDVR.ReloadCallCount(); got != 1 {
+			t.Fatalf("coalesced burst reload calls = %d, want 1", got)
+		}
+	})
+
+	t.Run("RescheduleExtendsButCapsAtMaxWait", func(t *testing.T) {
+		handler, fakeDVR, cleanup := newHarness(t)
+		defer cleanup()
+
+		handler.dvrLineupReloadDebounce = 90 * time.Millisecond
+		handler.dvrLineupReloadMaxWait = 150 * time.Millisecond
+
+		startedAt := time.Now()
+		handler.enqueueDVRLineupReload("max_wait_1")
+		time.Sleep(60 * time.Millisecond)
+		handler.enqueueDVRLineupReload("max_wait_2")
+		time.Sleep(60 * time.Millisecond)
+		handler.enqueueDVRLineupReload("max_wait_3")
+
+		waitForCondition(t, time.Second, "max-wait capped reload execution", func() bool {
+			return fakeDVR.ReloadCallCount() >= 1
+		})
+
+		firstReloadAt := fakeDVR.FirstReloadStartedAt()
+		if firstReloadAt.IsZero() {
+			t.Fatal("first reload start time was not recorded")
+		}
+		elapsed := firstReloadAt.Sub(startedAt)
+		if elapsed < 120*time.Millisecond {
+			t.Fatalf("first reload elapsed = %s, want >= 120ms to confirm debounce extension", elapsed)
+		}
+		if elapsed > 260*time.Millisecond {
+			t.Fatalf("first reload elapsed = %s, want <= 260ms with max-wait cap", elapsed)
+		}
+	})
+
+	t.Run("EnqueueWhileRunningSchedulesSingleFollowUp", func(t *testing.T) {
+		handler, fakeDVR, cleanup := newHarness(t)
+		defer cleanup()
+
+		handler.dvrLineupReloadDebounce = 20 * time.Millisecond
+		handler.dvrLineupReloadMaxWait = 120 * time.Millisecond
+		fakeDVR.reloadStartedCh = make(chan struct{}, 4)
+		fakeDVR.reloadReleaseCh = make(chan struct{})
+
+		handler.enqueueDVRLineupReload("running_first")
+		select {
+		case <-fakeDVR.reloadStartedCh:
+		case <-time.After(time.Second):
+			t.Fatal("first queued reload did not start")
+		}
+
+		handler.enqueueDVRLineupReload("running_followup_1")
+		handler.enqueueDVRLineupReload("running_followup_2")
+		close(fakeDVR.reloadReleaseCh)
+
+		select {
+		case <-fakeDVR.reloadStartedCh:
+		case <-time.After(time.Second):
+			t.Fatal("follow-up reload did not start after in-flight enqueue")
+		}
+		select {
+		case <-fakeDVR.reloadStartedCh:
+			t.Fatal("in-flight enqueue scheduled more than one follow-up reload")
+		case <-time.After(handler.dvrLineupReloadDebounce + handler.dvrLineupReloadMaxWait):
+		}
+		if got := fakeDVR.ReloadCallCount(); got != 2 {
+			t.Fatalf("reload calls after in-flight enqueue = %d, want 2", got)
+		}
+	})
+
+	t.Run("CloseCancelsPendingAndRunning", func(t *testing.T) {
+		t.Run("PendingTimer", func(t *testing.T) {
+			handler, fakeDVR, cleanup := newHarness(t)
+			defer cleanup()
+
+			handler.dvrLineupReloadDebounce = 200 * time.Millisecond
+			handler.dvrLineupReloadMaxWait = 400 * time.Millisecond
+			fakeDVR.reloadStartedCh = make(chan struct{}, 1)
+
+			handler.enqueueDVRLineupReload("close_pending")
+			handler.Close()
+			select {
+			case <-fakeDVR.reloadStartedCh:
+				t.Fatal("reload started after Close canceled pending timer")
+			case <-time.After(handler.dvrLineupReloadDebounce + 150*time.Millisecond):
+			}
+			if got := fakeDVR.ReloadCallCount(); got != 0 {
+				t.Fatalf("reload calls after close with pending timer = %d, want 0", got)
+			}
+		})
+
+		t.Run("RunningReload", func(t *testing.T) {
+			handler, fakeDVR, cleanup := newHarness(t)
+			defer cleanup()
+
+			handler.dvrLineupReloadDebounce = 10 * time.Millisecond
+			handler.dvrLineupReloadMaxWait = 80 * time.Millisecond
+			fakeDVR.reloadStartedCh = make(chan struct{}, 1)
+			fakeDVR.reloadReleaseCh = make(chan struct{})
+
+			handler.enqueueDVRLineupReload("close_running")
+			select {
+			case <-fakeDVR.reloadStartedCh:
+			case <-time.After(time.Second):
+				t.Fatal("running reload did not start before close")
+			}
+
+			closeDone := make(chan struct{})
+			go func() {
+				handler.Close()
+				close(closeDone)
+			}()
+
+			select {
+			case <-closeDone:
+			case <-time.After(2 * time.Second):
+				t.Fatal("handler.Close() did not return while reload was in-flight")
+			}
+
+			if got := fakeDVR.ReloadCallCount(); got != 1 {
+				t.Fatalf("reload calls during close-running scenario = %d, want 1", got)
+			}
+			if err := fakeDVR.LastReloadContextErr(); err == nil {
+				t.Fatal("LastReloadContextErr() = nil, want canceled/deadline error after close")
+			}
+		})
+	})
+}
+
+func TestFormatDVRLineupReloadReasons(t *testing.T) {
+	tests := []struct {
+		name         string
+		reasonCounts map[string]int
+		want         string
+	}{
+		{
+			name:         "EmptyMapUsesUnspecifiedFallback",
+			reasonCounts: nil,
+			want:         "unspecified(1)",
+		},
+		{
+			name:         "InitializedEmptyMapUsesUnspecifiedFallback",
+			reasonCounts: map[string]int{},
+			want:         "unspecified(1)",
+		},
+		{
+			name: "SingleReason",
+			reasonCounts: map[string]int{
+				"traditional_reorder": 2,
+			},
+			want: "traditional_reorder(2)",
+		},
+		{
+			name: "MultipleReasonsSorted",
+			reasonCounts: map[string]int{
+				"zeta":  1,
+				"alpha": 3,
+				"beta":  2,
+			},
+			want: "alpha(3),beta(2),zeta(1)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := formatDVRLineupReloadReasons(tt.reasonCounts); got != tt.want {
+				t.Fatalf("formatDVRLineupReloadReasons() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAdminDVRLineupReloadRunUsesDedicatedTimeout(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	defer handler.Close()
+
+	handler.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	handler.dynamicBlockSyncTimeout = 5 * time.Millisecond
+	handler.SetDVRLineupReloadTimeout(150 * time.Millisecond)
+
+	fakeDVR := &fakeDVRService{
+		reloadDelay: 40 * time.Millisecond,
+	}
+	handler.SetDVRService(fakeDVR)
+
+	handler.runDVRLineupReloadOnce(dvrLineupReloadBatch{
+		reasonSummary:  "timeout_test",
+		coalescedCount: 1,
+	})
+
+	if got := fakeDVR.ReloadCallCount(); got != 1 {
+		t.Fatalf("ReloadCallCount() = %d, want 1", got)
+	}
+	if err := fakeDVR.LastReloadContextErr(); err != nil {
+		t.Fatalf("LastReloadContextErr() = %v, want nil when dedicated lineup timeout exceeds reload delay", err)
+	}
+}
+
+func TestAdminDVRLineupReloadRunTimeoutExpiryLogsFailure(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	defer handler.Close()
+
+	var logBuffer bytes.Buffer
+	handler.SetLogger(slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	handler.SetDVRLineupReloadTimeout(20 * time.Millisecond)
+
+	fakeDVR := &fakeDVRService{
+		reloadDelay: 80 * time.Millisecond,
+	}
+	handler.SetDVRService(fakeDVR)
+
+	handler.runDVRLineupReloadOnce(dvrLineupReloadBatch{
+		reasonSummary:  "timeout_expiry",
+		coalescedCount: 1,
+	})
+
+	if got := fakeDVR.ReloadCallCount(); got != 1 {
+		t.Fatalf("ReloadCallCount() = %d, want 1", got)
+	}
+	if err := fakeDVR.LastReloadContextErr(); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("LastReloadContextErr() = %v, want context deadline exceeded", err)
+	}
+
+	logs := logBuffer.String()
+	if !strings.Contains(logs, "admin dvr lineup reload failed") {
+		t.Fatalf("logs = %q, want admin dvr lineup reload failed entry", logs)
+	}
+	if strings.Contains(logs, "admin dvr lineup reload canceled") {
+		t.Fatalf("logs = %q, did not expect admin dvr lineup reload canceled entry", logs)
+	}
+	if !strings.Contains(logs, "context deadline exceeded") {
+		t.Fatalf("logs = %q, want context deadline exceeded detail", logs)
 	}
 }
 
@@ -4578,6 +4959,518 @@ func TestAdminRoutesTunerStatusResolveIPUsesCrossRequestCache(t *testing.T) {
 	}
 }
 
+func TestAdminRoutesTunerStatusResolveIPCacheExpiresAfterTTL(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostCacheSweepInterval = 0
+
+	now := time.Unix(1_700_000_000, 0).UTC()
+	handler.resolveClientHostCacheNow = func() time.Time {
+		return now
+	}
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 53,
+					ClientAddr:   "10.88.0.9:41000",
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		if addr != "10.88.0.9" {
+			t.Fatalf("lookup address = %q, want 10.88.0.9", addr)
+		}
+		if lookupCalls == 1 {
+			return []string{"bedroom-tv-v1.local."}, nil
+		}
+		return []string{"bedroom-tv-v2.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var first stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &first)
+	if got, want := first.ClientStreams[0].ClientHost, "bedroom-tv-v1.local"; got != want {
+		t.Fatalf("first payload client_host = %q, want %q", got, want)
+	}
+
+	now = now.Add(3 * time.Minute)
+	var second stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &second)
+	if got, want := second.ClientStreams[0].ClientHost, "bedroom-tv-v2.local"; got != want {
+		t.Fatalf("second payload client_host = %q, want %q", got, want)
+	}
+
+	if lookupCalls != 2 {
+		t.Fatalf("lookupCalls = %d, want 2 after TTL expiry", lookupCalls)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPCacheDisabledWhenTTLZero(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 0
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 54,
+					ClientAddr:   "10.88.0.10:41000",
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		if addr != "10.88.0.10" {
+			t.Fatalf("lookup address = %q, want 10.88.0.10", addr)
+		}
+		return []string{"garage-tv.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var first stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &first)
+	var second stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &second)
+
+	if lookupCalls != 2 {
+		t.Fatalf("lookupCalls = %d, want 2 when cache TTL is disabled", lookupCalls)
+	}
+	if got, want := first.ClientStreams[0].ClientHost, "garage-tv.local"; got != want {
+		t.Fatalf("first payload client_host = %q, want %q", got, want)
+	}
+	if got, want := second.ClientStreams[0].ClientHost, "garage-tv.local"; got != want {
+		t.Fatalf("second payload client_host = %q, want %q", got, want)
+	}
+
+	handler.resolveClientHostCacheMu.Lock()
+	cacheLen := len(handler.resolveClientHostCache)
+	handler.resolveClientHostCacheMu.Unlock()
+	if cacheLen != 0 {
+		t.Fatalf("cache length = %d, want 0 when cache TTL is disabled", cacheLen)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPUsesShortNegativeCacheTTL(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostCacheNegativeTTL = 5 * time.Second
+	handler.resolveClientHostCacheSweepInterval = 0
+
+	now := time.Unix(1_700_000_100, 0).UTC()
+	handler.resolveClientHostCacheNow = func() time.Time {
+		return now
+	}
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 55,
+					ClientAddr:   "10.88.0.11:41000",
+				},
+			},
+		},
+	})
+
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		lookupCalls++
+		if addr != "10.88.0.11" {
+			t.Fatalf("lookup address = %q, want 10.88.0.11", addr)
+		}
+		if lookupCalls == 1 {
+			return nil, context.DeadlineExceeded
+		}
+		return []string{"retry-host.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var first stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &first)
+	if got := first.ClientStreams[0].ClientHost; got != "" {
+		t.Fatalf("first payload client_host = %q, want empty after initial lookup failure", got)
+	}
+
+	var second stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &second)
+	if got := second.ClientStreams[0].ClientHost; got != "" {
+		t.Fatalf("second payload client_host = %q, want empty while negative cache entry is fresh", got)
+	}
+	if lookupCalls != 1 {
+		t.Fatalf("lookupCalls = %d, want 1 while negative cache entry is within short TTL", lookupCalls)
+	}
+
+	now = now.Add(6 * time.Second)
+	var third stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &third)
+	if got, want := third.ClientStreams[0].ClientHost, "retry-host.local"; got != want {
+		t.Fatalf("third payload client_host = %q, want %q after short negative TTL expiry", got, want)
+	}
+	if lookupCalls != 2 {
+		t.Fatalf("lookupCalls = %d, want 2 after negative cache TTL expiry", lookupCalls)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPConcurrentRequests(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostCacheNegativeTTL = 10 * time.Second
+	handler.resolveClientHostCacheMaxEntries = 8
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 56,
+					ClientAddr:   "10.88.0.12:41000",
+				},
+				{
+					SubscriberID: 57,
+					ClientAddr:   "10.88.0.13:41001",
+				},
+			},
+		},
+	})
+
+	var lookupMu sync.Mutex
+	lookupCalls := 0
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		time.Sleep(2 * time.Millisecond)
+		lookupMu.Lock()
+		lookupCalls++
+		lookupMu.Unlock()
+
+		switch addr {
+		case "10.88.0.12":
+			return []string{"tablet.local."}, nil
+		case "10.88.0.13":
+			return []string{"phone.local."}, nil
+		default:
+			return nil, fmt.Errorf("unexpected lookup ip %q", addr)
+		}
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	const requestCount = 24
+	errCh := make(chan string, requestCount)
+	var wg sync.WaitGroup
+	for i := 0; i < requestCount; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil)
+			mux.ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				errCh <- fmt.Sprintf("status = %d, want %d", rec.Code, http.StatusOK)
+				return
+			}
+
+			var payload stream.TunerStatusSnapshot
+			if err := json.Unmarshal(rec.Body.Bytes(), &payload); err != nil {
+				errCh <- fmt.Sprintf("decode payload: %v", err)
+				return
+			}
+			if len(payload.ClientStreams) != 2 {
+				errCh <- fmt.Sprintf("len(payload.client_streams) = %d, want 2", len(payload.ClientStreams))
+				return
+			}
+			if payload.ClientStreams[0].ClientHost == "" || payload.ClientStreams[1].ClientHost == "" {
+				errCh <- "expected resolved client_host fields for both client_streams entries"
+			}
+		}()
+	}
+	wg.Wait()
+	close(errCh)
+
+	for errMsg := range errCh {
+		t.Fatal(errMsg)
+	}
+
+	lookupMu.Lock()
+	gotLookupCalls := lookupCalls
+	lookupMu.Unlock()
+	if gotLookupCalls <= 0 {
+		t.Fatalf("lookupCalls = %d, want > 0", gotLookupCalls)
+	}
+
+	handler.resolveClientHostCacheMu.Lock()
+	cacheLen := len(handler.resolveClientHostCache)
+	handler.resolveClientHostCacheMu.Unlock()
+	if cacheLen <= 0 {
+		t.Fatalf("cache length = %d, want > 0 after concurrent requests", cacheLen)
+	}
+	if handler.resolveClientHostCacheMaxEntries > 0 && cacheLen > handler.resolveClientHostCacheMaxEntries {
+		t.Fatalf(
+			"cache length = %d, want <= max entries %d",
+			cacheLen,
+			handler.resolveClientHostCacheMaxEntries,
+		)
+	}
+}
+
+func TestAdminResolveClientHostCacheCapacityAndCloseClear(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostCacheMaxEntries = 2
+	handler.resolveClientHostCacheSweepInterval = 0
+
+	now := time.Unix(1_700_000_200, 0).UTC()
+	handler.resolveClientHostCacheNow = func() time.Time {
+		return now
+	}
+
+	handler.storeCachedResolvedClientHost("10.0.0.1", "one.local")
+	now = now.Add(time.Second)
+	handler.storeCachedResolvedClientHost("10.0.0.2", "two.local")
+	now = now.Add(time.Second)
+	handler.storeCachedResolvedClientHost("10.0.0.3", "three.local")
+
+	if _, ok := handler.loadCachedResolvedClientHost("10.0.0.1"); ok {
+		t.Fatal("10.0.0.1 cache entry should have been evicted at capacity")
+	}
+	if got, ok := handler.loadCachedResolvedClientHost("10.0.0.2"); !ok || got != "two.local" {
+		t.Fatalf("10.0.0.2 cache entry = (%q, %v), want (two.local, true)", got, ok)
+	}
+	if got, ok := handler.loadCachedResolvedClientHost("10.0.0.3"); !ok || got != "three.local" {
+		t.Fatalf("10.0.0.3 cache entry = (%q, %v), want (three.local, true)", got, ok)
+	}
+
+	handler.Close()
+
+	handler.resolveClientHostCacheMu.Lock()
+	cacheIsNil := handler.resolveClientHostCache == nil
+	lastSweepZero := handler.resolveClientHostCacheLastSweep.IsZero()
+	handler.resolveClientHostCacheMu.Unlock()
+	if !cacheIsNil {
+		t.Fatal("resolve client host cache should be cleared on Close()")
+	}
+	if !lastSweepZero {
+		t.Fatal("resolve client host cache sweep timestamp should reset on Close()")
+	}
+}
+
+func TestAdminResolveClientHostCacheSweepIntervalThrottleDefersExpiredSweep(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostCacheSweepInterval = 30 * time.Second
+
+	now := time.Unix(1_700_000_300, 0).UTC()
+	handler.resolveClientHostCacheNow = func() time.Time {
+		return now
+	}
+
+	handler.storeCachedResolvedClientHost("10.0.0.1", "expired.local")
+	handler.storeCachedResolvedClientHost("10.0.0.2", "fresh.local")
+
+	handler.resolveClientHostCacheMu.Lock()
+	expiredEntry := handler.resolveClientHostCache["10.0.0.1"]
+	expiredEntry.expiresAt = now.Add(-time.Second)
+	handler.resolveClientHostCache["10.0.0.1"] = expiredEntry
+	freshEntry := handler.resolveClientHostCache["10.0.0.2"]
+	freshEntry.expiresAt = now.Add(time.Minute)
+	handler.resolveClientHostCache["10.0.0.2"] = freshEntry
+	handler.resolveClientHostCacheLastSweep = now
+	handler.resolveClientHostCacheMu.Unlock()
+
+	if got, ok := handler.loadCachedResolvedClientHost("10.0.0.2"); !ok || got != "fresh.local" {
+		t.Fatalf("first load = (%q, %v), want (fresh.local, true)", got, ok)
+	}
+	handler.resolveClientHostCacheMu.Lock()
+	_, expiredStillPresent := handler.resolveClientHostCache["10.0.0.1"]
+	handler.resolveClientHostCacheMu.Unlock()
+	if !expiredStillPresent {
+		t.Fatal("expired cache entry should remain while sweep interval is throttled")
+	}
+
+	now = now.Add(31 * time.Second)
+	if got, ok := handler.loadCachedResolvedClientHost("10.0.0.2"); !ok || got != "fresh.local" {
+		t.Fatalf("second load = (%q, %v), want (fresh.local, true)", got, ok)
+	}
+	handler.resolveClientHostCacheMu.Lock()
+	_, expiredStillPresent = handler.resolveClientHostCache["10.0.0.1"]
+	handler.resolveClientHostCacheMu.Unlock()
+	if expiredStillPresent {
+		t.Fatal("expired cache entry should be removed after sweep interval elapses")
+	}
+}
+
+func TestAdminResolveClientHostCacheCapacityEvictionIgnoresStaleHeapEntries(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostCacheMaxEntries = 2
+	handler.resolveClientHostCacheSweepInterval = 0
+
+	now := time.Unix(1_700_000_500, 0).UTC()
+	handler.resolveClientHostCacheNow = func() time.Time {
+		return now
+	}
+
+	handler.storeCachedResolvedClientHost("10.0.0.1", "one-v1.local")
+	now = now.Add(time.Second)
+	handler.storeCachedResolvedClientHost("10.0.0.2", "two.local")
+	now = now.Add(time.Second)
+	handler.storeCachedResolvedClientHost("10.0.0.1", "one-v2.local")
+	now = now.Add(time.Second)
+	handler.storeCachedResolvedClientHost("10.0.0.3", "three.local")
+
+	if _, ok := handler.loadCachedResolvedClientHost("10.0.0.2"); ok {
+		t.Fatal("10.0.0.2 cache entry should be evicted as the oldest current expiry")
+	}
+	if got, ok := handler.loadCachedResolvedClientHost("10.0.0.1"); !ok || got != "one-v2.local" {
+		t.Fatalf("10.0.0.1 cache entry = (%q, %v), want (one-v2.local, true)", got, ok)
+	}
+	if got, ok := handler.loadCachedResolvedClientHost("10.0.0.3"); !ok || got != "three.local" {
+		t.Fatalf("10.0.0.3 cache entry = (%q, %v), want (three.local, true)", got, ok)
+	}
+}
+
+func TestAdminRoutesTunerStatusResolveIPLogsCacheStats(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.resolveClientHostCacheTTL = 2 * time.Minute
+
+	var logBuffer bytes.Buffer
+	handler.SetLogger(slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	handler.SetTunerStatusProvider(&fakeTunerStatusProvider{
+		snapshot: stream.TunerStatusSnapshot{
+			ClientStreams: []stream.ClientStreamStatus{
+				{
+					SubscriberID: 58,
+					ClientAddr:   "10.88.0.14:41000",
+				},
+			},
+		},
+	})
+
+	handler.lookupAddr = func(_ context.Context, addr string) ([]string, error) {
+		if addr != "10.88.0.14" {
+			return nil, fmt.Errorf("unexpected lookup ip %q", addr)
+		}
+		return []string{"office.local."}, nil
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var first stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &first)
+	var second stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &second)
+
+	logText := logBuffer.String()
+	if !strings.Contains(logText, "admin tuner resolve_ip completed") {
+		t.Fatalf("logs = %q, want resolve_ip completion debug event", logText)
+	}
+	if !strings.Contains(logText, "cache_hit_rate=") {
+		t.Fatalf("logs = %q, want cache hit-rate field", logText)
+	}
+	if !strings.Contains(logText, "cache_hits=1") {
+		t.Fatalf("logs = %q, want cache_hits=1 after warm-cache request", logText)
+	}
+	if !strings.Contains(logText, "cache_misses=1") {
+		t.Fatalf("logs = %q, want cache_misses=1 for initial cold-cache request", logText)
+	}
+}
+
 func TestAdminRoutesTunerStatusResolveIPUsesTotalTimeoutCap(t *testing.T) {
 	store, err := sqlite.Open(":memory:")
 	if err != nil {
@@ -6519,8 +7412,14 @@ type fakeDVRService struct {
 	failOnCanceledContext     bool
 	canceledUpdateCalls       int
 	getStateErr               error
+	reloadErr                 error
+	reloadDelay               time.Duration
+	reloadStartedCh           chan struct{}
+	reloadDoneCh              chan struct{}
+	reloadReleaseCh           chan struct{}
 	reloadMu                  sync.RWMutex
 	reloadCalls               int
+	reloadStartedAt           []time.Time
 	lastReloadCtxErr          error
 	lastListEnabledOnly       bool
 	lastSyncIncludeDynamic    bool
@@ -6828,9 +7727,65 @@ func (f *fakeDVRService) ListChannelMappingsPaged(
 
 func (f *fakeDVRService) ReloadLineup(ctx context.Context) error {
 	f.reloadMu.Lock()
-	defer f.reloadMu.Unlock()
 	f.reloadCalls++
-	f.lastReloadCtxErr = ctx.Err()
+	f.reloadStartedAt = append(f.reloadStartedAt, time.Now())
+	startedCh := f.reloadStartedCh
+	doneCh := f.reloadDoneCh
+	releaseCh := f.reloadReleaseCh
+	delay := f.reloadDelay
+	reloadErr := f.reloadErr
+	f.reloadMu.Unlock()
+
+	if startedCh != nil {
+		select {
+		case startedCh <- struct{}{}:
+		default:
+		}
+	}
+
+	recordAndNotify := func(err error) {
+		f.reloadMu.Lock()
+		f.lastReloadCtxErr = err
+		f.reloadMu.Unlock()
+		if doneCh != nil {
+			select {
+			case doneCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	if releaseCh != nil {
+		select {
+		case <-releaseCh:
+		case <-ctx.Done():
+			err := ctx.Err()
+			recordAndNotify(err)
+			return err
+		}
+	}
+
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			err := ctx.Err()
+			recordAndNotify(err)
+			return err
+		}
+	}
+
+	if err := ctx.Err(); err != nil {
+		recordAndNotify(err)
+		return err
+	}
+	if reloadErr != nil {
+		recordAndNotify(nil)
+		return reloadErr
+	}
+	recordAndNotify(nil)
 	return nil
 }
 
@@ -6844,6 +7799,15 @@ func (f *fakeDVRService) LastReloadContextErr() error {
 	f.reloadMu.RLock()
 	defer f.reloadMu.RUnlock()
 	return f.lastReloadCtxErr
+}
+
+func (f *fakeDVRService) FirstReloadStartedAt() time.Time {
+	f.reloadMu.RLock()
+	defer f.reloadMu.RUnlock()
+	if len(f.reloadStartedAt) == 0 {
+		return time.Time{}
+	}
+	return f.reloadStartedAt[0]
 }
 
 func (f *fakeDVRService) GetChannelMapping(_ context.Context, channelID int64) (dvr.ChannelMapping, error) {

@@ -48,6 +48,9 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.FFmpegReconnectHTTPErrors != "" {
 		t.Fatalf("FFmpegReconnectHTTPErrors = %q, want empty", cfg.FFmpegReconnectHTTPErrors)
 	}
+	if cfg.FFprobePath != "ffprobe" {
+		t.Fatalf("FFprobePath = %q, want ffprobe", cfg.FFprobePath)
+	}
 	if cfg.FFmpegStartupProbeSize != defaultFFmpegStartupProbeSizeBytes {
 		t.Fatalf("FFmpegStartupProbeSize = %d, want %d", cfg.FFmpegStartupProbeSize, defaultFFmpegStartupProbeSizeBytes)
 	}
@@ -152,6 +155,9 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	}
 	if cfg.AdminJSONBodyLimitBytes != 1<<20 {
 		t.Fatalf("AdminJSONBodyLimitBytes = %d, want %d", cfg.AdminJSONBodyLimitBytes, 1<<20)
+	}
+	if cfg.DVRLineupReloadTimeout != defaultDVRLineupReloadTimeout {
+		t.Fatalf("DVRLineupReloadTimeout = %s, want %s", cfg.DVRLineupReloadTimeout, defaultDVRLineupReloadTimeout)
 	}
 	if len(cfg.RateLimitTrustedProxies) != 0 {
 		t.Fatalf("RateLimitTrustedProxies = %v, want empty", cfg.RateLimitTrustedProxies)
@@ -591,6 +597,40 @@ func TestLoadRejectsNonPositiveAdminJSONBodyLimit(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for non-positive admin-json-body-limit-bytes")
+	}
+}
+
+func TestLoadDVRLineupReloadTimeoutFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("DVR_LINEUP_RELOAD_TIMEOUT", "42s")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if cfg.DVRLineupReloadTimeout != 42*time.Second {
+		t.Fatalf("DVRLineupReloadTimeout = %s, want 42s from env", cfg.DVRLineupReloadTimeout)
+	}
+
+	cfg, err = Load([]string{"--dvr-lineup-reload-timeout=75s"})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.DVRLineupReloadTimeout != 75*time.Second {
+		t.Fatalf("DVRLineupReloadTimeout = %s, want 75s from flag", cfg.DVRLineupReloadTimeout)
+	}
+}
+
+func TestLoadRejectsNonPositiveDVRLineupReloadTimeout(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--dvr-lineup-reload-timeout=0s",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-positive dvr-lineup-reload-timeout")
 	}
 }
 
@@ -1601,6 +1641,27 @@ func TestLoadUPnPContentDirectoryUpdateIDCacheTTLFromEnvAndFlag(t *testing.T) {
 	}
 }
 
+func TestLoadFFprobePathFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("FFPROBE_PATH", "/env/ffprobe")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if cfg.FFprobePath != "/env/ffprobe" {
+		t.Fatalf("FFprobePath = %q, want /env/ffprobe from env", cfg.FFprobePath)
+	}
+
+	cfg, err = Load([]string{"--ffprobe-path=/flag/ffprobe"})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.FFprobePath != "/flag/ffprobe" {
+		t.Fatalf("FFprobePath = %q, want /flag/ffprobe from flag", cfg.FFprobePath)
+	}
+}
+
 func TestLoadRejectsRemovedLegacyFlags(t *testing.T) {
 	clearConfigEnv(t)
 
@@ -1645,6 +1706,7 @@ func clearConfigEnv(t *testing.T) {
 		"RECONCILE_DYNAMIC_RULE_PAGED",
 		"REFRESH_INTERVAL",
 		"FFMPEG_PATH",
+		"FFPROBE_PATH",
 		"STREAM_MODE",
 		"STARTUP_TIMEOUT",
 		"STARTUP_RANDOM_ACCESS_RECOVERY_ONLY",
@@ -1691,6 +1753,7 @@ func clearConfigEnv(t *testing.T) {
 		"PROBE_TIMEOUT",
 		"ADMIN_AUTH",
 		"ADMIN_JSON_BODY_LIMIT_BYTES",
+		"DVR_LINEUP_RELOAD_TIMEOUT",
 		"REQUEST_TIMEOUT",
 		"RATE_LIMIT_RPS",
 		"RATE_LIMIT_BURST",

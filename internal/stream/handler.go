@@ -35,6 +35,7 @@ type ChannelsProvider interface {
 type Config struct {
 	Mode                            string
 	FFmpegPath                      string
+	FFprobePath                     string
 	HTTPClient                      *http.Client
 	Logger                          *slog.Logger
 	StartupTimeout                  time.Duration
@@ -169,6 +170,10 @@ func NewHandler(cfg Config, tuners *Pool, channelsProvider ChannelsProvider) *Ha
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
+	ffprobePath := strings.TrimSpace(cfg.FFprobePath)
+	if ffprobePath == "" {
+		ffprobePath = "ffprobe"
+	}
 
 	startupWait := cfg.StartupTimeout
 	if startupWait <= 0 {
@@ -198,6 +203,7 @@ func NewHandler(cfg Config, tuners *Pool, channelsProvider ChannelsProvider) *Ha
 	sessions := NewSessionManager(SessionManagerConfig{
 		Mode:                            mode,
 		FFmpegPath:                      ffmpegPath,
+		FFprobePath:                     ffprobePath,
 		HTTPClient:                      cfg.HTTPClient,
 		Logger:                          logger,
 		StartupTimeout:                  startupWait,

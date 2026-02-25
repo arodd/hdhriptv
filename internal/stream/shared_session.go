@@ -474,6 +474,7 @@ func slowClientLagDetailsFromError(err error) (slowClientLagDetails, bool) {
 type SessionManagerConfig struct {
 	Mode                            string
 	FFmpegPath                      string
+	FFprobePath                     string
 	HTTPClient                      *http.Client
 	Logger                          *slog.Logger
 	StartupTimeout                  time.Duration
@@ -526,6 +527,7 @@ type SessionManagerConfig struct {
 type sessionManagerConfig struct {
 	mode                            string
 	ffmpegPath                      string
+	ffprobePath                     string
 	httpClient                      *http.Client
 	logger                          *slog.Logger
 	startupWait                     time.Duration
@@ -3796,6 +3798,70 @@ func (s *sharedRuntimeSession) shouldEmitSlateAVCloseWarn(now time.Time) (bool, 
 	return true, suppressed
 }
 
+func shouldDowngradeSlateAVCloseErrorToDebug(err error, lifecycleCtx context.Context) bool {
+	if err == nil || lifecycleCtx == nil {
+		return false
+	}
+	if lifecycleErr := lifecycleCtx.Err(); lifecycleErr == nil {
+		return false
+	}
+	return isBenignSlateAVFontConfigCloseError(err)
+}
+
+func isBenignSlateAVFontConfigCloseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	text := strings.ToLower(strings.TrimSpace(err.Error()))
+	if text == "" || !strings.Contains(text, "fontconfig") {
+		return false
+	}
+
+	// FontConfig strings vary across package versions and distributions. Match
+	// token signatures instead of exact phrase ordering so punctuation/minor
+	// wording drift does not re-promote benign cancellation-adjacent close noise.
+	knownSignatureTokens := [][]string{
+		{"cannot", "load", "default", "config", "file"},
+		{"cannot", "find", "valid", "font", "family"},
+	}
+	tokenSet := fontConfigErrorTokenSet(text)
+	for _, signatureTokens := range knownSignatureTokens {
+		if fontConfigTokenSetContainsAll(tokenSet, signatureTokens) {
+			return true
+		}
+	}
+	return false
+}
+
+func fontConfigErrorTokenSet(text string) map[string]struct{} {
+	text = strings.ToLower(text)
+	normalized := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z':
+			return r
+		case r >= '0' && r <= '9':
+			return r
+		default:
+			return ' '
+		}
+	}, text)
+	fields := strings.Fields(normalized)
+	tokens := make(map[string]struct{}, len(fields))
+	for _, field := range fields {
+		tokens[field] = struct{}{}
+	}
+	return tokens
+}
+
+func fontConfigTokenSetContainsAll(tokens map[string]struct{}, required []string) bool {
+	for _, token := range required {
+		if _, ok := tokens[token]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 func (s *sharedRuntimeSession) sourceBytesPublishedSinceSelection() int64 {
 	if s == nil || s.pump == nil {
 		return 0
@@ -5959,7 +6025,7 @@ func (s *sharedRuntimeSession) runStreamProfileProbe(
 	s.profileProbeLastStartedAt = startedAt
 	s.mu.Unlock()
 
-	profile, err := streamProfileProbeRunner(probeCtx, "", streamURL, 0)
+	profile, err := streamProfileProbeRunner(probeCtx, s.manager.cfg.ffprobePath, streamURL, 0)
 	if err != nil {
 		if probeCtx.Err() == nil && s.manager != nil && s.manager.logger != nil {
 			s.manager.logger.Debug(
@@ -7004,7 +7070,11 @@ func (s *sharedRuntimeSession) runRecoverySlateAVKeepalive(ctx context.Context) 
 				&recoveryKeepaliveChunkPublisher{session: s},
 			)
 			pumpErr := pump.Run(ctx, reader)
-			closeErr := s.closeSlateAVRecoveryReaderWithTimeout(reader, s.manager.cfg.sessionDrainTimeout)
+			closeErr := s.closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext(
+				ctx,
+				reader,
+				s.manager.cfg.sessionDrainTimeout,
+			)
 			switch {
 			case pumpErr != nil:
 				lastErr = pumpErr
@@ -7041,6 +7111,18 @@ func (s *sharedRuntimeSession) closeSlateAVRecoveryReaderWithTimeout(
 	reader io.ReadCloser,
 	timeout time.Duration,
 ) error {
+	return s.closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext(
+		nil,
+		reader,
+		timeout,
+	)
+}
+
+func (s *sharedRuntimeSession) closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext(
+	lifecycleCtx context.Context,
+	reader io.ReadCloser,
+	timeout time.Duration,
+) error {
 	if reader == nil {
 		return nil
 	}
@@ -7071,8 +7153,14 @@ func (s *sharedRuntimeSession) closeSlateAVRecoveryReaderWithTimeout(
 		if err != nil && s != nil && s.manager != nil && s.manager.logger != nil {
 			if shouldLog, coalesced := s.shouldEmitSlateAVCloseWarn(time.Now()); shouldLog {
 				stats := closeWithTimeoutStatsSnapshot()
+				closeErrorType := "non_timeout"
+				logFn := s.manager.logger.Warn
+				if shouldDowngradeSlateAVCloseErrorToDebug(err, lifecycleCtx) {
+					closeErrorType = "non_timeout_benign_fontconfig_canceled"
+					logFn = s.manager.logger.Debug
+				}
 				fields := []any{
-					"close_error_type", "non_timeout",
+					"close_error_type", closeErrorType,
 					"channel_id", s.channel.ChannelID,
 					"guide_number", s.channel.GuideNumber,
 					"source_id", s.currentSourceID(),
@@ -7089,10 +7177,13 @@ func (s *sharedRuntimeSession) closeSlateAVRecoveryReaderWithTimeout(
 					"close_suppressed_duplicate", stats.SuppressedDuplicate,
 					"close_suppressed_budget", stats.SuppressedBudget,
 				}
+				if lifecycleCtx != nil && lifecycleCtx.Err() != nil {
+					fields = append(fields, "close_lifecycle_error", lifecycleCtx.Err())
+				}
 				if coalesced > 0 {
 					fields = append(fields, "close_non_timeout_logs_coalesced", coalesced)
 				}
-				s.manager.logger.Warn("shared session slate AV close error", fields...)
+				logFn("shared session slate AV close error", fields...)
 			}
 		}
 		closeWithTimeoutFinishWorker(reader)
@@ -7752,6 +7843,10 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
+	ffprobePath := strings.TrimSpace(cfg.FFprobePath)
+	if ffprobePath == "" {
+		ffprobePath = defaultStreamProfileFFprobePath
+	}
 
 	logger := cfg.Logger
 	if logger == nil {
@@ -7967,6 +8062,7 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 	return sessionManagerConfig{
 		mode:                            mode,
 		ffmpegPath:                      ffmpegPath,
+		ffprobePath:                     ffprobePath,
 		httpClient:                      httpClient,
 		logger:                          logger,
 		startupWait:                     startupWait,

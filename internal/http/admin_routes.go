@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"container/heap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,9 +31,15 @@ const defaultDynamicSyncTimeout = 30 * time.Second
 const defaultDVRSyncTimeout = 2 * time.Minute
 const defaultDVRMutationTimeout = 30 * time.Second
 const defaultAutomationMutationTimeout = 30 * time.Second
+const defaultDVRLineupReloadDebounce = 60 * time.Second
+const defaultDVRLineupReloadMaxWait = 5 * time.Minute
+const defaultDVRLineupReloadTimeout = 30 * time.Second
 const defaultResolveClientHostLookupTimeout = 2 * time.Second
 const defaultResolveClientHostsTotalTimeout = 8 * time.Second
 const defaultResolveClientHostCacheTTL = 2 * time.Minute
+const defaultResolveClientHostNegativeCacheTTL = 15 * time.Second
+const defaultResolveClientHostCacheSweepInterval = 30 * time.Second
+const defaultResolveClientHostCacheMaxEntries = 4096
 const defaultGroupsListLimit = 200
 const maxGroupsListLimit = 1000
 const defaultChannelsListLimit = 200
@@ -137,30 +145,40 @@ type DVRScheduler interface {
 
 // AdminHandler serves admin UI and admin JSON APIs.
 type AdminHandler struct {
-	catalog                   CatalogStore
-	channels                  ChannelsService
-	templates                 *template.Template
-	automation                *AutomationDeps
-	tunerStatus               TunerStatusProvider
-	lookupAddr                func(ctx context.Context, addr string) ([]string, error)
-	sourceHealthClearRuntime  SourceHealthClearRuntime
-	dvr                       DVRService
-	dvrScheduler              DVRScheduler
-	logger                    *slog.Logger
-	adminJSONBodyLimitBytes   int64
-	dynamicSyncTimeout        time.Duration
-	dynamicBlockSyncTimeout   time.Duration
-	dvrSyncTimeout            time.Duration
-	resolveClientHostsTimeout time.Duration
-	resolveClientHostCacheTTL time.Duration
-	resolveClientHostCacheNow func() time.Time
-	resolveClientHostCacheMu  sync.Mutex
-	resolveClientHostCache    map[string]resolveClientHostCacheEntry
-	adminConfigMutationMu     sync.Mutex
-	dynamicSyncMu             sync.Mutex
-	dynamicSyncStates         map[int64]*dynamicChannelSyncState
-	dynamicBlockSyncMu        sync.Mutex
-	dynamicBlockSyncState     dynamicBlockSyncState
+	catalog                             CatalogStore
+	channels                            ChannelsService
+	templates                           *template.Template
+	automation                          *AutomationDeps
+	tunerStatus                         TunerStatusProvider
+	lookupAddr                          func(ctx context.Context, addr string) ([]string, error)
+	sourceHealthClearRuntime            SourceHealthClearRuntime
+	dvr                                 DVRService
+	dvrScheduler                        DVRScheduler
+	logger                              *slog.Logger
+	adminJSONBodyLimitBytes             int64
+	dynamicSyncTimeout                  time.Duration
+	dynamicBlockSyncTimeout             time.Duration
+	dvrSyncTimeout                      time.Duration
+	resolveClientHostsTimeout           time.Duration
+	resolveClientHostCacheTTL           time.Duration
+	resolveClientHostCacheNegativeTTL   time.Duration
+	resolveClientHostCacheNow           func() time.Time
+	resolveClientHostCacheSweepInterval time.Duration
+	resolveClientHostCacheMaxEntries    int
+	resolveClientHostCacheMu            sync.Mutex
+	resolveClientHostCache              map[string]resolveClientHostCacheEntry
+	resolveClientHostCacheLastSweep     time.Time
+	resolveClientHostCacheExpiryHeap    resolveClientHostCacheExpiryMinHeap
+	adminConfigMutationMu               sync.Mutex
+	dynamicSyncMu                       sync.Mutex
+	dynamicSyncStates                   map[int64]*dynamicChannelSyncState
+	dynamicBlockSyncMu                  sync.Mutex
+	dynamicBlockSyncState               dynamicBlockSyncState
+	dvrLineupReloadMu                   sync.Mutex
+	dvrLineupReloadState                dvrLineupReloadState
+	dvrLineupReloadTimeout              time.Duration
+	dvrLineupReloadDebounce             time.Duration
+	dvrLineupReloadMaxWait              time.Duration
 
 	closeOnce sync.Once
 	closeCh   chan struct{} // closed on Close() to signal background workers
@@ -188,9 +206,80 @@ type dynamicBlockSyncState struct {
 	runCancel     context.CancelFunc
 }
 
+type dvrLineupReloadState struct {
+	running        bool
+	pending        bool
+	timerSeq       uint64
+	timerDueAt     time.Time
+	timerCancel    chan struct{}
+	firstQueuedAt  time.Time
+	lastQueuedAt   time.Time
+	coalescedCount int
+	reasonCounts   map[string]int
+}
+
+type dvrLineupReloadBatch struct {
+	reasonSummary   string
+	coalescedCount  int
+	firstQueuedAt   time.Time
+	lastQueuedAt    time.Time
+	queuedDuration  time.Duration
+	queueWindowSpan time.Duration
+}
+
 type resolveClientHostCacheEntry struct {
 	host      string
 	expiresAt time.Time
+}
+
+type resolveClientHostCacheExpiryHeapItem struct {
+	ip        string
+	expiresAt time.Time
+}
+
+type resolveClientHostCacheExpiryMinHeap []resolveClientHostCacheExpiryHeapItem
+
+func (h resolveClientHostCacheExpiryMinHeap) Len() int {
+	return len(h)
+}
+
+func (h resolveClientHostCacheExpiryMinHeap) Less(i, j int) bool {
+	return h[i].expiresAt.Before(h[j].expiresAt)
+}
+
+func (h resolveClientHostCacheExpiryMinHeap) Swap(i, j int) {
+	h[i], h[j] = h[j], h[i]
+}
+
+func (h *resolveClientHostCacheExpiryMinHeap) Push(x any) {
+	*h = append(*h, x.(resolveClientHostCacheExpiryHeapItem))
+}
+
+func (h *resolveClientHostCacheExpiryMinHeap) Pop() any {
+	old := *h
+	n := len(old)
+	item := old[n-1]
+	*h = old[:n-1]
+	return item
+}
+
+type resolveClientHostResolutionStats struct {
+	cacheHits          int
+	cacheNegativeHits  int
+	cacheMisses        int
+	memoizedHits       int
+	memoizedEmptyHits  int
+	lookupCalls        int
+	lookupErrors       int
+	lookupEmptyResults int
+}
+
+func (s resolveClientHostResolutionStats) cacheHitRate() float64 {
+	total := s.cacheHits + s.cacheNegativeHits + s.cacheMisses
+	if total == 0 {
+		return 0
+	}
+	return float64(s.cacheHits+s.cacheNegativeHits) / float64(total)
 }
 
 func NewAdminHandler(catalog CatalogStore, channelsSvc ChannelsService, automation ...AutomationDeps) (*AdminHandler, error) {
@@ -209,22 +298,28 @@ func NewAdminHandler(catalog CatalogStore, channelsSvc ChannelsService, automati
 	}
 
 	return &AdminHandler{
-		catalog:                   catalog,
-		channels:                  channelsSvc,
-		templates:                 tmpls,
-		automation:                auto,
-		lookupAddr:                net.DefaultResolver.LookupAddr,
-		logger:                    slog.Default(),
-		adminJSONBodyLimitBytes:   defaultAdminJSONBodyLimitBytes,
-		dynamicSyncTimeout:        defaultDynamicSyncTimeout,
-		dynamicBlockSyncTimeout:   defaultDynamicSyncTimeout,
-		dvrSyncTimeout:            defaultDVRSyncTimeout,
-		resolveClientHostsTimeout: defaultResolveClientHostsTotalTimeout,
-		resolveClientHostCacheTTL: defaultResolveClientHostCacheTTL,
-		resolveClientHostCacheNow: time.Now,
-		resolveClientHostCache:    make(map[string]resolveClientHostCacheEntry),
-		dynamicSyncStates:         make(map[int64]*dynamicChannelSyncState),
-		closeCh:                   make(chan struct{}),
+		catalog:                             catalog,
+		channels:                            channelsSvc,
+		templates:                           tmpls,
+		automation:                          auto,
+		lookupAddr:                          net.DefaultResolver.LookupAddr,
+		logger:                              slog.Default(),
+		adminJSONBodyLimitBytes:             defaultAdminJSONBodyLimitBytes,
+		dynamicSyncTimeout:                  defaultDynamicSyncTimeout,
+		dynamicBlockSyncTimeout:             defaultDynamicSyncTimeout,
+		dvrSyncTimeout:                      defaultDVRSyncTimeout,
+		resolveClientHostsTimeout:           defaultResolveClientHostsTotalTimeout,
+		resolveClientHostCacheTTL:           defaultResolveClientHostCacheTTL,
+		resolveClientHostCacheNegativeTTL:   defaultResolveClientHostNegativeCacheTTL,
+		resolveClientHostCacheNow:           time.Now,
+		resolveClientHostCacheSweepInterval: defaultResolveClientHostCacheSweepInterval,
+		resolveClientHostCacheMaxEntries:    defaultResolveClientHostCacheMaxEntries,
+		resolveClientHostCache:              make(map[string]resolveClientHostCacheEntry),
+		dynamicSyncStates:                   make(map[int64]*dynamicChannelSyncState),
+		dvrLineupReloadTimeout:              defaultDVRLineupReloadTimeout,
+		dvrLineupReloadDebounce:             defaultDVRLineupReloadDebounce,
+		dvrLineupReloadMaxWait:              defaultDVRLineupReloadMaxWait,
+		closeCh:                             make(chan struct{}),
 	}, nil
 }
 
@@ -276,14 +371,31 @@ func (h *AdminHandler) Close() {
 	h.closeOnce.Do(func() {
 		close(h.closeCh)
 	})
-	// Acquire both sync mutexes to establish a happens-before barrier with
-	// any in-flight enqueue that might call workerWg.Add(1). After these
-	// lock/unlock pairs, no new Add(1) can occur because enqueue methods
-	// check closeCh under their respective mutex.
+	// Acquire enqueue mutexes to establish a happens-before barrier with any
+	// in-flight enqueue that might call workerWg.Add(1). After these
+	// lock/unlock pairs, no new Add(1) can occur because enqueue methods check
+	// closeCh under their respective mutex.
 	h.dynamicSyncMu.Lock()
 	h.dynamicSyncMu.Unlock()
 	h.dynamicBlockSyncMu.Lock()
 	h.dynamicBlockSyncMu.Unlock()
+	h.dvrLineupReloadMu.Lock()
+	if h.dvrLineupReloadState.timerCancel != nil {
+		close(h.dvrLineupReloadState.timerCancel)
+		h.dvrLineupReloadState.timerCancel = nil
+		h.dvrLineupReloadState.timerDueAt = time.Time{}
+	}
+	h.dvrLineupReloadState.pending = false
+	h.dvrLineupReloadState.firstQueuedAt = time.Time{}
+	h.dvrLineupReloadState.lastQueuedAt = time.Time{}
+	h.dvrLineupReloadState.coalescedCount = 0
+	h.dvrLineupReloadState.reasonCounts = nil
+	h.dvrLineupReloadMu.Unlock()
+	h.resolveClientHostCacheMu.Lock()
+	h.resolveClientHostCache = nil
+	h.resolveClientHostCacheLastSweep = time.Time{}
+	h.resolveClientHostCacheExpiryHeap = nil
+	h.resolveClientHostCacheMu.Unlock()
 
 	h.workerWg.Wait()
 }
@@ -377,6 +489,16 @@ func (h *AdminHandler) SetJSONBodyLimitBytes(limit int64) {
 		limit = defaultAdminJSONBodyLimitBytes
 	}
 	h.adminJSONBodyLimitBytes = limit
+}
+
+func (h *AdminHandler) SetDVRLineupReloadTimeout(timeout time.Duration) {
+	if h == nil {
+		return
+	}
+	if timeout <= 0 {
+		timeout = defaultDVRLineupReloadTimeout
+	}
+	h.dvrLineupReloadTimeout = timeout
 }
 
 func (h *AdminHandler) dvrSyncRequestTimeout() time.Duration {
@@ -1132,6 +1254,10 @@ func (h *AdminHandler) handleReorderChannels(w http.ResponseWriter, r *http.Requ
 		"channel_count", len(req.ChannelIDs),
 		"channel_ids", req.ChannelIDs,
 	)
+	h.enqueueDVRLineupReload(
+		"channels_reorder",
+		"channel_count", len(req.ChannelIDs),
+	)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1432,7 +1558,11 @@ func (h *AdminHandler) handleReorderDynamicGeneratedChannels(w http.ResponseWrit
 		"channel_count", len(req.ChannelIDs),
 		"channel_ids", req.ChannelIDs,
 	)
-	h.reloadDVRLineupAfterDynamicMutation("dynamic_generated_reorder", "query_id", queryID, "channel_count", len(req.ChannelIDs))
+	h.enqueueDVRLineupReload(
+		"dynamic_generated_reorder",
+		"query_id", queryID,
+		"channel_count", len(req.ChannelIDs),
+	)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -1555,7 +1685,7 @@ func (h *AdminHandler) runDynamicBlockSyncOnce(version uint64) {
 
 	changed := result.ChannelsAdded+result.ChannelsUpdated+result.ChannelsRemoved > 0
 	if changed {
-		h.reloadDVRLineupAfterDynamicMutation(
+		h.enqueueDVRLineupReload(
 			"dynamic_block_sync",
 			"sync_version", version,
 			"channels_added", result.ChannelsAdded,
@@ -1565,29 +1695,323 @@ func (h *AdminHandler) runDynamicBlockSyncOnce(version uint64) {
 	}
 }
 
-func (h *AdminHandler) reloadDVRLineupAfterDynamicMutation(reason string, attrs ...any) {
+func (h *AdminHandler) enqueueDVRLineupReload(reason string, attrs ...any) {
 	if h == nil || h.dvr == nil {
 		return
 	}
 
-	timeout := h.dynamicBlockSyncTimeout
-	if timeout <= 0 {
-		timeout = defaultDynamicSyncTimeout
+	now := time.Now()
+	normalizedReason := normalizeDVRLineupReloadReason(reason)
+
+	var (
+		prevDueAt          time.Time
+		dueAt              time.Time
+		coalescedCount     int
+		queuedWhileRunning bool
+		scheduled          bool
+	)
+
+	h.dvrLineupReloadMu.Lock()
+	select {
+	case <-h.closeCh:
+		h.dvrLineupReloadMu.Unlock()
+		return
+	default:
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
 
-	logger := h.loggerOrDefault()
-	baseAttrs := []any{"reason", strings.TrimSpace(reason), "timeout", timeout.String()}
-	baseAttrs = append(baseAttrs, attrs...)
+	h.recordDVRLineupReloadEnqueueLocked(normalizedReason, now)
+	state := &h.dvrLineupReloadState
+	coalescedCount = state.coalescedCount
+	if state.running {
+		state.pending = true
+		queuedWhileRunning = true
+	} else {
+		prevDueAt, dueAt = h.rescheduleDVRLineupReloadLocked(now)
+		scheduled = true
+	}
+	h.dvrLineupReloadMu.Unlock()
 
-	if err := h.dvr.ReloadLineup(ctx); err != nil {
-		baseAttrs = append(baseAttrs, "error", err)
-		logger.Warn("admin dynamic block dvr lineup reload failed", baseAttrs...)
+	logFields := []any{
+		"reason", normalizedReason,
+		"coalesced_count", coalescedCount,
+		"debounce", h.dvrLineupReloadDebounceDuration().String(),
+		"max_wait", h.dvrLineupReloadMaxWaitDuration().String(),
+		"queued_while_running", queuedWhileRunning,
+	}
+	if scheduled {
+		dueIn := time.Until(dueAt).Milliseconds()
+		if dueIn < 0 {
+			dueIn = 0
+		}
+		logFields = append(logFields,
+			"due_in_ms", dueIn,
+			"due_at", dueAt.UTC().Format(time.RFC3339Nano),
+		)
+		if !prevDueAt.IsZero() {
+			logFields = append(logFields, "previous_due_at", prevDueAt.UTC().Format(time.RFC3339Nano))
+		}
+	}
+	logFields = append(logFields, attrs...)
+	h.loggerOrDefault().Info("admin dvr lineup reload queued", logFields...)
+}
+
+func (h *AdminHandler) recordDVRLineupReloadEnqueueLocked(reason string, now time.Time) {
+	state := &h.dvrLineupReloadState
+	if state.firstQueuedAt.IsZero() {
+		state.firstQueuedAt = now
+	}
+	state.lastQueuedAt = now
+	state.coalescedCount++
+	if state.reasonCounts == nil {
+		state.reasonCounts = make(map[string]int)
+	}
+	state.reasonCounts[reason]++
+}
+
+func (h *AdminHandler) rescheduleDVRLineupReloadLocked(now time.Time) (time.Time, time.Time) {
+	state := &h.dvrLineupReloadState
+	if state.firstQueuedAt.IsZero() {
+		state.firstQueuedAt = now
+	}
+
+	debounce := h.dvrLineupReloadDebounceDuration()
+	maxWait := h.dvrLineupReloadMaxWaitDuration()
+	dueAt := now.Add(debounce)
+	maxDueAt := state.firstQueuedAt.Add(maxWait)
+	if dueAt.After(maxDueAt) {
+		dueAt = maxDueAt
+	}
+
+	prevDueAt := state.timerDueAt
+	if state.timerCancel != nil {
+		close(state.timerCancel)
+	}
+	state.timerSeq++
+	seq := state.timerSeq
+	state.timerDueAt = dueAt
+	cancelCh := make(chan struct{})
+	state.timerCancel = cancelCh
+
+	delay := dueAt.Sub(now)
+	if delay < 0 {
+		delay = 0
+	}
+
+	h.workerWg.Add(1)
+	go h.waitForDVRLineupReloadTimer(seq, delay, cancelCh)
+
+	return prevDueAt, dueAt
+}
+
+func (h *AdminHandler) waitForDVRLineupReloadTimer(seq uint64, delay time.Duration, cancelCh <-chan struct{}) {
+	defer h.workerWg.Done()
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-timer.C:
+		h.fireQueuedDVRLineupReload(seq)
+	case <-cancelCh:
+	case <-h.closeCh:
+	}
+}
+
+func (h *AdminHandler) fireQueuedDVRLineupReload(seq uint64) {
+	batch, ok := h.beginQueuedDVRLineupReloadRun(seq)
+	if !ok {
 		return
 	}
 
-	logger.Info("admin dynamic block dvr lineup reload completed", baseAttrs...)
+	h.runDVRLineupReloadOnce(batch)
+	h.finalizeDVRLineupReloadRun()
+}
+
+func (h *AdminHandler) beginQueuedDVRLineupReloadRun(seq uint64) (dvrLineupReloadBatch, bool) {
+	now := time.Now()
+
+	h.dvrLineupReloadMu.Lock()
+	defer h.dvrLineupReloadMu.Unlock()
+
+	state := &h.dvrLineupReloadState
+	if state.timerSeq != seq || state.timerCancel == nil {
+		return dvrLineupReloadBatch{}, false
+	}
+
+	state.timerCancel = nil
+	state.timerDueAt = time.Time{}
+	if state.running || state.firstQueuedAt.IsZero() || state.coalescedCount == 0 {
+		return dvrLineupReloadBatch{}, false
+	}
+
+	state.running = true
+	batch := dvrLineupReloadBatch{
+		reasonSummary:  formatDVRLineupReloadReasons(state.reasonCounts),
+		coalescedCount: state.coalescedCount,
+		firstQueuedAt:  state.firstQueuedAt,
+		lastQueuedAt:   state.lastQueuedAt,
+	}
+	if !batch.firstQueuedAt.IsZero() {
+		batch.queuedDuration = now.Sub(batch.firstQueuedAt)
+		if batch.queuedDuration < 0 {
+			batch.queuedDuration = 0
+		}
+	}
+	if !batch.firstQueuedAt.IsZero() && !batch.lastQueuedAt.IsZero() {
+		batch.queueWindowSpan = batch.lastQueuedAt.Sub(batch.firstQueuedAt)
+		if batch.queueWindowSpan < 0 {
+			batch.queueWindowSpan = 0
+		}
+	}
+
+	state.firstQueuedAt = time.Time{}
+	state.lastQueuedAt = time.Time{}
+	state.coalescedCount = 0
+	state.reasonCounts = nil
+
+	return batch, true
+}
+
+func (h *AdminHandler) runDVRLineupReloadOnce(batch dvrLineupReloadBatch) {
+	if h == nil || h.dvr == nil {
+		return
+	}
+
+	timeout := h.dvrLineupReloadTimeoutDuration()
+
+	logger := h.loggerOrDefault()
+	logFields := []any{
+		"reason_summary", batch.reasonSummary,
+		"coalesced_count", batch.coalescedCount,
+		"queued_duration_ms", batch.queuedDuration.Milliseconds(),
+		"queue_window_ms", batch.queueWindowSpan.Milliseconds(),
+		"timeout", timeout.String(),
+	}
+
+	logger.Info("admin dvr lineup reload started", logFields...)
+
+	ctx, cancelWorker := h.workerContext()
+	defer cancelWorker()
+	ctx, cancelTimeout := context.WithTimeout(ctx, timeout)
+	defer cancelTimeout()
+
+	startedAt := time.Now()
+	if err := h.dvr.ReloadLineup(ctx); err != nil {
+		errorFields := append(append([]any{}, logFields...), "duration_ms", time.Since(startedAt).Milliseconds(), "error", err)
+		if errors.Is(err, context.Canceled) {
+			logger.Info("admin dvr lineup reload canceled", errorFields...)
+			return
+		}
+		logger.Warn("admin dvr lineup reload failed", errorFields...)
+		return
+	}
+
+	completedFields := append(append([]any{}, logFields...), "duration_ms", time.Since(startedAt).Milliseconds())
+	logger.Info("admin dvr lineup reload completed", completedFields...)
+}
+
+func (h *AdminHandler) finalizeDVRLineupReloadRun() {
+	if h == nil {
+		return
+	}
+
+	now := time.Now()
+	var (
+		scheduled      bool
+		coalescedCount int
+		prevDueAt      time.Time
+		dueAt          time.Time
+	)
+
+	h.dvrLineupReloadMu.Lock()
+	state := &h.dvrLineupReloadState
+	state.running = false
+
+	select {
+	case <-h.closeCh:
+		state.pending = false
+		state.firstQueuedAt = time.Time{}
+		state.lastQueuedAt = time.Time{}
+		state.coalescedCount = 0
+		state.reasonCounts = nil
+		h.dvrLineupReloadMu.Unlock()
+		return
+	default:
+	}
+
+	if state.pending && !state.firstQueuedAt.IsZero() {
+		state.pending = false
+		coalescedCount = state.coalescedCount
+		prevDueAt, dueAt = h.rescheduleDVRLineupReloadLocked(now)
+		scheduled = true
+	} else {
+		state.pending = false
+	}
+	h.dvrLineupReloadMu.Unlock()
+
+	if !scheduled {
+		return
+	}
+
+	dueIn := time.Until(dueAt).Milliseconds()
+	if dueIn < 0 {
+		dueIn = 0
+	}
+	logFields := []any{
+		"coalesced_count", coalescedCount,
+		"due_in_ms", dueIn,
+		"due_at", dueAt.UTC().Format(time.RFC3339Nano),
+	}
+	if !prevDueAt.IsZero() {
+		logFields = append(logFields, "previous_due_at", prevDueAt.UTC().Format(time.RFC3339Nano))
+	}
+	h.loggerOrDefault().Info("admin dvr lineup reload follow-up queued", logFields...)
+}
+
+func (h *AdminHandler) dvrLineupReloadDebounceDuration() time.Duration {
+	if h == nil || h.dvrLineupReloadDebounce <= 0 {
+		return defaultDVRLineupReloadDebounce
+	}
+	return h.dvrLineupReloadDebounce
+}
+
+func (h *AdminHandler) dvrLineupReloadTimeoutDuration() time.Duration {
+	if h == nil || h.dvrLineupReloadTimeout <= 0 {
+		return defaultDVRLineupReloadTimeout
+	}
+	return h.dvrLineupReloadTimeout
+}
+
+func (h *AdminHandler) dvrLineupReloadMaxWaitDuration() time.Duration {
+	if h == nil || h.dvrLineupReloadMaxWait <= 0 {
+		return defaultDVRLineupReloadMaxWait
+	}
+	return h.dvrLineupReloadMaxWait
+}
+
+func normalizeDVRLineupReloadReason(reason string) string {
+	reason = strings.TrimSpace(reason)
+	if reason == "" {
+		return "unspecified"
+	}
+	return reason
+}
+
+func formatDVRLineupReloadReasons(reasonCounts map[string]int) string {
+	if len(reasonCounts) == 0 {
+		return "unspecified(1)"
+	}
+	reasons := make([]string, 0, len(reasonCounts))
+	for reason := range reasonCounts {
+		reasons = append(reasons, reason)
+	}
+	sort.Strings(reasons)
+
+	parts := make([]string, 0, len(reasons))
+	for _, reason := range reasons {
+		parts = append(parts, fmt.Sprintf("%s(%d)", reason, reasonCounts[reason]))
+	}
+	return strings.Join(parts, ",")
 }
 
 func (h *AdminHandler) consumePendingDynamicBlockSync() (uint64, bool) {
@@ -2016,8 +2440,23 @@ func (h *AdminHandler) handleTunerStatus(w http.ResponseWriter, r *http.Request)
 	snapshot := h.tunerStatus.TunerStatusSnapshot()
 	if resolveIP {
 		resolveCtx, cancel := context.WithTimeout(r.Context(), h.resolveClientHostsTimeoutBudget())
-		snapshot = h.resolveClientHostsInSnapshot(resolveCtx, snapshot)
+		var resolveStats resolveClientHostResolutionStats
+		snapshot, resolveStats = h.resolveClientHostsInSnapshot(resolveCtx, snapshot)
 		cancel()
+		if h.logger != nil && h.logger.Enabled(r.Context(), slog.LevelDebug) {
+			h.logger.Debug(
+				"admin tuner resolve_ip completed",
+				"cache_hits", resolveStats.cacheHits,
+				"cache_negative_hits", resolveStats.cacheNegativeHits,
+				"cache_misses", resolveStats.cacheMisses,
+				"cache_hit_rate", resolveStats.cacheHitRate(),
+				"memoized_hits", resolveStats.memoizedHits,
+				"memoized_empty_hits", resolveStats.memoizedEmptyHits,
+				"lookup_calls", resolveStats.lookupCalls,
+				"lookup_errors", resolveStats.lookupErrors,
+				"lookup_empty_results", resolveStats.lookupEmptyResults,
+			)
+		}
 	}
 	writeJSON(w, http.StatusOK, snapshot)
 }
@@ -2261,9 +2700,9 @@ func (h *AdminHandler) resolveClientHostsTimeoutBudget() time.Duration {
 func (h *AdminHandler) resolveClientHostsInSnapshot(
 	ctx context.Context,
 	snapshot stream.TunerStatusSnapshot,
-) stream.TunerStatusSnapshot {
+) (stream.TunerStatusSnapshot, resolveClientHostResolutionStats) {
 	if h == nil {
-		return snapshot
+		return snapshot, resolveClientHostResolutionStats{}
 	}
 	return resolveClientHostsInSnapshotWithCache(
 		ctx,
@@ -2279,14 +2718,11 @@ func (h *AdminHandler) loadCachedResolvedClientHost(ip string) (string, bool) {
 		return "", false
 	}
 
-	nowFn := h.resolveClientHostCacheNow
-	if nowFn == nil {
-		nowFn = time.Now
-	}
-	now := nowFn()
+	now := h.resolveClientHostCacheNow()
 
 	h.resolveClientHostCacheMu.Lock()
 	defer h.resolveClientHostCacheMu.Unlock()
+	h.sweepExpiredResolvedClientHostEntriesLocked(now, false)
 
 	entry, ok := h.resolveClientHostCache[ip]
 	if !ok {
@@ -2300,22 +2736,124 @@ func (h *AdminHandler) loadCachedResolvedClientHost(ip string) (string, bool) {
 }
 
 func (h *AdminHandler) storeCachedResolvedClientHost(ip, host string) {
-	if h == nil || ip == "" || h.resolveClientHostCacheTTL <= 0 {
+	if h == nil || ip == "" {
 		return
 	}
 
-	nowFn := h.resolveClientHostCacheNow
-	if nowFn == nil {
-		nowFn = time.Now
+	ttl := h.resolveClientHostCacheTTL
+	if host == "" {
+		ttl = h.resolveClientHostCacheNegativeTTL
 	}
-	expiresAt := nowFn().Add(h.resolveClientHostCacheTTL)
+	if ttl <= 0 {
+		return
+	}
+	now := h.resolveClientHostCacheNow()
+	expiresAt := now.Add(ttl)
 
 	h.resolveClientHostCacheMu.Lock()
+	defer h.resolveClientHostCacheMu.Unlock()
 	if h.resolveClientHostCache == nil {
 		h.resolveClientHostCache = make(map[string]resolveClientHostCacheEntry)
 	}
+	h.sweepExpiredResolvedClientHostEntriesLocked(now, false)
+	h.evictResolvedClientHostCacheToCapacityLocked(ip, now)
 	h.resolveClientHostCache[ip] = resolveClientHostCacheEntry{host: host, expiresAt: expiresAt}
-	h.resolveClientHostCacheMu.Unlock()
+	heap.Push(
+		&h.resolveClientHostCacheExpiryHeap,
+		resolveClientHostCacheExpiryHeapItem{ip: ip, expiresAt: expiresAt},
+	)
+	h.compactResolvedClientHostCacheExpiryHeapLocked()
+}
+
+func (h *AdminHandler) sweepExpiredResolvedClientHostEntriesLocked(now time.Time, force bool) {
+	if h == nil || h.resolveClientHostCache == nil {
+		return
+	}
+	if !force {
+		interval := h.resolveClientHostCacheSweepInterval
+		if interval > 0 &&
+			!h.resolveClientHostCacheLastSweep.IsZero() &&
+			now.Sub(h.resolveClientHostCacheLastSweep) < interval {
+			return
+		}
+	}
+	for cachedIP, entry := range h.resolveClientHostCache {
+		if !entry.expiresAt.After(now) {
+			delete(h.resolveClientHostCache, cachedIP)
+		}
+	}
+	h.resolveClientHostCacheLastSweep = now
+}
+
+func (h *AdminHandler) evictResolvedClientHostCacheToCapacityLocked(ip string, now time.Time) {
+	if h == nil || h.resolveClientHostCache == nil {
+		return
+	}
+	maxEntries := h.resolveClientHostCacheMaxEntries
+	if maxEntries <= 0 {
+		return
+	}
+	if _, exists := h.resolveClientHostCache[ip]; exists {
+		return
+	}
+	if len(h.resolveClientHostCache) < maxEntries {
+		return
+	}
+	h.sweepExpiredResolvedClientHostEntriesLocked(now, true)
+	if len(h.resolveClientHostCache) < maxEntries {
+		return
+	}
+
+	for h.resolveClientHostCacheExpiryHeap.Len() > 0 {
+		oldest := heap.Pop(&h.resolveClientHostCacheExpiryHeap).(resolveClientHostCacheExpiryHeapItem)
+		entry, ok := h.resolveClientHostCache[oldest.ip]
+		if !ok || !entry.expiresAt.Equal(oldest.expiresAt) {
+			continue
+		}
+		delete(h.resolveClientHostCache, oldest.ip)
+		h.compactResolvedClientHostCacheExpiryHeapLocked()
+		return
+	}
+
+	// Fallback for empty/stale heap state; this keeps eviction resilient even
+	// if the heap was intentionally compacted or reset.
+	var oldestIP string
+	var oldestExpiry time.Time
+	for cachedIP, entry := range h.resolveClientHostCache {
+		if oldestIP == "" || entry.expiresAt.Before(oldestExpiry) {
+			oldestIP = cachedIP
+			oldestExpiry = entry.expiresAt
+		}
+	}
+	if oldestIP != "" {
+		delete(h.resolveClientHostCache, oldestIP)
+	}
+	h.compactResolvedClientHostCacheExpiryHeapLocked()
+}
+
+func (h *AdminHandler) compactResolvedClientHostCacheExpiryHeapLocked() {
+	if h == nil {
+		return
+	}
+	cacheLen := len(h.resolveClientHostCache)
+	if cacheLen == 0 {
+		h.resolveClientHostCacheExpiryHeap = nil
+		return
+	}
+	// Avoid unbounded stale-heap growth when hot IPs are refreshed repeatedly.
+	const staleHeapMultiplier = 4
+	if len(h.resolveClientHostCacheExpiryHeap) <= cacheLen*staleHeapMultiplier {
+		return
+	}
+	rebuilt := make(resolveClientHostCacheExpiryMinHeap, 0, cacheLen)
+	for cachedIP, entry := range h.resolveClientHostCache {
+		rebuilt = append(rebuilt, resolveClientHostCacheExpiryHeapItem{
+			ip:        cachedIP,
+			expiresAt: entry.expiresAt,
+		})
+	}
+	heap.Init(&rebuilt)
+	h.resolveClientHostCacheExpiryHeap = rebuilt
 }
 
 func resolveClientHostsInSnapshotWithCache(
@@ -2324,13 +2862,14 @@ func resolveClientHostsInSnapshotWithCache(
 	lookupAddr func(ctx context.Context, addr string) ([]string, error),
 	loadCachedHost func(ip string) (string, bool),
 	storeCachedHost func(ip, host string),
-) stream.TunerStatusSnapshot {
+) (stream.TunerStatusSnapshot, resolveClientHostResolutionStats) {
+	stats := resolveClientHostResolutionStats{}
 	if lookupAddr == nil {
-		return snapshot
+		return snapshot, stats
 	}
 
 	if len(snapshot.ClientStreams) == 0 && len(snapshot.SessionHistory) == 0 {
-		return snapshot
+		return snapshot, stats
 	}
 
 	// Clone slices so we do not mutate shared backing arrays from providers.
@@ -2353,7 +2892,7 @@ func resolveClientHostsInSnapshotWithCache(
 	resolvedByIP := make(map[string]string, len(snapshot.ClientStreams))
 	for i := range snapshot.ClientStreams {
 		if ctx != nil && ctx.Err() != nil {
-			return snapshot
+			return snapshot, stats
 		}
 		if host := resolveClientHost(
 			ctx,
@@ -2362,17 +2901,18 @@ func resolveClientHostsInSnapshotWithCache(
 			lookupAddr,
 			loadCachedHost,
 			storeCachedHost,
+			&stats,
 		); host != "" {
 			snapshot.ClientStreams[i].ClientHost = host
 		}
 	}
 	for i := range snapshot.SessionHistory {
 		if ctx != nil && ctx.Err() != nil {
-			return snapshot
+			return snapshot, stats
 		}
 		for j := range snapshot.SessionHistory[i].Subscribers {
 			if ctx != nil && ctx.Err() != nil {
-				return snapshot
+				return snapshot, stats
 			}
 			if host := resolveClientHost(
 				ctx,
@@ -2381,13 +2921,14 @@ func resolveClientHostsInSnapshotWithCache(
 				lookupAddr,
 				loadCachedHost,
 				storeCachedHost,
+				&stats,
 			); host != "" {
 				snapshot.SessionHistory[i].Subscribers[j].ClientHost = host
 			}
 		}
 	}
 
-	return snapshot
+	return snapshot, stats
 }
 
 func resolveClientHost(
@@ -2397,6 +2938,7 @@ func resolveClientHost(
 	lookupAddr func(ctx context.Context, addr string) ([]string, error),
 	loadCachedHost func(ip string) (string, bool),
 	storeCachedHost func(ip, host string),
+	stats *resolveClientHostResolutionStats,
 ) string {
 	if ctx == nil {
 		ctx = context.Background()
@@ -2407,13 +2949,32 @@ func resolveClientHost(
 		return ""
 	}
 	if resolved, seen := resolvedByIP[ip]; seen {
+		if stats != nil {
+			stats.memoizedHits++
+			if resolved == "" {
+				stats.memoizedEmptyHits++
+			}
+		}
 		return resolved
 	}
 	if loadCachedHost != nil {
 		if cachedHost, ok := loadCachedHost(ip); ok {
 			resolvedByIP[ip] = cachedHost
+			if stats != nil {
+				if cachedHost == "" {
+					stats.cacheNegativeHits++
+				} else {
+					stats.cacheHits++
+				}
+			}
 			return cachedHost
 		}
+		if stats != nil {
+			stats.cacheMisses++
+		}
+	}
+	if stats != nil {
+		stats.lookupCalls++
 	}
 
 	lookupCtx, cancel := context.WithTimeout(ctx, defaultResolveClientHostLookupTimeout)
@@ -2421,6 +2982,9 @@ func resolveClientHost(
 
 	names, err := lookupAddr(lookupCtx, ip)
 	if err != nil {
+		if stats != nil {
+			stats.lookupErrors++
+		}
 		resolvedByIP[ip] = ""
 		if storeCachedHost != nil {
 			storeCachedHost(ip, "")
@@ -2428,6 +2992,9 @@ func resolveClientHost(
 		return ""
 	}
 	host := firstResolvedHostname(names)
+	if stats != nil && host == "" {
+		stats.lookupEmptyResults++
+	}
 	resolvedByIP[ip] = host
 	if storeCachedHost != nil {
 		storeCachedHost(ip, host)

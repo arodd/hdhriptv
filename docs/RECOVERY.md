@@ -431,10 +431,16 @@ The direct cycle-ending failure (the source that was actively streaming when the
 | `shared session recovery keepalive stopped` | INFO | Keepalive filler ends (includes rate/duration stats) |
 | `shared session recovery keepalive fallback` | WARN | Keepalive mode degraded (e.g., slate_av to psi) |
 | `shared session slate AV keepalive exited; restarting once` | WARN | Slate AV process exited unexpectedly, attempting restart |
+| `shared session slate AV close error` | WARN / DEBUG | Bounded close result for slate_av keepalive reader shutdown. Timeout/actionable failures remain WARN; cancellation-adjacent benign FontConfig signatures are downgraded to DEBUG (`close_error_type=non_timeout_benign_fontconfig_canceled`). |
 | `shared session manual recovery requested` | INFO | Manual trigger received via API |
 | `shared session skipped recovery while idle without subscribers` | INFO | Recovery skipped because no subscribers are connected |
 | `shared session recovery keepalive overproduction guardrail triggered` | WARN | Output rate exceeded guardrail threshold |
 | `shared session recovery transition fallback` | WARN | Transition strategy fallback applied |
+
+`shared session slate AV close error` `close_error_type` values:
+- `timeout`: bounded close timed out.
+- `non_timeout`: close returned a non-timeout error that should be treated as actionable.
+- `non_timeout_benign_fontconfig_canceled`: close returned a known cancellation-adjacent benign FontConfig signature and is intentionally downgraded to DEBUG.
 
 ## Known Limitations / Active Remediation
 
@@ -514,6 +520,7 @@ The default timer values are tuned for typical single-tuner residential setups. 
 - `slate_av` is consuming too much CPU — switch to `psi` or `null` for lower overhead
 - DVR clients are disconnecting during recovery despite keepalive being active — try `slate_av` which provides decodable frames that keep clients more reliably connected
 - Slate AV is failing to start (check ffmpeg availability/path/permissions and filter errors) — `psi` is a reliable lightweight fallback
+- On any platform/build where ffmpeg emits FontConfig diagnostics, cancellation-driven slate_av shutdown may emit benign close diagnostics at DEBUG level (`close_error_type=non_timeout_benign_fontconfig_canceled`); treat WARN-level `shared session slate AV close error` entries as actionable.
 - You need minimal resource usage and clients tolerate brief gaps — use `null` mode
 
 ### Telemetry-to-Action Mapping

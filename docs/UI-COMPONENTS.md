@@ -108,7 +108,7 @@ Route registration happens in `admin_routes.go:259-274`.
 
 **Key patterns:**
 - `loadPagedCollection()` fetches all channels and dynamic queries across multiple pages
-- Reorder uses optimistic local array mutation, sends `PATCH /api/channels/reorder` with full ID list, then re-renders
+- Reorder uses optimistic local array mutation during request flight, sends `PATCH /api/channels/reorder` with full ID list, then refetches canonical channel rows (`loadTraditionalChannels()`) so persisted guide-number renumbering is reflected immediately after success
 - `reorderBusy` flag prevents concurrent reorder requests
 
 **API endpoints used:**

@@ -41,6 +41,7 @@ as env-only or internal-only. Flag values override environment variables.
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
 | `--ffmpeg-path` | `FFMPEG_PATH` | `ffmpeg` | No | Executable used for ffmpeg stream modes. |
+| `--ffprobe-path` | `FFPROBE_PATH` | `ffprobe` | No | Executable used by auto-prioritize analysis and shared-session stream profile probes. |
 | `--stream-mode` | `STREAM_MODE` | `ffmpeg-copy` | No | `direct`, `ffmpeg-copy`, `ffmpeg-transcode`. |
 
 ## Startup and Failover
@@ -135,6 +136,7 @@ as env-only or internal-only. Flag values override environment variables.
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
 | `--admin-json-body-limit-bytes` | `ADMIN_JSON_BODY_LIMIT_BYTES` | `1048576` | No | Maximum JSON body size accepted by admin mutation endpoints (`> 0`). Oversized bodies are rejected with HTTP `413`. |
+| `--dvr-lineup-reload-timeout` | `DVR_LINEUP_RELOAD_TIMEOUT` | `30s` | No | Timeout budget for coalesced DVR lineup reload runs triggered by lineup-changing admin mutations (`> 0`). |
 | `--request-timeout` | `REQUEST_TIMEOUT` | `15s` | No | Timeout for non-stream routes. `0` disables. |
 | `--rate-limit-rps` | `RATE_LIMIT_RPS` | `8` | No | Per-client IP token bucket. `0` disables rate limiting. |
 | `--rate-limit-burst` | `RATE_LIMIT_BURST` | `32` | No | Must be `>= 1` when rate limiting is enabled. |

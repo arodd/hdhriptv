@@ -145,7 +145,7 @@ func main() {
 		os.Exit(1)
 	}
 	playlistSyncJob.SetPostSyncLineupReloader(dvrSvc)
-	analyzerCfg, err := loadAnalyzerConfig(ctx, store, cfg.FFmpegPath)
+	analyzerCfg, err := loadAnalyzerConfig(ctx, store, cfg.FFmpegPath, cfg.FFprobePath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "analyzer config error: %v\n", err)
 		os.Exit(1)
@@ -300,6 +300,7 @@ func main() {
 	}
 	adminHandler.SetLogger(logger)
 	adminHandler.SetJSONBodyLimitBytes(cfg.AdminJSONBodyLimitBytes)
+	adminHandler.SetDVRLineupReloadTimeout(cfg.DVRLineupReloadTimeout)
 	adminHandler.SetDVRService(dvrSvc)
 	adminHandler.SetDVRScheduler(schedulerSvc)
 
@@ -314,6 +315,7 @@ func main() {
 	streamHandler := stream.NewHandler(stream.Config{
 		Mode:                            cfg.StreamMode,
 		FFmpegPath:                      cfg.FFmpegPath,
+		FFprobePath:                     cfg.FFprobePath,
 		Logger:                          logger,
 		StartupTimeout:                  cfg.StartupTimeout,
 		StartupRandomAccessRecoveryOnly: cfg.StartupRandomAccessRecoveryOnly,
@@ -527,6 +529,8 @@ func main() {
 		"failover_total_timeout", cfg.FailoverTotalTimeout.String(),
 		"upstream_overlimit_cooldown", cfg.UpstreamOverlimitCooldown.String(),
 		"ffmpeg_reconnect_enabled", cfg.FFmpegReconnectEnabled,
+		"ffmpeg_path", cfg.FFmpegPath,
+		"ffprobe_path", cfg.FFprobePath,
 		"ffmpeg_reconnect_delay_max", cfg.FFmpegReconnectDelayMax.String(),
 		"ffmpeg_reconnect_max_retries", cfg.FFmpegReconnectMaxRetries,
 		"ffmpeg_reconnect_http_errors", cfg.FFmpegReconnectHTTPErrors,
@@ -563,6 +567,7 @@ func main() {
 		"probe_interval", cfg.ProbeInterval.String(),
 		"probe_timeout", cfg.ProbeTimeout.String(),
 		"admin_json_body_limit_bytes", cfg.AdminJSONBodyLimitBytes,
+		"dvr_lineup_reload_timeout", cfg.DVRLineupReloadTimeout.String(),
 		"request_timeout", cfg.RequestTimeout.String(),
 		"http_request_log_enabled", cfg.HTTPRequestLogEnabled,
 		"rate_limit_rps", cfg.RateLimitRPS,
@@ -1261,6 +1266,7 @@ func loadAnalyzerConfig(
 	ctx context.Context,
 	store *sqlite.Store,
 	ffmpegPath string,
+	ffprobePath string,
 ) (analyzer.Config, error) {
 	probeTimeoutMS, err := readIntSettingOrDefault(ctx, store, sqlite.SettingAnalyzerProbeTimeoutMS, 7000)
 	if err != nil {
@@ -1287,9 +1293,13 @@ func loadAnalyzerConfig(
 	if ffmpegPath == "" {
 		ffmpegPath = "ffmpeg"
 	}
+	ffprobePath = strings.TrimSpace(ffprobePath)
+	if ffprobePath == "" {
+		ffprobePath = "ffprobe"
+	}
 
 	return analyzer.Config{
-		FFprobePath:       "ffprobe",
+		FFprobePath:       ffprobePath,
 		FFmpegPath:        ffmpegPath,
 		ProbeTimeout:      time.Duration(probeTimeoutMS) * time.Millisecond,
 		AnalyzeDurationUS: analyzeDurationUS,

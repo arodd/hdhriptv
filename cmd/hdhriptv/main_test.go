@@ -1022,6 +1022,38 @@ func TestInitialPlaylistSyncRetryDelayCapsAtMax(t *testing.T) {
 	}
 }
 
+func TestLoadAnalyzerConfigUsesConfiguredFFprobePath(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	cfg, err := loadAnalyzerConfig(ctx, store, "/usr/local/bin/ffmpeg", "C:\\ffmpeg\\bin\\ffprobe.exe")
+	if err != nil {
+		t.Fatalf("loadAnalyzerConfig() error = %v", err)
+	}
+	if got, want := cfg.FFprobePath, "C:\\ffmpeg\\bin\\ffprobe.exe"; got != want {
+		t.Fatalf("FFprobePath = %q, want %q", got, want)
+	}
+	if got, want := cfg.FFmpegPath, "/usr/local/bin/ffmpeg"; got != want {
+		t.Fatalf("FFmpegPath = %q, want %q", got, want)
+	}
+}
+
+func TestLoadAnalyzerConfigDefaultsFFprobePathWhenBlank(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	cfg, err := loadAnalyzerConfig(ctx, store, "", "   ")
+	if err != nil {
+		t.Fatalf("loadAnalyzerConfig() error = %v", err)
+	}
+	if got, want := cfg.FFprobePath, "ffprobe"; got != want {
+		t.Fatalf("FFprobePath = %q, want %q", got, want)
+	}
+	if got, want := cfg.FFmpegPath, "ffmpeg"; got != want {
+		t.Fatalf("FFmpegPath = %q, want %q", got, want)
+	}
+}
+
 type basicResponseWriter struct {
 	header     http.Header
 	statusCode int

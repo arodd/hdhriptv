@@ -6325,6 +6325,179 @@ func TestCloseSlateAVRecoveryReaderWithTimeoutCloseErrorIsReturned(t *testing.T)
 	}
 }
 
+func TestIsBenignSlateAVFontConfigCloseErrorSignatures(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{
+			name: "nil error",
+			err:  nil,
+			want: false,
+		},
+		{
+			name: "non-fontconfig error",
+			err:  errors.New("exit status 1: input/output error"),
+			want: false,
+		},
+		{
+			name: "default config signature",
+			err: errors.New(
+				"exit status 1: Fontconfig error: Cannot load default config file: No such file: (null)",
+			),
+			want: true,
+		},
+		{
+			name: "valid-font-family signature with punctuation drift",
+			err: errors.New(
+				"exit status 1: FONTCONFIG ERROR; cannot-find any valid font for family Sans",
+			),
+			want: true,
+		},
+	}
+
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			if got := isBenignSlateAVFontConfigCloseError(tc.err); got != tc.want {
+				t.Fatalf("isBenignSlateAVFontConfigCloseError() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestFontConfigErrorTokenSetNormalizesMixedCaseTokens(t *testing.T) {
+	t.Parallel()
+
+	tokens := fontConfigErrorTokenSet("Fontconfig Error: Cannot FIND a valid Font for FAMILY Sans")
+	for _, token := range []string{"fontconfig", "cannot", "find", "valid", "font", "family", "sans"} {
+		if _, ok := tokens[token]; !ok {
+			t.Fatalf("token %q missing from parsed token set", token)
+		}
+	}
+}
+
+func TestCloseSlateAVRecoveryReaderWithTimeoutCanceledFontConfigLogsDebug(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		channel  int64
+		guide    string
+		closeErr error
+	}{
+		{
+			name:    "cannot load default config file signature",
+			channel: 43,
+			guide:   "143",
+			closeErr: errors.New(
+				"exit status 1: Fontconfig error: Cannot load default config file: No such file: (null)",
+			),
+		},
+		{
+			name:    "cannot find valid font family signature",
+			channel: 46,
+			guide:   "146",
+			closeErr: errors.New(
+				"exit status 1: Fontconfig error: Cannot find a valid font for the family Sans",
+			),
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			resetCloseWithTimeoutStatsForTest()
+			t.Cleanup(resetCloseWithTimeoutStatsForTest)
+
+			logs := newTestLogBuffer()
+			logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+			session := &sharedRuntimeSession{
+				manager: &SessionManager{
+					cfg: sessionManagerConfig{
+						logger: logger,
+					},
+					logger: logger,
+				},
+				channel: channels.Channel{
+					ChannelID:   tc.channel,
+					GuideNumber: tc.guide,
+				},
+			}
+
+			lifecycleCtx, cancel := context.WithCancel(context.Background())
+			cancel()
+
+			err := session.closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext(
+				lifecycleCtx,
+				&testRecoveryFillerCloseErrorReader{closeErr: tc.closeErr},
+				250*time.Millisecond,
+			)
+			if !errors.Is(err, tc.closeErr) {
+				t.Fatalf("closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext() error = %v, want %v", err, tc.closeErr)
+			}
+
+			logText := logs.String()
+			if strings.Contains(logText, "level=WARN msg=\"shared session slate AV close error\"") {
+				t.Fatalf("logs = %q, want no WARN for benign canceled FontConfig close error", logText)
+			}
+			if !strings.Contains(logText, "level=DEBUG msg=\"shared session slate AV close error\"") {
+				t.Fatalf("logs = %q, want DEBUG close-log entry", logText)
+			}
+			if !strings.Contains(logText, "close_error_type=non_timeout_benign_fontconfig_canceled") {
+				t.Fatalf("logs = %q, want downgraded close_error_type marker", logText)
+			}
+			if !strings.Contains(logText, "close_lifecycle_error=\"context canceled\"") {
+				t.Fatalf("logs = %q, want lifecycle cancel context marker", logText)
+			}
+		})
+	}
+}
+
+func TestCloseSlateAVRecoveryReaderWithTimeoutCanceledNonFontStillWarns(t *testing.T) {
+	resetCloseWithTimeoutStatsForTest()
+	t.Cleanup(resetCloseWithTimeoutStatsForTest)
+
+	logs := newTestLogBuffer()
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	session := &sharedRuntimeSession{
+		manager: &SessionManager{
+			cfg: sessionManagerConfig{
+				logger: logger,
+			},
+			logger: logger,
+		},
+		channel: channels.Channel{
+			ChannelID:   44,
+			GuideNumber: "144",
+		},
+	}
+
+	closeErr := errors.New("close failed")
+	lifecycleCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	err := session.closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext(
+		lifecycleCtx,
+		&testRecoveryFillerCloseErrorReader{closeErr: closeErr},
+		250*time.Millisecond,
+	)
+	if !errors.Is(err, closeErr) {
+		t.Fatalf("closeSlateAVRecoveryReaderWithTimeoutWithLifecycleContext() error = %v, want %v", err, closeErr)
+	}
+
+	logText := logs.String()
+	if !strings.Contains(logText, "level=WARN msg=\"shared session slate AV close error\"") {
+		t.Fatalf("logs = %q, want WARN for actionable non-font close error", logText)
+	}
+	if !strings.Contains(logText, "close_error_type=non_timeout") {
+		t.Fatalf("logs = %q, want close_error_type=non_timeout", logText)
+	}
+	if strings.Contains(logText, "non_timeout_benign_fontconfig_canceled") {
+		t.Fatalf("logs = %q, did not expect benign FontConfig downgrade marker", logText)
+	}
+}
+
 func TestCloseSlateAVRecoveryReaderWithTimeoutDelayedCloseErrorIsReturned(t *testing.T) {
 	resetCloseWithTimeoutStatsForTest()
 	t.Cleanup(resetCloseWithTimeoutStatsForTest)
@@ -15785,6 +15958,9 @@ func TestNormalizeSessionManagerConfigRecoveryDefaults(t *testing.T) {
 	if cfg.ffmpegInputBufferSize != 0 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 0", cfg.ffmpegInputBufferSize)
 	}
+	if cfg.ffprobePath != defaultStreamProfileFFprobePath {
+		t.Fatalf("ffprobePath = %q, want %q", cfg.ffprobePath, defaultStreamProfileFFprobePath)
+	}
 	if cfg.ffmpegDiscardCorrupt {
 		t.Fatal("ffmpegDiscardCorrupt = true, want false")
 	}
@@ -15847,6 +16023,14 @@ func TestNormalizeSessionManagerConfigSessionDrainTimeoutOverride(t *testing.T) 
 	})
 	if cfg.ffmpegInputBufferSize != 0 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 0 when negative", cfg.ffmpegInputBufferSize)
+	}
+
+	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:        "ffmpeg-copy",
+		FFprobePath: "  /custom/bin/ffprobe  ",
+	})
+	if cfg.ffprobePath != "/custom/bin/ffprobe" {
+		t.Fatalf("ffprobePath = %q, want trimmed custom path", cfg.ffprobePath)
 	}
 }
 
@@ -18530,6 +18714,91 @@ func TestSetSourceStatePersistProfileProbeCancelsOnSessionFinish(t *testing.T) {
 		close(provider.profilePersistUnblock)
 		t.Fatal("session.finish() did not return after profile persist cancellation")
 	}
+}
+
+func TestSetSourceStateProfileProbeUsesConfiguredFFprobePath(t *testing.T) {
+	prevProbeRunner := streamProfileProbeRunner
+	t.Cleanup(func() {
+		streamProfileProbeRunner = prevProbeRunner
+	})
+
+	probeCalls := make(chan string, 1)
+	streamProfileProbeRunner = func(
+		_ context.Context,
+		ffprobePath string,
+		_ string,
+		_ time.Duration,
+	) (streamProfile, error) {
+		select {
+		case probeCalls <- ffprobePath:
+		default:
+		}
+		return streamProfile{}, errors.New("synthetic probe failure")
+	}
+
+	provider := &fakeChannelsProvider{
+		channelsByGuide: map[string]channels.Channel{
+			"402": {ChannelID: 4, GuideNumber: "402", GuideName: "Probe Path", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			4: {
+				{
+					SourceID:      41,
+					ChannelID:     4,
+					ItemKey:       "src:probe-path:41",
+					StreamURL:     "http://example.com/probe-path.m3u8",
+					PriorityIndex: 0,
+					Enabled:       true,
+				},
+			},
+		},
+	}
+
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "ffmpeg-copy",
+		FFprobePath:                "C:\\ffmpeg\\bin\\ffprobe.exe",
+		StartupTimeout:             time.Second,
+		FailoverTotalTimeout:       2 * time.Second,
+		MinProbeBytes:              1,
+		BufferChunkBytes:           188,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+	}, NewPool(1), provider)
+	if manager == nil {
+		t.Fatal("manager is nil")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	session := &sharedRuntimeSession{
+		manager:     manager,
+		channel:     provider.channelsByGuide["402"],
+		ctx:         ctx,
+		cancel:      cancel,
+		readyCh:     make(chan struct{}),
+		ring:        NewChunkRing(8),
+		subscribers: make(map[uint64]SubscriberStats),
+		startedAt:   time.Now().UTC(),
+	}
+
+	source := channels.Source{
+		SourceID:      41,
+		ChannelID:     4,
+		ItemKey:       "src:probe-path:41",
+		StreamURL:     "http://example.com/probe-path.m3u8",
+		PriorityIndex: 0,
+		Enabled:       true,
+	}
+	session.setSourceState(source, "ffmpeg-copy", "initial_startup")
+
+	select {
+	case got := <-probeCalls:
+		if want := "C:\\ffmpeg\\bin\\ffprobe.exe"; got != want {
+			t.Fatalf("probe ffprobePath = %q, want %q", got, want)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for profile probe invocation")
+	}
+
+	session.finish(nil)
 }
 
 func TestSetSourceStateWithStartupProbeCanceledContextConvergesProfileProbeWaitGroup(t *testing.T) {

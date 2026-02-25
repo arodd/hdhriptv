@@ -382,7 +382,7 @@ against a stream URL. Key parameters:
 
 | Parameter | Default | Purpose |
 |-----------|---------|---------|
-| `ffprobePath` | `ffprobe` | Executable path |
+| `ffprobePath` | `ffprobe` | Executable path (`--ffprobe-path` / `FFPROBE_PATH`) |
 | `timeout` | 4 s | Context deadline for the probe |
 | `analyzeduration` | 1,500,000 us | ffprobe analysis window |
 | `probesize` | 1,000,000 bytes | ffprobe input read limit |
@@ -397,6 +397,11 @@ The function:
 4. Resolves bitrate using a priority chain: video `bit_rate` >
    format `bit_rate` > stream tag `variant_bitrate`
    (`firstPositiveInt64`).
+
+Operational note:
+
+- Startup logs include `ffprobe_path` and `ffmpeg_path` resolution so operators
+  can verify which executables were selected at runtime.
 
 ### Recovery filler resolution matching
 
@@ -482,7 +487,12 @@ Optional query behavior:
   - total resolve budget: `8s` for the full request's `resolve_ip` pass.
 - Reverse lookups run sequentially and are memoized:
   - within a single response payload (duplicate IPs are resolved once),
-  - across requests via a short-lived in-process cache (successes and failures are cached for `~2m`).
+  - across requests via a bounded in-process cache (successful lookups cached for `~2m`; failed lookups cached for `~15s`).
+  - cache cardinality is capped (`4096` entries by default); expired entries are swept periodically and oldest entries are evicted first when the cap is reached.
+- Cache tuning knobs (`max entries`, negative TTL, sweep interval) are currently
+  compile-time defaults in `internal/http/admin_routes.go` and are not exposed
+  as runtime flags/environment variables.
+- With debug logging enabled, each `resolve_ip` request emits `admin tuner resolve_ip completed` with cache/lookup counters (`cache_hits`, `cache_misses`, `cache_hit_rate`, `lookup_calls`, `lookup_errors`) to help tune resolver behavior.
 - For deployments with many unique clients or slow upstream PTR infrastructure,
   use a local caching resolver (`systemd-resolved`, `dnsmasq`, `unbound`, etc.)
   to keep reverse lookups fast and stable.
@@ -697,6 +707,7 @@ valid font for the family Sans`.
     - clear target selection to return to row-level `Create Channel` actions
     - dynamic channel creation is toolbar-driven from current filter context
   - dynamic channel blocks materialize generated channels into reserved guide ranges (`10000+`) and are managed separately from traditional channel ordering
+  - lineup-changing reorder/materialization paths enqueue a shared DVR lineup reload queue (trailing-edge `debounce=60s`, `max_wait=300s`) so rapid mutation bursts coalesce instead of triggering one reload per request
   - each channel may have multiple ordered sources (`priority_index`)
   - each channel also has a `dynamic_rule`:
     - if enabled, matching catalog items are synchronized into channel sources asynchronously
@@ -719,6 +730,18 @@ valid font for the family Sans`.
 - Use playlist sync first, then auto-prioritize, after major playlist/provider updates.
 - Schedule playlist sync more frequently than auto-prioritize in most deployments because sync is correctness-focused and analyze/reorder is probe-heavy.
 - If providers enforce strict concurrent session caps, reduce auto-prioritize frequency and verify `AUTO_PRIORITIZE_PROBE_TUNE_DELAY`.
+
+### Troubleshooting Debounced DVR Lineup Reload
+
+- Reorder/materialization APIs return `204 No Content` after enqueueing reload work, not after provider-side DVR lineup reload completion.
+- Under normal conditions, expect propagation by `debounce + max_wait + dvr_lineup_reload_timeout` (default: `60s + 300s + 30s` worst case, typically much faster).
+- Correlate these queue lifecycle logs in order:
+  - `admin dvr lineup reload queued`
+  - `admin dvr lineup reload started`
+  - `admin dvr lineup reload completed` (healthy) or `admin dvr lineup reload failed` / `admin dvr lineup reload canceled` (degraded)
+- If you only see repeated `queued`/`follow-up queued` events without `completed`, inspect `due_at`, `due_in_ms`, and `reason_summary` fields to confirm ongoing churn is intentionally coalescing runs.
+- For `failed` events, use the structured `error` field and verify DVR connectivity/auth with `POST /api/admin/dvr/test` before retrying channel mutations.
+- If lineup remains stale after errors are resolved, trigger a fresh reconciliation cycle with `POST /api/admin/jobs/playlist-sync/run` and watch for a new successful lineup reload sequence.
 
 ### DVR Forward Sync vs Reverse Sync
 
@@ -815,7 +838,7 @@ Additional ffmpeg startup toggles:
   - `0` disables explicit buffer sizing.
   - values are bounded to `64 MiB` (`67108864`) and validated at startup.
   - the limit is per active ffmpeg stream; estimate aggregate memory as
-    `active_streams * buffer_size` (for example, `50 * 64 MiB ~= 3.2 GiB`).
+    `active_streams * buffer_size` (for example, `50 * 64 MiB ~= 3.1 GiB`, exact `3.125 GiB`).
 - `FFMPEG_DISCARD_CORRUPT=true` appends `-fflags +discardcorrupt` so ffmpeg drops packets flagged as corrupt instead of attempting to decode them.
   - this can reduce corruption cascades on noisy inputs, but may introduce visible or audible gaps where packets are discarded.
   - leave disabled unless upstream source-side packet corruption is a known issue.
@@ -862,7 +885,7 @@ Key info-level events emitted by the service:
 - Admin mutation lifecycle: `admin channel created`, `admin channel updated`, `admin channels reordered`, `admin channel deleted`, `admin source added`, `admin source updated`, `admin sources reordered`, `admin source deleted`, `admin source health cleared`, `admin all source health cleared`, `admin automation updated`, `admin automation timezone updated`, `admin automation schedule updated`, `admin automation settings updated`, `admin manual job run started`, `admin auto-prioritize cache cleared`, `admin dvr config updated`, `admin dvr schedule updated`, `admin dvr sync requested`, `admin dvr sync completed`, `admin dvr reverse-sync requested`, `admin dvr reverse-sync completed`, `admin channel dvr reverse-sync requested`, `admin channel dvr reverse-sync completed`, `admin channel dvr mapping updated`.
 - Dynamic channel immediate-sync lifecycle: `admin dynamic channel immediate sync queued`, `admin dynamic channel immediate sync started`, `admin dynamic channel immediate sync completed`, `admin dynamic channel immediate sync canceled`, `admin dynamic channel immediate sync skipped stale run`, `admin dynamic channel immediate sync failed`.
 - Dynamic block materialization lifecycle: `admin dynamic block sync queued`, `admin dynamic block immediate sync started`, `admin dynamic block immediate sync completed`, `admin dynamic block immediate sync canceled`, `admin dynamic block immediate sync failed`, `admin dynamic generated channels reordered`.
-- Dynamic block DVR lineup reload lifecycle: `admin dynamic block dvr lineup reload completed`, `admin dynamic block dvr lineup reload failed`.
+- DVR lineup reload queue lifecycle: `admin dvr lineup reload queued`, `admin dvr lineup reload started`, `admin dvr lineup reload completed`, `admin dvr lineup reload canceled`, `admin dvr lineup reload failed`, `admin dvr lineup reload follow-up queued`.
 - Jobs/scheduler/playlist lifecycle: `job started`, `job finished`, `job panic recovered`, `job run persistence failed`, `scheduler loaded schedules`, `scheduler schedule updated`, `scheduler timezone updated`, `playlist refresh started`, `playlist refresh finished`.
 - SQLite IOERR diagnostics lifecycle: `sqlite_ioerr_diag_bundle` (one-shot pragma/db-file snapshot) and `sqlite_ioerr_trace_dump` (rate-limited in-memory DB operation timeline).
 - Discovery lifecycle: `discovery response sent` (debug-level).
@@ -872,7 +895,7 @@ Key warn-level close-path events:
 
 - `closeWithTimeout worker slot release underflow`: internal close worker-slot accounting invariant warning. Correlate `close_release_underflow` with `close_timeouts`, `close_late_completions`, and `close_late_abandoned`.
 - `closeWithTimeout suppression observed`: close retry suppression under worker-budget pressure. Correlate suppression reason/counters with retry queue depth and close timeout churn.
-- `shared session slate AV close error`: bounded close failure while shutting down recovery filler readers; inspect `close_error_type` and accompanying `close_*` counters.
+- `shared session slate AV close error`: bounded close failure while shutting down recovery filler readers; inspect `close_error_type` and accompanying `close_*` counters. Cancellation-adjacent benign FontConfig shutdown signatures are intentionally downgraded to debug (`close_error_type=non_timeout_benign_fontconfig_canceled`) to reduce non-actionable WARN noise.
 
 See `docs/STREAMING.md` bounded-close telemetry guidance for detailed triage and remediation.
 
@@ -972,6 +995,7 @@ Operational recommendation:
 - HTTP `503`: all tuners are in use. Increase `TUNER_COUNT` or reduce concurrent playback.
 - HTTP `502`: upstream URL unavailable or ffmpeg process failed.
 - In ffmpeg modes, validate `FFMPEG_PATH` and local ffmpeg installation.
+- For analyzer/profile-probe failures, validate `FFPROBE_PATH` (or `--ffprobe-path`) and confirm the selected value in startup logs (`ffprobe_path`).
 - For `ffmpeg-copy` startup-timeout errors, increase `STARTUP_TIMEOUT` and/or tune startup detection (`FFMPEG_STARTUP_PROBESIZE_BYTES`, `FFMPEG_STARTUP_ANALYZEDURATION`) so ffmpeg emits initial bytes before failover deadline.
 - If initial startup frequently times out on random-access gating but recovery continuity still needs strict cutover behavior, keep `STARTUP_RANDOM_ACCESS_RECOVERY_ONLY=true` (the default) so random-access enforcement applies only during recovery cycles.
 - Startup expects both video and audio components. If startup inventory reports an explicit component-incomplete state (`video_only` or `audio_only`), startup is rejected. Inspect diagnostics in logs and `/api/admin/tuners` (`source_startup_component_state`, `source_startup_video_streams`, `source_startup_audio_streams`). For random-access startup, compare `source_startup_probe_raw_bytes` vs `source_startup_probe_trimmed_bytes` and monitor `source_startup_probe_cutover_offset`/`source_startup_probe_dropped_bytes` to see how much pre-IDR data is discarded before stream handoff.
@@ -984,6 +1008,26 @@ Operational recommendation:
   - sustained high `recovery_keepalive_rate_bytes_per_second` relative to `recovery_keepalive_expected_rate_bytes_per_second`,
   - `recovery_keepalive_realtime_multiplier` significantly above `1.0` when profile bitrate is known,
   - non-zero `recovery_keepalive_guardrail_count` indicating safety fallback was required.
+
+### Windows FFmpeg Setup and Startup Pattern
+
+- Install Windows ffmpeg/ffprobe builds from either:
+  - <https://www.gyan.dev/ffmpeg/builds/#release-builds>
+  - <https://github.com/BtbN/FFmpeg-Builds/releases>
+- Point `FFMPEG_PATH`/`FFPROBE_PATH` (or `--ffmpeg-path`/`--ffprobe-path`) to the executable files, not the `bin` directory.
+  - Correct: `C:\Users\<you>\ffmpeg\bin\ffmpeg.exe`
+  - Incorrect: `C:\Users\<you>\ffmpeg\bin`
+- If logs include `exec: "...\\ffmpeg\\bin": executable file not found in %PATH%`, the configured path is a directory and must be changed to `ffmpeg.exe`.
+- Common startup pattern:
+
+```powershell
+.\hdhriptv.exe `
+  --playlist-url https://example.com/playlist `
+  --ffmpeg-path C:\users\person\ffmpeg\bin\ffmpeg.exe `
+  --ffprobe-path C:\users\person\ffmpeg\bin\ffprobe.exe `
+  --http-addr-legacy :80 `
+  --friendly-name "HDHRIPTV Windows"
+```
 
 ### Playlist Sync SQLite IOERR (Before-Restart Capture)
 
@@ -1017,6 +1061,7 @@ Rapid rollback switches (if diagnostic verbosity needs to be reduced immediately
 - Invalid cron updates return HTTP `400` from automation or DVR config endpoints when a schedule is enabled.
 - Disabling a schedule does not require cron validation; you can disable first and fix cron later.
 - Scheduler timezone updates require a valid IANA timezone string; blank values return HTTP `400`.
+- Windows builds embed IANA tzdata (`time/tzdata`) so valid zones like `America/Chicago` resolve without external zoneinfo installation.
 - If persisted timezone is invalid at load time, scheduler falls back to `UTC` and logs a warning (`invalid scheduler timezone; falling back to UTC`).
 
 ### Automation and DVR Config Apply / Rollback Behavior
