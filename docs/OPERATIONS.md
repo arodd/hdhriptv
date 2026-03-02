@@ -492,7 +492,7 @@ Optional query behavior:
 - Cache tuning knobs (`max entries`, negative TTL, sweep interval) are currently
   compile-time defaults in `internal/http/admin_routes.go` and are not exposed
   as runtime flags/environment variables.
-- With debug logging enabled, each `resolve_ip` request emits `admin tuner resolve_ip completed` with cache/lookup counters (`cache_hits`, `cache_misses`, `cache_hit_rate`, `lookup_calls`, `lookup_errors`) to help tune resolver behavior.
+- With debug logging enabled, resolve stats are aggregated and emitted periodically (`~30m` by default) as `admin tuner resolve_ip summary`, covering counters since the previous summary (`resolve_requests`, `cache_hits`, `cache_misses`, `cache_hit_rate`, `lookup_calls`, `lookup_errors`).
 - For deployments with many unique clients or slow upstream PTR infrastructure,
   use a local caching resolver (`systemd-resolved`, `dnsmasq`, `unbound`, etc.)
   to keep reverse lookups fast and stable.
@@ -637,9 +637,9 @@ time=2026-02-17T10:30:15.123Z level=INFO msg="shared session created" channel_id
 - **Consistent field names**: Correlation fields like `channel_id`,
   `guide_number`, `tuner_id`, `source_id`, `subscriber_id`, `run_id`,
   `job_name` appear consistently across related events.
-- **Level field**: Always present as `level=DEBUG|INFO|WARN|ERROR`.
+- **Level field**: Always present as `level=TRACE|DEBUG|INFO|WARN|ERROR`.
 - **Timestamp**: Always present as `time=` in RFC 3339 format.
-- **Multi-stream**: stdout carries `DEBUG`/`INFO`; stderr carries
+- **Multi-stream**: stdout carries `TRACE`/`DEBUG`/`INFO`; stderr carries
   `WARN`/`ERROR`. The log file respects the configured log level. When
   aggregating from containers, prefer the log file or merge both streams.
 
@@ -699,7 +699,8 @@ valid font for the family Sans`.
   - marks stale entries inactive instead of deleting them
 - Published channel behavior:
   - channels are ordered explicitly
-  - guide numbers are contiguous and start at `100`
+  - guide numbers are contiguous and start at `--traditional-guide-start` (default `100`)
+  - startup validates existing traditional channel numbering against `--traditional-guide-start` and auto-renumbers when drift is detected
   - add/remove/reorder operations renumber guide numbers to keep them dense
   - `/ui/catalog` supports a rapid source-add workflow:
     - choose one target channel once in the toolbar
@@ -707,7 +708,7 @@ valid font for the family Sans`.
     - clear target selection to return to row-level `Create Channel` actions
     - dynamic channel creation is toolbar-driven from current filter context
   - dynamic channel blocks materialize generated channels into reserved guide ranges (`10000+`) and are managed separately from traditional channel ordering
-  - lineup-changing reorder/materialization paths enqueue a shared DVR lineup reload queue (trailing-edge `debounce=60s`, `max_wait=300s`) so rapid mutation bursts coalesce instead of triggering one reload per request
+  - lineup-changing reorder/materialization paths enqueue a shared DVR lineup reload queue (trailing-edge `debounce=20s`, `max_wait=300s`) so rapid mutation bursts coalesce instead of triggering one reload per request
   - each channel may have multiple ordered sources (`priority_index`)
   - each channel also has a `dynamic_rule`:
     - if enabled, matching catalog items are synchronized into channel sources asynchronously
@@ -734,7 +735,7 @@ valid font for the family Sans`.
 ### Troubleshooting Debounced DVR Lineup Reload
 
 - Reorder/materialization APIs return `204 No Content` after enqueueing reload work, not after provider-side DVR lineup reload completion.
-- Under normal conditions, expect propagation by `debounce + max_wait + dvr_lineup_reload_timeout` (default: `60s + 300s + 30s` worst case, typically much faster).
+- Under normal conditions, expect propagation by `debounce + max_wait + dvr_lineup_reload_timeout` (default: `20s + 300s + 30s` worst case, typically much faster).
 - Correlate these queue lifecycle logs in order:
   - `admin dvr lineup reload queued`
   - `admin dvr lineup reload started`
@@ -839,6 +840,10 @@ Additional ffmpeg startup toggles:
   - values are bounded to `64 MiB` (`67108864`) and validated at startup.
   - the limit is per active ffmpeg stream; estimate aggregate memory as
     `active_streams * buffer_size` (for example, `50 * 64 MiB ~= 3.1 GiB`, exact `3.125 GiB`).
+  - this setting is primarily effective on `rist://`, `rtp://`, `rtsp://`, and `udp://` inputs (often less common in many M3U playlists).
+  - many playlist sources are `http://`/`https://` MPEG-TS or HLS-style streams and may reject `-buffer_size`.
+  - when enabled for mixed-source playlists, unsupported inputs may fail the first startup attempt before fallback, adding startup delay on those attempts.
+  - when ffmpeg reports `Option buffer_size not found`, startup automatically retries once without `-buffer_size` and emits `ffmpeg startup option unsupported; continuing without ffmpeg input buffer size`.
 - `FFMPEG_DISCARD_CORRUPT=true` appends `-fflags +discardcorrupt` so ffmpeg drops packets flagged as corrupt instead of attempting to decode them.
   - this can reduce corruption cascades on noisy inputs, but may introduce visible or audible gaps where packets are discarded.
   - leave disabled unless upstream source-side packet corruption is a known issue.
@@ -888,7 +893,7 @@ Key info-level events emitted by the service:
 - DVR lineup reload queue lifecycle: `admin dvr lineup reload queued`, `admin dvr lineup reload started`, `admin dvr lineup reload completed`, `admin dvr lineup reload canceled`, `admin dvr lineup reload failed`, `admin dvr lineup reload follow-up queued`.
 - Jobs/scheduler/playlist lifecycle: `job started`, `job finished`, `job panic recovered`, `job run persistence failed`, `scheduler loaded schedules`, `scheduler schedule updated`, `scheduler timezone updated`, `playlist refresh started`, `playlist refresh finished`.
 - SQLite IOERR diagnostics lifecycle: `sqlite_ioerr_diag_bundle` (one-shot pragma/db-file snapshot) and `sqlite_ioerr_trace_dump` (rate-limited in-memory DB operation timeline).
-- Discovery lifecycle: `discovery response sent` (debug-level).
+- Discovery lifecycle (trace-level): `discovery response sent`, `ssdp response sent`.
 - Recovery filler normalization (debug-level): `shared session slate AV recovery filler profile normalized` with `original_resolution`, `normalized_resolution`, and `normalization_reason`.
 
 Key warn-level close-path events:

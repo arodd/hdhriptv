@@ -54,6 +54,11 @@ const (
 
 var reInitialPlaylistSyncJellyfin5xx = regexp.MustCompile(`failed:\s*5\d\d\b`)
 
+type traditionalGuideStartMigrator interface {
+	List(ctx context.Context) ([]channels.Channel, error)
+	Reorder(ctx context.Context, channelIDs []int64) error
+}
+
 func main() {
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
@@ -122,7 +127,21 @@ func main() {
 		"duration", time.Since(automationOverridesStart),
 	)
 
-	channelsSvc := channels.NewService(store)
+	channelsSvc := channels.NewServiceWithStartGuideNumber(store, cfg.TraditionalGuideStart)
+	guideStartMigrationStart := time.Now()
+	migratedTraditionalGuides, traditionalGuideChannels, err := migrateTraditionalGuideStart(ctx, channelsSvc, cfg.TraditionalGuideStart)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "traditional guide start migration error: %v\n", err)
+		os.Exit(1)
+	}
+	logger.Info(
+		"startup phase complete",
+		"phase", "traditional_guide_start_migration",
+		"duration", time.Since(guideStartMigrationStart),
+		"traditional_guide_start", cfg.TraditionalGuideStart,
+		"channels", traditionalGuideChannels,
+		"renumbered", migratedTraditionalGuides,
+	)
 	dvrSvc, err := dvr.NewService(store, cfg.DeviceID, nil)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "dvr service error: %v\n", err)
@@ -312,55 +331,61 @@ func main() {
 		ContentDirectoryUpdateIDCacheTTL: cfg.UPnPContentDirectoryUpdateIDCacheTTL,
 	}, channelsSvc)
 	ffmpegCopyRegenerateTimestamps := cfg.FFmpegCopyRegenerateTimestamps
+	ffmpegSourceStderrPassthroughEnabled := cfg.FFmpegSourceStderrPassthroughEnabled
 	streamHandler := stream.NewHandler(stream.Config{
-		Mode:                            cfg.StreamMode,
-		FFmpegPath:                      cfg.FFmpegPath,
-		FFprobePath:                     cfg.FFprobePath,
-		Logger:                          logger,
-		StartupTimeout:                  cfg.StartupTimeout,
-		StartupRandomAccessRecoveryOnly: cfg.StartupRandomAccessRecoveryOnly,
-		MinProbeBytes:                   cfg.MinProbeBytes,
-		MaxFailovers:                    cfg.MaxFailovers,
-		FailoverTotalTimeout:            cfg.FailoverTotalTimeout,
-		UpstreamOverlimitCooldown:       cfg.UpstreamOverlimitCooldown,
-		FFmpegReconnectEnabled:          cfg.FFmpegReconnectEnabled,
-		FFmpegReconnectDelayMax:         cfg.FFmpegReconnectDelayMax,
-		FFmpegReconnectMaxRetries:       cfg.FFmpegReconnectMaxRetries,
-		FFmpegReconnectHTTPErrors:       cfg.FFmpegReconnectHTTPErrors,
-		FFmpegStartupProbeSize:          cfg.FFmpegStartupProbeSize,
-		FFmpegStartupAnalyzeDelay:       cfg.FFmpegStartupAnalyzeDuration,
-		FFmpegInputBufferSize:           cfg.FFmpegInputBufferSize,
-		FFmpegDiscardCorrupt:            cfg.FFmpegDiscardCorrupt,
-		FFmpegCopyRegenerateTimestamps:  &ffmpegCopyRegenerateTimestamps,
-		ProducerReadRate:                cfg.ProducerReadRate,
-		ProducerReadRateCatchup:         cfg.ProducerReadRateCatchup,
-		ProducerInitialBurst:            cfg.ProducerInitialBurst,
-		BufferChunkBytes:                cfg.BufferChunkBytes,
-		BufferPublishFlushInterval:      cfg.BufferFlushInterval,
-		BufferTSAlign188:                cfg.BufferTSAlign188,
-		StallDetect:                     cfg.StallDetect,
-		StallHardDeadline:               cfg.StallHardDeadline,
-		StallPolicy:                     cfg.StallPolicy,
-		StallMaxFailoversPerStall:       cfg.StallMaxFailovers,
-		CycleFailureMinHealth:           cfg.CycleFailureMinHealth,
-		RecoveryFillerEnabled:           cfg.RecoveryFillerEnabled,
-		RecoveryFillerMode:              cfg.RecoveryFillerMode,
-		RecoveryFillerInterval:          cfg.RecoveryFillerInterval,
-		RecoveryFillerText:              cfg.RecoveryFillerText,
-		RecoveryFillerEnableAudio:       cfg.RecoveryFillerEnableAudio,
-		SubscriberJoinLagBytes:          cfg.SubscriberJoinLag,
-		SubscriberSlowClientPolicy:      cfg.SubscriberSlowPolicy,
-		SubscriberMaxBlockedWrite:       cfg.SubscriberMaxBlocked,
-		SessionIdleTimeout:              cfg.SessionIdleTimeout,
-		SessionDrainTimeout:             cfg.SessionDrainTimeout,
-		SessionMaxSubscribers:           cfg.SessionMaxSubscribers,
-		SessionHistoryLimit:             cfg.SessionHistoryLimit,
-		SessionSourceHistoryLimit:       cfg.SessionSourceHistoryLimit,
-		SessionSubscriberHistoryLimit:   cfg.SessionSubscriberHistoryLimit,
-		SourceHealthDrainTimeout:        cfg.SourceHealthDrainTimeout,
-		TuneBackoffMaxTunes:             cfg.TuneBackoffMaxTunes,
-		TuneBackoffInterval:             cfg.TuneBackoffInterval,
-		TuneBackoffCooldown:             cfg.TuneBackoffCooldown,
+		Mode:                                 cfg.StreamMode,
+		FFmpegPath:                           cfg.FFmpegPath,
+		FFprobePath:                          cfg.FFprobePath,
+		Logger:                               logger,
+		StartupTimeout:                       cfg.StartupTimeout,
+		StartupRandomAccessRecoveryOnly:      cfg.StartupRandomAccessRecoveryOnly,
+		MinProbeBytes:                        cfg.MinProbeBytes,
+		MaxFailovers:                         cfg.MaxFailovers,
+		FailoverTotalTimeout:                 cfg.FailoverTotalTimeout,
+		UpstreamOverlimitCooldown:            cfg.UpstreamOverlimitCooldown,
+		FFmpegReconnectEnabled:               cfg.FFmpegReconnectEnabled,
+		FFmpegReconnectDelayMax:              cfg.FFmpegReconnectDelayMax,
+		FFmpegReconnectMaxRetries:            cfg.FFmpegReconnectMaxRetries,
+		FFmpegReconnectHTTPErrors:            cfg.FFmpegReconnectHTTPErrors,
+		FFmpegRWTimeout:                      cfg.FFmpegRWTimeout,
+		FFmpegStartupProbeSize:               cfg.FFmpegStartupProbeSize,
+		FFmpegStartupAnalyzeDelay:            cfg.FFmpegStartupAnalyzeDuration,
+		FFmpegInputBufferSize:                cfg.FFmpegInputBufferSize,
+		FFmpegDiscardCorrupt:                 cfg.FFmpegDiscardCorrupt,
+		FFmpegCopyRegenerateTimestamps:       &ffmpegCopyRegenerateTimestamps,
+		FFmpegSourceLogLevel:                 cfg.FFmpegSourceLogLevel,
+		FFmpegSourceStderrPassthroughEnabled: &ffmpegSourceStderrPassthroughEnabled,
+		FFmpegSourceStderrLogLevel:           cfg.FFmpegSourceStderrLogLevel,
+		FFmpegSourceStderrMaxLineBytes:       cfg.FFmpegSourceStderrMaxLineBytes,
+		ProducerReadRate:                     cfg.ProducerReadRate,
+		ProducerReadRateCatchup:              cfg.ProducerReadRateCatchup,
+		ProducerInitialBurst:                 cfg.ProducerInitialBurst,
+		BufferChunkBytes:                     cfg.BufferChunkBytes,
+		BufferPublishFlushInterval:           cfg.BufferFlushInterval,
+		BufferTSAlign188:                     cfg.BufferTSAlign188,
+		StallDetect:                          cfg.StallDetect,
+		StallHardDeadline:                    cfg.StallHardDeadline,
+		StallPolicy:                          cfg.StallPolicy,
+		StallMaxFailoversPerStall:            cfg.StallMaxFailovers,
+		CycleFailureMinHealth:                cfg.CycleFailureMinHealth,
+		RecoveryFillerEnabled:                cfg.RecoveryFillerEnabled,
+		RecoveryFillerMode:                   cfg.RecoveryFillerMode,
+		RecoveryFillerInterval:               cfg.RecoveryFillerInterval,
+		RecoveryFillerText:                   cfg.RecoveryFillerText,
+		RecoveryFillerEnableAudio:            cfg.RecoveryFillerEnableAudio,
+		SubscriberJoinLagBytes:               cfg.SubscriberJoinLag,
+		SubscriberSlowClientPolicy:           cfg.SubscriberSlowPolicy,
+		SubscriberMaxBlockedWrite:            cfg.SubscriberMaxBlocked,
+		SessionIdleTimeout:                   cfg.SessionIdleTimeout,
+		SessionDrainTimeout:                  cfg.SessionDrainTimeout,
+		SessionMaxSubscribers:                cfg.SessionMaxSubscribers,
+		SessionHistoryLimit:                  cfg.SessionHistoryLimit,
+		SessionSourceHistoryLimit:            cfg.SessionSourceHistoryLimit,
+		SessionSubscriberHistoryLimit:        cfg.SessionSubscriberHistoryLimit,
+		SourceHealthDrainTimeout:             cfg.SourceHealthDrainTimeout,
+		TuneBackoffMaxTunes:                  cfg.TuneBackoffMaxTunes,
+		TuneBackoffInterval:                  cfg.TuneBackoffInterval,
+		TuneBackoffCooldown:                  cfg.TuneBackoffCooldown,
 	}, tunerPool, channelsSvc)
 	adminHandler.SetTunerStatusProvider(streamHandler)
 	adminHandler.SetSourceHealthClearRuntime(streamHandler)
@@ -376,6 +401,7 @@ func main() {
 		FFmpegReconnectDelayMax:        cfg.FFmpegReconnectDelayMax,
 		FFmpegReconnectMaxRetries:      cfg.FFmpegReconnectMaxRetries,
 		FFmpegReconnectHTTPErrors:      cfg.FFmpegReconnectHTTPErrors,
+		FFmpegRWTimeout:                cfg.FFmpegRWTimeout,
 		FFmpegStartupProbeSize:         cfg.FFmpegStartupProbeSize,
 		FFmpegStartupAnalyzeDelay:      cfg.FFmpegStartupAnalyzeDuration,
 		FFmpegInputBufferSize:          cfg.FFmpegInputBufferSize,
@@ -494,6 +520,7 @@ func main() {
 	dvrLineupSyncCron, _ := readSettingOrDefault(ctx, store, sqlite.SettingJobsDVRLineupSyncCron, "")
 	dvrLineupSyncEnabled, _ := readSettingOrDefault(ctx, store, sqlite.SettingJobsDVRLineupSyncEnabled, "false")
 	playlistURLConfigured := hasPlaylistURLSetting(ctx, store)
+	logFFmpegRWTimeoutStallDetectWarning(logger, cfg)
 
 	logger.Info("starting server",
 		"http_addr", cfg.HTTPAddr,
@@ -534,11 +561,16 @@ func main() {
 		"ffmpeg_reconnect_delay_max", cfg.FFmpegReconnectDelayMax.String(),
 		"ffmpeg_reconnect_max_retries", cfg.FFmpegReconnectMaxRetries,
 		"ffmpeg_reconnect_http_errors", cfg.FFmpegReconnectHTTPErrors,
+		"ffmpeg_rw_timeout", cfg.FFmpegRWTimeout.String(),
 		"ffmpeg_startup_probesize_bytes", cfg.FFmpegStartupProbeSize,
 		"ffmpeg_startup_analyzeduration", cfg.FFmpegStartupAnalyzeDuration.String(),
 		"ffmpeg_input_buffer_size", cfg.FFmpegInputBufferSize,
 		"ffmpeg_discard_corrupt", cfg.FFmpegDiscardCorrupt,
 		"ffmpeg_copy_regenerate_timestamps", cfg.FFmpegCopyRegenerateTimestamps,
+		"ffmpeg_source_log_level", cfg.FFmpegSourceLogLevel,
+		"ffmpeg_source_stderr_passthrough_enabled", cfg.FFmpegSourceStderrPassthroughEnabled,
+		"ffmpeg_source_stderr_log_level", cfg.FFmpegSourceStderrLogLevel,
+		"ffmpeg_source_stderr_max_line_bytes", cfg.FFmpegSourceStderrMaxLineBytes,
 		"producer_readrate", cfg.ProducerReadRate,
 		"producer_readrate_catchup", cfg.ProducerReadRateCatchup,
 		"producer_initial_burst", cfg.ProducerInitialBurst,
@@ -860,6 +892,35 @@ func applyAutomationCLIOverrides(
 	return store.SetSettings(ctx, updates)
 }
 
+func logFFmpegRWTimeoutStallDetectWarning(logger *slog.Logger, cfg config.Config) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if !shouldWarnFFmpegRWTimeoutAgainstStallDetect(cfg) {
+		return
+	}
+	logger.Warn(
+		"ffmpeg rw_timeout is greater than or equal to stall-detect; ffmpeg input timeout may preempt shared-session stall recovery",
+		"stream_mode", cfg.StreamMode,
+		"ffmpeg_rw_timeout", cfg.FFmpegRWTimeout.String(),
+		"stall_detect", cfg.StallDetect.String(),
+	)
+}
+
+func shouldWarnFFmpegRWTimeoutAgainstStallDetect(cfg config.Config) bool {
+	normalizedMode := strings.ToLower(strings.TrimSpace(cfg.StreamMode))
+	if normalizedMode != "ffmpeg-copy" && normalizedMode != "ffmpeg-transcode" {
+		return false
+	}
+	if cfg.FFmpegRWTimeout <= 0 {
+		return false
+	}
+	if cfg.StallDetect <= 0 {
+		return false
+	}
+	return cfg.FFmpegRWTimeout >= cfg.StallDetect
+}
+
 func syncDVRScheduleSettings(
 	ctx context.Context,
 	store *sqlite.Store,
@@ -885,6 +946,44 @@ func syncDVRScheduleSettings(
 		sqlite.SettingJobsDVRLineupSyncEnabled: strconv.FormatBool(state.Instance.SyncEnabled),
 		sqlite.SettingJobsDVRLineupSyncCron:    cronSpec,
 	})
+}
+
+func migrateTraditionalGuideStart(ctx context.Context, migrator traditionalGuideStartMigrator, startGuideNumber int) (bool, int, error) {
+	if migrator == nil {
+		return false, 0, fmt.Errorf("channels service is not configured")
+	}
+	if startGuideNumber < 1 {
+		return false, 0, fmt.Errorf("traditional guide start must be at least 1")
+	}
+
+	currentChannels, err := migrator.List(ctx)
+	if err != nil {
+		return false, 0, fmt.Errorf("list channels for guide-start migration: %w", err)
+	}
+	if len(currentChannels) == 0 {
+		return false, 0, nil
+	}
+
+	channelIDs := make([]int64, 0, len(currentChannels))
+	needsMigration := false
+	for i, channel := range currentChannels {
+		if channel.ChannelID <= 0 {
+			return false, 0, fmt.Errorf("invalid channel id %d in guide-start migration", channel.ChannelID)
+		}
+		channelIDs = append(channelIDs, channel.ChannelID)
+		expectedGuideNumber := strconv.Itoa(startGuideNumber + i)
+		if channel.OrderIndex != i || strings.TrimSpace(channel.GuideNumber) != expectedGuideNumber {
+			needsMigration = true
+		}
+	}
+	if !needsMigration {
+		return false, len(currentChannels), nil
+	}
+
+	if err := migrator.Reorder(ctx, channelIDs); err != nil {
+		return false, len(currentChannels), fmt.Errorf("reorder channels for guide-start migration: %w", err)
+	}
+	return true, len(currentChannels), nil
 }
 
 func runAndWaitPlaylistSync(

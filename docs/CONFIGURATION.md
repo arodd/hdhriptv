@@ -13,11 +13,12 @@ as env-only or internal-only. Flag values override environment variables.
 | `--http-addr` | `HTTP_ADDR` | `:5004` | No | Primary HTTP listener. |
 | `--http-addr-legacy` | `HTTP_ADDR_LEGACY` | empty | No | Optional second HTTP listener, often `:80`. |
 | `--tuner-count` | `TUNER_COUNT` | `2` | No | Max concurrent stream sessions. Must be `>= 1`. |
+| `--traditional-guide-start` | `TRADITIONAL_GUIDE_START` | `100` | No | First guide number assigned to traditional channels. Must be `>= 1` and `< 10000`. Existing traditional channels are migrated to this base during startup when drift is detected. |
 | `--friendly-name` | `FRIENDLY_NAME` | `HDHR IPTV` | No | Displayed in discover payloads and DVR UIs. Persisted in DB and reused across restarts unless explicitly set at startup. |
 | `--device-id` | `DEVICE_ID` | random 8 hex chars | No | Auto-generated once and persisted in DB when unset; reused across restarts while DB persists. |
 | `--device-auth` | `DEVICE_AUTH` | random token | No | Auto-generated once and persisted in DB when unset; reused across restarts while DB persists. |
 | `--admin-auth` | `ADMIN_AUTH` | empty | No | Format must be `user:pass`. If empty, no auth on `/ui/*` and `/api/*`. |
-| `--log-level` | `LOG_LEVEL` | `info` | No | `debug`, `info`, `warn`, `error`. |
+| `--log-level` | `LOG_LEVEL` | `info` | No | `trace`, `debug`, `info`, `warn`, `error`. |
 
 ## UPnP/SSDP
 
@@ -48,7 +49,7 @@ as env-only or internal-only. Flag values override environment variables.
 
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
-| `--startup-timeout` | `STARTUP_TIMEOUT` | `6s` | No | Per-source startup timeout during tune failover. |
+| `--startup-timeout` | `STARTUP_TIMEOUT` | `12s` | No | Per-source startup timeout during tune failover. |
 | `--startup-random-access-recovery-only` | `STARTUP_RANDOM_ACCESS_RECOVERY_ONLY` | `true` | No | When `true`, startup random-access enforcement is applied only during recovery cycles; initial startup no longer waits for a random-access cutover marker under `slate_av` + ffmpeg modes. |
 | `--min-probe-bytes` | `MIN_PROBE_BYTES` | `940` | No | Startup bytes required before stream commit (`>= 1`). |
 | `--max-failovers` | `MAX_FAILOVERS` | `3` | No | Number of fallback attempts after primary source (`0` means try all enabled sources). |
@@ -59,26 +60,27 @@ as env-only or internal-only. Flag values override environment variables.
 
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
-| `--ffmpeg-reconnect-enabled` | `FFMPEG_RECONNECT_ENABLED` | `false` | No | Enables ffmpeg input reconnect flags (`-reconnect*`) for ffmpeg stream modes. |
+| `--ffmpeg-reconnect-enabled` | `FFMPEG_RECONNECT_ENABLED` | `true` | No | Enables ffmpeg input reconnect flags (`-reconnect*`) for ffmpeg stream modes. |
 | `--ffmpeg-reconnect-delay-max` | `FFMPEG_RECONNECT_DELAY_MAX` | `3s` | No | Max ffmpeg reconnect delay (`-reconnect_delay_max`, rounded up to seconds). |
 | `--ffmpeg-reconnect-max-retries` | `FFMPEG_RECONNECT_MAX_RETRIES` | `1` | No | Maximum ffmpeg reconnect attempts (`-reconnect_max_retries`). |
 | `--ffmpeg-reconnect-http-errors` | `FFMPEG_RECONNECT_HTTP_ERRORS` | empty | No | Value used for `-reconnect_on_http_error` in ffmpeg stream modes. Empty disables this specific ffmpeg input option. |
+| `--ffmpeg-rw-timeout` | `FFMPEG_RW_TIMEOUT` | `3s` | No | FFmpeg input I/O timeout (`-rw_timeout`) for ffmpeg stream modes. Values are parsed as Go durations and converted to ffmpeg microseconds. Set `0` to disable this option. Prefer values below `--stall-detect` so shared-session stall recovery can trigger before ffmpeg input timeout recovery. |
 | `--ffmpeg-startup-probesize-bytes` | `FFMPEG_STARTUP_PROBESIZE_BYTES` | `1000000` | No | FFmpeg input `-probesize` used during startup stream detection in ffmpeg modes. Values below `128000` are normalized up to this floor to avoid startup stream-detection regressions. |
 | `--ffmpeg-startup-analyzeduration` | `FFMPEG_STARTUP_ANALYZEDURATION` | `1.5s` | No | FFmpeg input `-analyzeduration` used during startup stream detection in ffmpeg modes. Values below `1s` are normalized up to this floor to avoid startup stream-detection regressions. |
-| `--ffmpeg-input-buffer-size` | `FFMPEG_INPUT_BUFFER_SIZE` | `0` | No | FFmpeg input buffer size in bytes (`-buffer_size`) for ffmpeg stream modes. `0` disables this option. |
-| `--ffmpeg-discard-corrupt` | `FFMPEG_DISCARD_CORRUPT` | `false` | No | Enables ffmpeg input corrupt-packet discard (`-fflags +discardcorrupt`). In `ffmpeg-copy` mode this combines with `+genpts` when timestamp regeneration is also enabled. |
+| `--ffmpeg-input-buffer-size` | `FFMPEG_INPUT_BUFFER_SIZE` | `0` | No | FFmpeg input buffer size in bytes (`-buffer_size`) for ffmpeg stream modes. `0` disables this option. Primarily useful for `rist://`, `rtp://`, `rtsp://`, and `udp://` inputs (less common in many M3U playlists). Most playlist sources are `http://`/`https://` MPEG-TS or HLS (`.m3u8`), which often reject this option. In mixed-protocol playlists, unsupported sources may fail the first startup attempt before runtime retries once without `-buffer_size`, which adds startup delay on those attempts. |
+| `--ffmpeg-discard-corrupt` | `FFMPEG_DISCARD_CORRUPT` | `true` | No | Enables ffmpeg input corrupt-packet discard (`-fflags +discardcorrupt`). In `ffmpeg-copy` mode this combines with `+genpts` when timestamp regeneration is also enabled. |
 | `--ffmpeg-copy-regenerate-timestamps` | `FFMPEG_COPY_REGENERATE_TIMESTAMPS` | `true` | No | Enables ffmpeg-copy timestamp regeneration (`-fflags +genpts`) to smooth sources with missing/non-monotonic timestamps. |
 | `--producer-readrate` | `PRODUCER_READRATE` | `1` | No | FFmpeg producer pacing (`-readrate`). Shared sessions use this before buffering. |
-| `--producer-readrate-catchup` | `PRODUCER_READRATE_CATCHUP` | `1` | No | FFmpeg producer catch-up pacing (`-readrate_catchup`) used when input falls behind realtime. Must be greater than or equal to `--producer-readrate`. |
-| `--producer-initial-burst` | `PRODUCER_INITIAL_BURST` | `1` | No | FFmpeg producer initial burst seconds (`-readrate_initial_burst`). |
+| `--producer-readrate-catchup` | `PRODUCER_READRATE_CATCHUP` | `1.75` | No | FFmpeg producer catch-up pacing (`-readrate_catchup`) used when input falls behind realtime. Must be greater than or equal to `--producer-readrate`. |
+| `--producer-initial-burst` | `PRODUCER_INITIAL_BURST` | `10` | No | FFmpeg producer initial burst seconds (`-readrate_initial_burst`). |
 
 ## Shared Session Buffering
 
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
 | `--buffer-chunk-bytes` | `BUFFER_CHUNK_BYTES` | `65536` | No | Shared-session chunk publish threshold in bytes (`>= 1`). |
-| `--buffer-publish-flush-interval` | `BUFFER_PUBLISH_FLUSH_INTERVAL` | `100ms` | No | Shared-session timer flush interval for partial chunks. |
-| `--buffer-ts-align-188` | `BUFFER_TS_ALIGN_188` | `false` | No | Align non-final chunk publishes to MPEG-TS packet boundaries (188-byte multiples). |
+| `--buffer-publish-flush-interval` | `BUFFER_PUBLISH_FLUSH_INTERVAL` | `20ms` | No | Shared-session timer flush interval for partial chunks. |
+| `--buffer-ts-align-188` | `BUFFER_TS_ALIGN_188` | `true` | No | Align non-final chunk publishes to MPEG-TS packet boundaries (188-byte multiples). |
 
 ## Stall Detection and Recovery
 
@@ -104,7 +106,7 @@ as env-only or internal-only. Flag values override environment variables.
 
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
-| `--subscriber-join-lag-bytes` | `SUBSCRIBER_JOIN_LAG_BYTES` | `2097152` | No | New subscriber join lag window in bytes (ring tail cushion). |
+| `--subscriber-join-lag-bytes` | `SUBSCRIBER_JOIN_LAG_BYTES` | `8388608` | No | New subscriber join lag window in bytes (ring tail cushion). |
 | `--subscriber-slow-client-policy` | `SUBSCRIBER_SLOW_CLIENT_POLICY` | `disconnect` | No | `disconnect` or `skip` when client falls behind ring tail. |
 | `--subscriber-max-blocked-write` | `SUBSCRIBER_MAX_BLOCKED_WRITE` | `6s` | No | Per-chunk write deadline for shared subscribers (`0` disables deadline). |
 

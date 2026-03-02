@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/arodd/hdhriptv/internal/logging"
 )
 
 var (
@@ -218,7 +220,9 @@ func (s *Server) handleDatagram(frame []byte, remoteAddr *net.UDPAddr) error {
 	if _, err := s.conn.WriteToUDP(respFrame, remoteAddr); err != nil {
 		return fmt.Errorf("write discover response: %w", err)
 	}
-	s.logger.Debug(
+	s.logger.Log(
+		context.Background(),
+		logging.LevelTrace,
 		"discovery response sent",
 		"remote_addr", remoteAddr.String(),
 		"base_url", baseURL,

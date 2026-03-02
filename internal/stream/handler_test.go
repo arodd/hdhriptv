@@ -2256,6 +2256,13 @@ func TestFFmpegArgs(t *testing.T) {
 	if !ok {
 		t.Fatalf("ffmpeg-copy args missing -i: %#v", copyArgs)
 	}
+	copyLogLevelIndex, copyLogLevelValue, ok := findArg(copyArgs, "-loglevel")
+	if !ok || copyLogLevelValue != defaultFFmpegInputLogLevel {
+		t.Fatalf("ffmpeg-copy args missing -loglevel %s: %#v", defaultFFmpegInputLogLevel, copyArgs)
+	}
+	if copyLogLevelIndex > copyInputIndex {
+		t.Fatalf("ffmpeg-copy args place -loglevel after -i: %#v", copyArgs)
+	}
 	if copyReadRateIndex > copyInputIndex {
 		t.Fatalf("ffmpeg-copy args place -readrate after -i: %#v", copyArgs)
 	}
@@ -2304,6 +2311,9 @@ func TestFFmpegArgs(t *testing.T) {
 	if copyMaxRetriesIndex > copyInputIndex {
 		t.Fatalf("ffmpeg-copy args place -reconnect_max_retries after -i: %#v", copyArgs)
 	}
+	if hasArg(copyArgs, ffmpegRWTimeoutOption) {
+		t.Fatalf("ffmpeg-copy args unexpectedly include %s by default: %#v", ffmpegRWTimeoutOption, copyArgs)
+	}
 	copyFFlagsIndex, copyFFlagsValue, ok := findArg(copyArgs, "-fflags")
 	if !ok || copyFFlagsValue != "+genpts" {
 		t.Fatalf("ffmpeg-copy args missing -fflags +genpts: %#v", copyArgs)
@@ -2313,6 +2323,30 @@ func TestFFmpegArgs(t *testing.T) {
 	}
 	if got := copyArgs[len(copyArgs)-1]; got != "pipe:1" {
 		t.Fatalf("ffmpeg-copy args tail = %q, want pipe:1", got)
+	}
+
+	copyWarningLogLevelArgs := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffsetAndLogLevel(
+		"ffmpeg-copy",
+		"http://example.com/live.m3u8",
+		1,
+		1,
+		1,
+		32*1024,
+		200*time.Millisecond,
+		true,
+		1500*time.Millisecond,
+		3,
+		"4xx,5xx",
+		true,
+		0,
+		0,
+		0,
+		false,
+		"warning",
+	)
+	_, copyWarningLogLevelValue, ok := findArg(copyWarningLogLevelArgs, "-loglevel")
+	if !ok || copyWarningLogLevelValue != "warning" {
+		t.Fatalf("ffmpeg-copy warning args missing -loglevel warning: %#v", copyWarningLogLevelArgs)
 	}
 
 	copyNoRegenArgs := ffmpegArgsWithCopyTimestampRegeneration(
@@ -2377,6 +2411,7 @@ func TestFFmpegArgs(t *testing.T) {
 		true,
 		0,
 		262144,
+		2500*time.Millisecond,
 		true,
 	)
 	copyBufferIndex, copyBufferValue, ok := findArg(copyBufferDiscardArgs, ffmpegInputBufferSizeOption)
@@ -2389,6 +2424,13 @@ func TestFFmpegArgs(t *testing.T) {
 	}
 	if copyBufferIndex > copyBufferInputIndex {
 		t.Fatalf("ffmpeg-copy args place %s after -i: %#v", ffmpegInputBufferSizeOption, copyBufferDiscardArgs)
+	}
+	copyRWTimeoutIndex, copyRWTimeoutValue, ok := findArg(copyBufferDiscardArgs, ffmpegRWTimeoutOption)
+	if !ok || copyRWTimeoutValue != "2500000" {
+		t.Fatalf("ffmpeg-copy args missing %s 2500000: %#v", ffmpegRWTimeoutOption, copyBufferDiscardArgs)
+	}
+	if copyRWTimeoutIndex > copyBufferInputIndex {
+		t.Fatalf("ffmpeg-copy args place %s after -i: %#v", ffmpegRWTimeoutOption, copyBufferDiscardArgs)
 	}
 	copyBufferFFlagsIndex, copyBufferFFlagsValue, ok := findArg(copyBufferDiscardArgs, ffmpegInputFlagsOption)
 	if !ok || copyBufferFFlagsValue != "+genpts+discardcorrupt" {
@@ -2411,6 +2453,7 @@ func TestFFmpegArgs(t *testing.T) {
 		3,
 		"4xx,5xx",
 		false,
+		0,
 		0,
 		0,
 		true,

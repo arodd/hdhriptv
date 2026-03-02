@@ -201,7 +201,7 @@ With `STRICT_CONTINUITY=1`, the run fails on ffplay continuity/decode warnings a
 |---|---|---|---|
 | `STALL_DETECT` | 4s | `--stall-detect` / `STALL_DETECT` | No-publish duration before stall detection triggers recovery |
 | `STALL_HARD_DEADLINE` | 32s | `--stall-hard-deadline` / `STALL_HARD_DEADLINE` | Maximum time for entire recovery attempt before session close |
-| `STARTUP_TIMEOUT` | 6s | `--startup-timeout` / `STARTUP_TIMEOUT` | Per-source startup timeout (connecting + probe bytes) |
+| `STARTUP_TIMEOUT` | 12s | `--startup-timeout` / `STARTUP_TIMEOUT` | Per-source startup timeout (connecting + probe bytes) |
 | `FAILOVER_TOTAL_TIMEOUT` | 32s | `--failover-total-timeout` / `FAILOVER_TOTAL_TIMEOUT` | Total budget for iterating through source candidates during startup/recovery |
 | `MAX_FAILOVERS` | 3 | `--max-failovers` / `MAX_FAILOVERS` | Maximum fallback source attempts after primary (0 = try all) |
 | `STALL_MAX_FAILOVERS_PER_STALL` | 3 | `--stall-max-failovers-per-stall` / `STALL_MAX_FAILOVERS_PER_STALL` | Maximum failover attempts per detected stall event |
@@ -499,7 +499,7 @@ The default timer values are tuned for typical single-tuner residential setups. 
 |---|---|---|
 | `STALL_DETECT` | 4s | Increase to 6–8s to avoid false stall detection from transient upstream congestion. Values below 3s can cause false positives on busy systems. |
 | `STALL_HARD_DEADLINE` | 32s | Generally safe as-is. Reduce to 16–20s only if fast session teardown is preferred over prolonged recovery attempts. |
-| `STARTUP_TIMEOUT` | 6s | Increase to 10–12s if upstream sources are slow to respond (e.g., remote/CDN sources). |
+| `STARTUP_TIMEOUT` | 12s | Increase to 15–20s if upstream sources are slow to respond (e.g., remote/CDN sources). |
 | `FAILOVER_TOTAL_TIMEOUT` | 32s | Keep aligned with or below `STALL_HARD_DEADLINE`. Reducing this limits how many alternate sources can be tried. |
 | `SESSION_IDLE_TIMEOUT` | 5s | Increase to 10–15s under load to reduce session teardown/recreation churn when subscribers briefly disconnect. |
 | `UPSTREAM_OVERLIMIT_COOLDOWN` | 3s | Increase to 5–10s if providers enforce strict rate limits (HTTP 429). |

@@ -2,6 +2,7 @@ package logging
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -68,6 +69,48 @@ func TestNewWithOutputsRejectsInvalidLogLevel(t *testing.T) {
 	_, err := newWithOutputs("nope", t.TempDir(), time.Now(), ioDiscardBuffer{}, ioDiscardBuffer{})
 	if err == nil {
 		t.Fatal("expected error for invalid log level")
+	}
+}
+
+func TestNewWithOutputsTraceLevelUsesTraceLabel(t *testing.T) {
+	tmpDir := t.TempDir()
+	startup := time.Date(2026, time.February, 27, 8, 0, 0, 0, time.UTC)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	runtime, err := newWithOutputs("trace", tmpDir, startup, &stdout, &stderr)
+	if err != nil {
+		t.Fatalf("newWithOutputs() error = %v", err)
+	}
+	t.Cleanup(func() {
+		_ = runtime.Close()
+	})
+
+	runtime.Logger.Log(context.Background(), LevelTrace, "trace line", "component", "test")
+	runtime.Logger.Debug("debug line", "component", "test")
+	runtime.Logger.Warn("warn line", "component", "test")
+
+	if err := runtime.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	stdoutOutput := stdout.String()
+	if !strings.Contains(stdoutOutput, `level=TRACE msg="trace line"`) {
+		t.Fatalf("stdout missing trace line with TRACE label: %q", stdoutOutput)
+	}
+	if !strings.Contains(stdoutOutput, `level=DEBUG msg="debug line"`) {
+		t.Fatalf("stdout missing debug line: %q", stdoutOutput)
+	}
+	if strings.Contains(stdoutOutput, "warn line") {
+		t.Fatalf("stdout unexpectedly contains warn line: %q", stdoutOutput)
+	}
+
+	stderrOutput := stderr.String()
+	if !strings.Contains(stderrOutput, `level=WARN msg="warn line"`) {
+		t.Fatalf("stderr missing warn line: %q", stderrOutput)
+	}
+	if strings.Contains(stderrOutput, "trace line") {
+		t.Fatalf("stderr unexpectedly contains trace line: %q", stderrOutput)
 	}
 }
 

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/arodd/hdhriptv/internal/logging"
 	"golang.org/x/time/rate"
 )
 
@@ -81,7 +82,7 @@ type ipLimiterStore struct {
 	highWater    int
 	staleEvicted uint64
 	capEvicted   uint64
-	lastStatsLog time.Time
+	statsTracker *logging.PeriodicStatsWindow[rateLimitStatsSnapshot]
 	pendingStats rateLimitStatsSnapshot
 	hasPending   bool
 	logStatsFn   func(rateLimitStatsSnapshot)
@@ -103,6 +104,15 @@ func newIPLimiterStore(rps float64, burst int, cfg RateLimitByIPConfig) *ipLimit
 		idleTTL:      cfg.IdleTTL,
 		maxClients:   cfg.MaxClients,
 		cleanupBatch: cfg.CleanupBatch,
+		statsTracker: logging.NewPeriodicStatsWindow(
+			true,
+			func(dst *rateLimitStatsSnapshot, sample rateLimitStatsSnapshot) {
+				if dst == nil {
+					return
+				}
+				*dst = sample
+			},
+		),
 	}
 	store.logStatsFn = logRateLimitStats
 	return store
@@ -218,17 +228,21 @@ func (s *ipLimiterStore) removeEntryLocked(entry *ipLimiter) {
 }
 
 func (s *ipLimiterStore) maybeQueueStatsLogLocked(now time.Time) {
-	if !s.lastStatsLog.IsZero() && now.Sub(s.lastStatsLog) < defaultRateLimitStatsLogFreq {
+	if s.statsTracker == nil {
 		return
 	}
-	s.lastStatsLog = now
-	s.pendingStats = rateLimitStatsSnapshot{
+	snapshot := rateLimitStatsSnapshot{
 		clients:      len(s.clients),
 		maxClients:   s.maxClients,
 		highWater:    s.highWater,
 		staleEvicted: s.staleEvicted,
 		capEvicted:   s.capEvicted,
 	}
+	flush, ok := s.statsTracker.Record(now, defaultRateLimitStatsLogFreq, snapshot)
+	if !ok {
+		return
+	}
+	s.pendingStats = flush.Stats
 	s.hasPending = true
 }
 

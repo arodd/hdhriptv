@@ -774,6 +774,9 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 	if defaults.ffmpegInputBufferSize != 0 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 0 by default", defaults.ffmpegInputBufferSize)
 	}
+	if defaults.ffmpegRWTimeout != 0 {
+		t.Fatalf("ffmpegRWTimeout = %s, want 0 by default", defaults.ffmpegRWTimeout)
+	}
 	if defaults.ffmpegDiscardCorrupt {
 		t.Fatal("ffmpegDiscardCorrupt = true, want false by default")
 	}
@@ -781,6 +784,7 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 	configured := NewBackgroundProber(ProberConfig{
 		Mode:                  "ffmpeg-copy",
 		FFmpegInputBufferSize: 262144,
+		FFmpegRWTimeout:       2500 * time.Millisecond,
 		FFmpegDiscardCorrupt:  true,
 		MinProbeBytes:         1,
 		ProbeTimeout:          time.Second,
@@ -791,6 +795,9 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 	if configured.ffmpegInputBufferSize != 262144 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 262144", configured.ffmpegInputBufferSize)
 	}
+	if configured.ffmpegRWTimeout != 2500*time.Millisecond {
+		t.Fatalf("ffmpegRWTimeout = %s, want 2500ms", configured.ffmpegRWTimeout)
+	}
 	if !configured.ffmpegDiscardCorrupt {
 		t.Fatal("ffmpegDiscardCorrupt = false, want true")
 	}
@@ -798,6 +805,7 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 	clamped := NewBackgroundProber(ProberConfig{
 		Mode:                  "ffmpeg-copy",
 		FFmpegInputBufferSize: -1,
+		FFmpegRWTimeout:       -1 * time.Millisecond,
 		MinProbeBytes:         1,
 		ProbeTimeout:          time.Second,
 	}, &fakeProbeProvider{})
@@ -806,6 +814,9 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 	})
 	if clamped.ffmpegInputBufferSize != 0 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 0 when configured negative", clamped.ffmpegInputBufferSize)
+	}
+	if clamped.ffmpegRWTimeout != 0 {
+		t.Fatalf("ffmpegRWTimeout = %s, want 0 when configured negative", clamped.ffmpegRWTimeout)
 	}
 }
 

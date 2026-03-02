@@ -20,6 +20,7 @@ import (
 	"github.com/arodd/hdhriptv/internal/channels"
 	"github.com/arodd/hdhriptv/internal/dvr"
 	"github.com/arodd/hdhriptv/internal/http/middleware"
+	"github.com/arodd/hdhriptv/internal/logging"
 	"github.com/arodd/hdhriptv/internal/playlist"
 	"github.com/arodd/hdhriptv/internal/store/sqlite"
 	"github.com/arodd/hdhriptv/internal/stream"
@@ -31,11 +32,12 @@ const defaultDynamicSyncTimeout = 30 * time.Second
 const defaultDVRSyncTimeout = 2 * time.Minute
 const defaultDVRMutationTimeout = 30 * time.Second
 const defaultAutomationMutationTimeout = 30 * time.Second
-const defaultDVRLineupReloadDebounce = 60 * time.Second
+const defaultDVRLineupReloadDebounce = 20 * time.Second
 const defaultDVRLineupReloadMaxWait = 5 * time.Minute
 const defaultDVRLineupReloadTimeout = 30 * time.Second
 const defaultResolveClientHostLookupTimeout = 2 * time.Second
 const defaultResolveClientHostsTotalTimeout = 8 * time.Second
+const defaultResolveClientHostSummaryLogInterval = 30 * time.Minute
 const defaultResolveClientHostCacheTTL = 2 * time.Minute
 const defaultResolveClientHostNegativeCacheTTL = 15 * time.Second
 const defaultResolveClientHostCacheSweepInterval = 30 * time.Second
@@ -169,6 +171,9 @@ type AdminHandler struct {
 	resolveClientHostCache              map[string]resolveClientHostCacheEntry
 	resolveClientHostCacheLastSweep     time.Time
 	resolveClientHostCacheExpiryHeap    resolveClientHostCacheExpiryMinHeap
+	resolveClientHostSummaryTracker     *logging.PeriodicStatsWindow[resolveClientHostResolutionStats]
+	resolveClientHostSummaryNow         func() time.Time
+	resolveClientHostSummaryLogInterval time.Duration
 	adminConfigMutationMu               sync.Mutex
 	dynamicSyncMu                       sync.Mutex
 	dynamicSyncStates                   map[int64]*dynamicChannelSyncState
@@ -264,6 +269,7 @@ func (h *resolveClientHostCacheExpiryMinHeap) Pop() any {
 }
 
 type resolveClientHostResolutionStats struct {
+	requestCount       int
 	cacheHits          int
 	cacheNegativeHits  int
 	cacheMisses        int
@@ -272,6 +278,21 @@ type resolveClientHostResolutionStats struct {
 	lookupCalls        int
 	lookupErrors       int
 	lookupEmptyResults int
+}
+
+func (s *resolveClientHostResolutionStats) add(other resolveClientHostResolutionStats) {
+	if s == nil {
+		return
+	}
+	s.requestCount += other.requestCount
+	s.cacheHits += other.cacheHits
+	s.cacheNegativeHits += other.cacheNegativeHits
+	s.cacheMisses += other.cacheMisses
+	s.memoizedHits += other.memoizedHits
+	s.memoizedEmptyHits += other.memoizedEmptyHits
+	s.lookupCalls += other.lookupCalls
+	s.lookupErrors += other.lookupErrors
+	s.lookupEmptyResults += other.lookupEmptyResults
 }
 
 func (s resolveClientHostResolutionStats) cacheHitRate() float64 {
@@ -315,6 +336,17 @@ func NewAdminHandler(catalog CatalogStore, channelsSvc ChannelsService, automati
 		resolveClientHostCacheSweepInterval: defaultResolveClientHostCacheSweepInterval,
 		resolveClientHostCacheMaxEntries:    defaultResolveClientHostCacheMaxEntries,
 		resolveClientHostCache:              make(map[string]resolveClientHostCacheEntry),
+		resolveClientHostSummaryTracker: logging.NewPeriodicStatsWindow(
+			false,
+			func(dst *resolveClientHostResolutionStats, sample resolveClientHostResolutionStats) {
+				if dst == nil {
+					return
+				}
+				dst.add(sample)
+			},
+		),
+		resolveClientHostSummaryNow:         time.Now,
+		resolveClientHostSummaryLogInterval: defaultResolveClientHostSummaryLogInterval,
 		dynamicSyncStates:                   make(map[int64]*dynamicChannelSyncState),
 		dvrLineupReloadTimeout:              defaultDVRLineupReloadTimeout,
 		dvrLineupReloadDebounce:             defaultDVRLineupReloadDebounce,
@@ -396,6 +428,9 @@ func (h *AdminHandler) Close() {
 	h.resolveClientHostCacheLastSweep = time.Time{}
 	h.resolveClientHostCacheExpiryHeap = nil
 	h.resolveClientHostCacheMu.Unlock()
+	if h.resolveClientHostSummaryTracker != nil {
+		h.resolveClientHostSummaryTracker.Reset()
+	}
 
 	h.workerWg.Wait()
 }
@@ -2444,18 +2479,8 @@ func (h *AdminHandler) handleTunerStatus(w http.ResponseWriter, r *http.Request)
 		snapshot, resolveStats = h.resolveClientHostsInSnapshot(resolveCtx, snapshot)
 		cancel()
 		if h.logger != nil && h.logger.Enabled(r.Context(), slog.LevelDebug) {
-			h.logger.Debug(
-				"admin tuner resolve_ip completed",
-				"cache_hits", resolveStats.cacheHits,
-				"cache_negative_hits", resolveStats.cacheNegativeHits,
-				"cache_misses", resolveStats.cacheMisses,
-				"cache_hit_rate", resolveStats.cacheHitRate(),
-				"memoized_hits", resolveStats.memoizedHits,
-				"memoized_empty_hits", resolveStats.memoizedEmptyHits,
-				"lookup_calls", resolveStats.lookupCalls,
-				"lookup_errors", resolveStats.lookupErrors,
-				"lookup_empty_results", resolveStats.lookupEmptyResults,
-			)
+			resolveStats.requestCount = 1
+			h.logResolveClientHostSummary(resolveStats)
 		}
 	}
 	writeJSON(w, http.StatusOK, snapshot)
@@ -2695,6 +2720,50 @@ func (h *AdminHandler) resolveClientHostsTimeoutBudget() time.Duration {
 		return defaultResolveClientHostsTotalTimeout
 	}
 	return h.resolveClientHostsTimeout
+}
+
+func (h *AdminHandler) resolveClientHostSummaryInterval() time.Duration {
+	if h == nil || h.resolveClientHostSummaryLogInterval <= 0 {
+		return defaultResolveClientHostSummaryLogInterval
+	}
+	return h.resolveClientHostSummaryLogInterval
+}
+
+func (h *AdminHandler) logResolveClientHostSummary(stats resolveClientHostResolutionStats) {
+	if h == nil || h.logger == nil {
+		return
+	}
+	if h.resolveClientHostSummaryTracker == nil {
+		return
+	}
+	nowFn := h.resolveClientHostSummaryNow
+	if nowFn == nil {
+		nowFn = time.Now
+	}
+	now := nowFn()
+	interval := h.resolveClientHostSummaryInterval()
+	summarySnapshot, shouldLog := h.resolveClientHostSummaryTracker.Record(now, interval, stats)
+	if !shouldLog {
+		return
+	}
+	summary := summarySnapshot.Stats
+
+	h.logger.Debug(
+		"admin tuner resolve_ip summary",
+		"summary_window", summarySnapshot.WindowDuration,
+		"summary_window_start", summarySnapshot.WindowStart.UTC(),
+		"summary_window_end", summarySnapshot.WindowEnd.UTC(),
+		"resolve_requests", summary.requestCount,
+		"cache_hits", summary.cacheHits,
+		"cache_negative_hits", summary.cacheNegativeHits,
+		"cache_misses", summary.cacheMisses,
+		"cache_hit_rate", summary.cacheHitRate(),
+		"memoized_hits", summary.memoizedHits,
+		"memoized_empty_hits", summary.memoizedEmptyHits,
+		"lookup_calls", summary.lookupCalls,
+		"lookup_errors", summary.lookupErrors,
+		"lookup_empty_results", summary.lookupEmptyResults,
+	)
 }
 
 func (h *AdminHandler) resolveClientHostsInSnapshot(

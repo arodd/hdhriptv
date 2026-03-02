@@ -36,8 +36,15 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 			defaultUPnPContentDirectoryUpdateIDCacheTTL,
 		)
 	}
-	if cfg.FFmpegReconnectEnabled {
-		t.Fatal("FFmpegReconnectEnabled = true, want false")
+	if cfg.TraditionalGuideStart != defaultTraditionalGuideStart {
+		t.Fatalf(
+			"TraditionalGuideStart = %d, want %d",
+			cfg.TraditionalGuideStart,
+			defaultTraditionalGuideStart,
+		)
+	}
+	if !cfg.FFmpegReconnectEnabled {
+		t.Fatal("FFmpegReconnectEnabled = false, want true")
 	}
 	if cfg.FFmpegReconnectDelayMax.String() != "3s" {
 		t.Fatalf("FFmpegReconnectDelayMax = %s, want 3s", cfg.FFmpegReconnectDelayMax)
@@ -47,6 +54,9 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	}
 	if cfg.FFmpegReconnectHTTPErrors != "" {
 		t.Fatalf("FFmpegReconnectHTTPErrors = %q, want empty", cfg.FFmpegReconnectHTTPErrors)
+	}
+	if cfg.FFmpegRWTimeout != 3*time.Second {
+		t.Fatalf("FFmpegRWTimeout = %s, want 3s", cfg.FFmpegRWTimeout)
 	}
 	if cfg.FFprobePath != "ffprobe" {
 		t.Fatalf("FFprobePath = %q, want ffprobe", cfg.FFprobePath)
@@ -60,11 +70,35 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.FFmpegInputBufferSize != 0 {
 		t.Fatalf("FFmpegInputBufferSize = %d, want 0", cfg.FFmpegInputBufferSize)
 	}
-	if cfg.FFmpegDiscardCorrupt {
-		t.Fatal("FFmpegDiscardCorrupt = true, want false")
+	if !cfg.FFmpegDiscardCorrupt {
+		t.Fatal("FFmpegDiscardCorrupt = false, want true")
 	}
 	if !cfg.FFmpegCopyRegenerateTimestamps {
 		t.Fatal("FFmpegCopyRegenerateTimestamps = false, want true")
+	}
+	if cfg.FFmpegSourceLogLevel != defaultFFmpegSourceLogLevel {
+		t.Fatalf(
+			"FFmpegSourceLogLevel = %q, want %q",
+			cfg.FFmpegSourceLogLevel,
+			defaultFFmpegSourceLogLevel,
+		)
+	}
+	if !cfg.FFmpegSourceStderrPassthroughEnabled {
+		t.Fatal("FFmpegSourceStderrPassthroughEnabled = false, want true")
+	}
+	if cfg.FFmpegSourceStderrLogLevel != defaultFFmpegSourceStderrLogLevel {
+		t.Fatalf(
+			"FFmpegSourceStderrLogLevel = %q, want %q",
+			cfg.FFmpegSourceStderrLogLevel,
+			defaultFFmpegSourceStderrLogLevel,
+		)
+	}
+	if cfg.FFmpegSourceStderrMaxLineBytes != defaultFFmpegSourceStderrMaxLineBytes {
+		t.Fatalf(
+			"FFmpegSourceStderrMaxLineBytes = %d, want %d",
+			cfg.FFmpegSourceStderrMaxLineBytes,
+			defaultFFmpegSourceStderrMaxLineBytes,
+		)
 	}
 	if cfg.PreemptSettleDelay.String() != "500ms" {
 		t.Fatalf("PreemptSettleDelay = %s, want 500ms", cfg.PreemptSettleDelay)
@@ -72,8 +106,8 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.UpstreamOverlimitCooldown.String() != "3s" {
 		t.Fatalf("UpstreamOverlimitCooldown = %s, want 3s", cfg.UpstreamOverlimitCooldown)
 	}
-	if cfg.StartupTimeout.String() != "6s" {
-		t.Fatalf("StartupTimeout = %s, want 6s", cfg.StartupTimeout)
+	if cfg.StartupTimeout.String() != "12s" {
+		t.Fatalf("StartupTimeout = %s, want 12s", cfg.StartupTimeout)
 	}
 	if cfg.ReconcileDynamicRulePaged {
 		t.Fatal("ReconcileDynamicRulePaged = true, want false")
@@ -114,8 +148,20 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.RecoveryFillerInterval.String() != "200ms" {
 		t.Fatalf("RecoveryFillerInterval = %s, want 200ms", cfg.RecoveryFillerInterval)
 	}
-	if cfg.BufferFlushInterval.String() != "100ms" {
-		t.Fatalf("BufferFlushInterval = %s, want 100ms", cfg.BufferFlushInterval)
+	if cfg.ProducerReadRateCatchup != 1.75 {
+		t.Fatalf("ProducerReadRateCatchup = %v, want 1.75", cfg.ProducerReadRateCatchup)
+	}
+	if cfg.ProducerInitialBurst != 10 {
+		t.Fatalf("ProducerInitialBurst = %d, want 10", cfg.ProducerInitialBurst)
+	}
+	if cfg.BufferFlushInterval.String() != "20ms" {
+		t.Fatalf("BufferFlushInterval = %s, want 20ms", cfg.BufferFlushInterval)
+	}
+	if !cfg.BufferTSAlign188 {
+		t.Fatal("BufferTSAlign188 = false, want true")
+	}
+	if cfg.SubscriberJoinLag != 8*1024*1024 {
+		t.Fatalf("SubscriberJoinLag = %d, want 8388608", cfg.SubscriberJoinLag)
 	}
 	if cfg.ProbeInterval.String() != "0s" {
 		t.Fatalf("ProbeInterval = %s, want 0s", cfg.ProbeInterval)
@@ -184,6 +230,7 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 func TestConfigRedactedIncludesUPnPContentDirectoryUpdateIDCacheTTL(t *testing.T) {
 	cfg := Config{
 		UPnPContentDirectoryUpdateIDCacheTTL: 1500 * time.Millisecond,
+		TraditionalGuideStart:                275,
 	}
 
 	redacted := cfg.Redacted()
@@ -193,6 +240,39 @@ func TestConfigRedactedIncludesUPnPContentDirectoryUpdateIDCacheTTL(t *testing.T
 			redacted.UPnPContentDirectoryUpdateIDCacheTTL,
 			"1.5s",
 		)
+	}
+	if redacted.TraditionalGuideStart != 275 {
+		t.Fatalf("Redacted().TraditionalGuideStart = %d, want 275", redacted.TraditionalGuideStart)
+	}
+}
+
+func TestLoadLogLevelFromEnvAndFlagSupportsTrace(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("LOG_LEVEL", "trace")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if cfg.LogLevel != "trace" {
+		t.Fatalf("LogLevel = %q, want trace from env", cfg.LogLevel)
+	}
+
+	cfg, err = Load([]string{"--log-level=trace"})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.LogLevel != "trace" {
+		t.Fatalf("LogLevel = %q, want trace from flag", cfg.LogLevel)
+	}
+}
+
+func TestLoadRejectsInvalidLogLevel(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{"--log-level=verbose"})
+	if err == nil {
+		t.Fatal("expected error for invalid log-level")
 	}
 }
 
@@ -214,6 +294,41 @@ func TestLoadSessionDrainTimeoutFromEnvAndFlag(t *testing.T) {
 	}
 	if cfg.SessionDrainTimeout != 750*time.Millisecond {
 		t.Fatalf("SessionDrainTimeout = %s, want 750ms from flag", cfg.SessionDrainTimeout)
+	}
+}
+
+func TestLoadTraditionalGuideStartFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("TRADITIONAL_GUIDE_START", "420")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if cfg.TraditionalGuideStart != 420 {
+		t.Fatalf("TraditionalGuideStart = %d, want 420 from env", cfg.TraditionalGuideStart)
+	}
+
+	cfg, err = Load([]string{"--traditional-guide-start=325"})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.TraditionalGuideStart != 325 {
+		t.Fatalf("TraditionalGuideStart = %d, want 325 from flag", cfg.TraditionalGuideStart)
+	}
+}
+
+func TestLoadRejectsInvalidTraditionalGuideStart(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{"--traditional-guide-start=0"})
+	if err == nil {
+		t.Fatal("expected error for non-positive traditional-guide-start")
+	}
+
+	_, err = Load([]string{"--traditional-guide-start=10000"})
+	if err == nil {
+		t.Fatal("expected error for traditional-guide-start overlapping dynamic range")
 	}
 }
 
@@ -751,9 +866,14 @@ func TestLoadFailoverSettings(t *testing.T) {
 		"--ffmpeg-reconnect-delay-max=1500ms",
 		"--ffmpeg-reconnect-max-retries=4",
 		"--ffmpeg-reconnect-http-errors=429,5xx",
+		"--ffmpeg-rw-timeout=3s",
 		"--ffmpeg-input-buffer-size=1048576",
 		"--ffmpeg-discard-corrupt=true",
 		"--ffmpeg-copy-regenerate-timestamps=false",
+		"--ffmpeg-source-log-level=debug",
+		"--ffmpeg-source-stderr-passthrough-enabled=false",
+		"--ffmpeg-source-stderr-log-level=warn",
+		"--ffmpeg-source-stderr-max-line-bytes=4096",
 		"--probe-interval=1m",
 		"--probe-timeout=2s",
 	})
@@ -788,6 +908,9 @@ func TestLoadFailoverSettings(t *testing.T) {
 	if cfg.FFmpegReconnectHTTPErrors != "429,5xx" {
 		t.Fatalf("FFmpegReconnectHTTPErrors = %q, want 429,5xx", cfg.FFmpegReconnectHTTPErrors)
 	}
+	if cfg.FFmpegRWTimeout != 3*time.Second {
+		t.Fatalf("FFmpegRWTimeout = %s, want 3s", cfg.FFmpegRWTimeout)
+	}
 	if cfg.FFmpegInputBufferSize != 1048576 {
 		t.Fatalf("FFmpegInputBufferSize = %d, want 1048576", cfg.FFmpegInputBufferSize)
 	}
@@ -797,11 +920,23 @@ func TestLoadFailoverSettings(t *testing.T) {
 	if cfg.FFmpegCopyRegenerateTimestamps {
 		t.Fatal("FFmpegCopyRegenerateTimestamps = true, want false")
 	}
+	if cfg.FFmpegSourceLogLevel != "debug" {
+		t.Fatalf("FFmpegSourceLogLevel = %q, want debug", cfg.FFmpegSourceLogLevel)
+	}
+	if cfg.FFmpegSourceStderrPassthroughEnabled {
+		t.Fatal("FFmpegSourceStderrPassthroughEnabled = true, want false")
+	}
+	if cfg.FFmpegSourceStderrLogLevel != "warn" {
+		t.Fatalf("FFmpegSourceStderrLogLevel = %q, want warn", cfg.FFmpegSourceStderrLogLevel)
+	}
+	if cfg.FFmpegSourceStderrMaxLineBytes != 4096 {
+		t.Fatalf("FFmpegSourceStderrMaxLineBytes = %d, want 4096", cfg.FFmpegSourceStderrMaxLineBytes)
+	}
 	if cfg.ProducerReadRate != 1 {
 		t.Fatalf("ProducerReadRate = %v, want 1", cfg.ProducerReadRate)
 	}
-	if cfg.ProducerReadRateCatchup != 1 {
-		t.Fatalf("ProducerReadRateCatchup = %v, want 1", cfg.ProducerReadRateCatchup)
+	if cfg.ProducerReadRateCatchup != 1.75 {
+		t.Fatalf("ProducerReadRateCatchup = %v, want 1.75", cfg.ProducerReadRateCatchup)
 	}
 	if cfg.BufferChunkBytes != 64*1024 {
 		t.Fatalf("BufferChunkBytes = %d, want 65536", cfg.BufferChunkBytes)
@@ -1249,6 +1384,7 @@ func TestLoadFFmpegInputBufferAndDiscardCorruptFromEnvAndFlag(t *testing.T) {
 	clearConfigEnv(t)
 	t.Setenv("FFMPEG_INPUT_BUFFER_SIZE", "2097152")
 	t.Setenv("FFMPEG_DISCARD_CORRUPT", "true")
+	t.Setenv("FFMPEG_RW_TIMEOUT", "2500ms")
 
 	cfg, err := Load([]string{})
 	if err != nil {
@@ -1260,10 +1396,14 @@ func TestLoadFFmpegInputBufferAndDiscardCorruptFromEnvAndFlag(t *testing.T) {
 	if !cfg.FFmpegDiscardCorrupt {
 		t.Fatal("FFmpegDiscardCorrupt = false, want true from env")
 	}
+	if cfg.FFmpegRWTimeout != 2500*time.Millisecond {
+		t.Fatalf("FFmpegRWTimeout = %s, want 2500ms from env", cfg.FFmpegRWTimeout)
+	}
 
 	cfg, err = Load([]string{
 		"--ffmpeg-input-buffer-size=262144",
 		"--ffmpeg-discard-corrupt=false",
+		"--ffmpeg-rw-timeout=750ms",
 	})
 	if err != nil {
 		t.Fatalf("Load() flag override error = %v", err)
@@ -1273,6 +1413,62 @@ func TestLoadFFmpegInputBufferAndDiscardCorruptFromEnvAndFlag(t *testing.T) {
 	}
 	if cfg.FFmpegDiscardCorrupt {
 		t.Fatal("FFmpegDiscardCorrupt = true, want false from flag")
+	}
+	if cfg.FFmpegRWTimeout != 750*time.Millisecond {
+		t.Fatalf("FFmpegRWTimeout = %s, want 750ms from flag", cfg.FFmpegRWTimeout)
+	}
+}
+
+func TestLoadFFmpegSourceLoggingControlsFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("FFMPEG_SOURCE_LOG_LEVEL", "info")
+	t.Setenv("FFMPEG_SOURCE_STDERR_PASSTHROUGH_ENABLED", "false")
+	t.Setenv("FFMPEG_SOURCE_STDERR_LOG_LEVEL", "debug")
+	t.Setenv("FFMPEG_SOURCE_STDERR_MAX_LINE_BYTES", "3072")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if cfg.FFmpegSourceLogLevel != "info" {
+		t.Fatalf("FFmpegSourceLogLevel = %q, want info from env", cfg.FFmpegSourceLogLevel)
+	}
+	if cfg.FFmpegSourceStderrPassthroughEnabled {
+		t.Fatal("FFmpegSourceStderrPassthroughEnabled = true, want false from env")
+	}
+	if cfg.FFmpegSourceStderrLogLevel != "debug" {
+		t.Fatalf("FFmpegSourceStderrLogLevel = %q, want debug from env", cfg.FFmpegSourceStderrLogLevel)
+	}
+	if cfg.FFmpegSourceStderrMaxLineBytes != 3072 {
+		t.Fatalf(
+			"FFmpegSourceStderrMaxLineBytes = %d, want 3072 from env",
+			cfg.FFmpegSourceStderrMaxLineBytes,
+		)
+	}
+
+	cfg, err = Load([]string{
+		"--ffmpeg-source-log-level=warning",
+		"--ffmpeg-source-stderr-passthrough-enabled=true",
+		"--ffmpeg-source-stderr-log-level=warn",
+		"--ffmpeg-source-stderr-max-line-bytes=1024",
+	})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.FFmpegSourceLogLevel != "warning" {
+		t.Fatalf("FFmpegSourceLogLevel = %q, want warning from flag", cfg.FFmpegSourceLogLevel)
+	}
+	if !cfg.FFmpegSourceStderrPassthroughEnabled {
+		t.Fatal("FFmpegSourceStderrPassthroughEnabled = false, want true from flag")
+	}
+	if cfg.FFmpegSourceStderrLogLevel != "warn" {
+		t.Fatalf("FFmpegSourceStderrLogLevel = %q, want warn from flag", cfg.FFmpegSourceStderrLogLevel)
+	}
+	if cfg.FFmpegSourceStderrMaxLineBytes != 1024 {
+		t.Fatalf(
+			"FFmpegSourceStderrMaxLineBytes = %d, want 1024 from flag",
+			cfg.FFmpegSourceStderrMaxLineBytes,
+		)
 	}
 }
 
@@ -1480,6 +1676,15 @@ func TestLoadRejectsInvalidSharedSessionSettings(t *testing.T) {
 	_, err = Load([]string{
 		"--device-id=1234ABCD",
 		"--device-auth=test-token",
+		"--ffmpeg-rw-timeout=-1ms",
+	})
+	if err == nil {
+		t.Fatal("expected error for negative ffmpeg-rw-timeout")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
 		"--ffmpeg-input-buffer-size=-1",
 	})
 	if err == nil {
@@ -1493,6 +1698,33 @@ func TestLoadRejectsInvalidSharedSessionSettings(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for ffmpeg-input-buffer-size above 64MiB limit")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--ffmpeg-source-log-level=trace",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid ffmpeg-source-log-level")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--ffmpeg-source-stderr-log-level=error",
+	})
+	if err == nil {
+		t.Fatal("expected error for invalid ffmpeg-source-stderr-log-level")
+	}
+
+	_, err = Load([]string{
+		"--device-id=1234ABCD",
+		"--device-auth=test-token",
+		"--ffmpeg-source-stderr-max-line-bytes=0",
+	})
+	if err == nil {
+		t.Fatal("expected error for non-positive ffmpeg-source-stderr-max-line-bytes")
 	}
 
 	_, err = Load([]string{
@@ -1699,6 +1931,7 @@ func clearConfigEnv(t *testing.T) {
 		"UPNP_MAX_AGE",
 		"UPNP_CONTENT_DIRECTORY_UPDATE_ID_CACHE_TTL",
 		"TUNER_COUNT",
+		"TRADITIONAL_GUIDE_START",
 		"FRIENDLY_NAME",
 		"DEVICE_ID",
 		"DEVICE_AUTH",
@@ -1718,9 +1951,14 @@ func clearConfigEnv(t *testing.T) {
 		"FFMPEG_RECONNECT_DELAY_MAX",
 		"FFMPEG_RECONNECT_MAX_RETRIES",
 		"FFMPEG_RECONNECT_HTTP_ERRORS",
+		"FFMPEG_RW_TIMEOUT",
 		"FFMPEG_INPUT_BUFFER_SIZE",
 		"FFMPEG_DISCARD_CORRUPT",
 		"FFMPEG_COPY_REGENERATE_TIMESTAMPS",
+		"FFMPEG_SOURCE_LOG_LEVEL",
+		"FFMPEG_SOURCE_STDERR_PASSTHROUGH_ENABLED",
+		"FFMPEG_SOURCE_STDERR_LOG_LEVEL",
+		"FFMPEG_SOURCE_STDERR_MAX_LINE_BYTES",
 		"PRODUCER_READRATE",
 		"PRODUCER_INITIAL_BURST",
 		"BUFFER_CHUNK_BYTES",

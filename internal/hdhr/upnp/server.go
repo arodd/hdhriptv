@@ -12,10 +12,11 @@ import (
 	"time"
 
 	"github.com/arodd/hdhriptv/internal/hdhr"
+	"github.com/arodd/hdhriptv/internal/logging"
 )
 
 var (
-	errIgnoreUnsupportedSearch = errors.New("unsupported SSDP search target")
+	errIgnoreUnsupportedSearch  = errors.New("unsupported SSDP search target")
 	errIgnoreNotifyAnnouncement = errors.New("ssdp notify announcement")
 )
 
@@ -244,7 +245,9 @@ func (s *Server) handleDatagram(frame []byte, remoteAddr *net.UDPAddr) error {
 		}
 	}
 
-	s.logger.Debug(
+	s.logger.Log(
+		context.Background(),
+		logging.LevelTrace,
 		"ssdp response sent",
 		"remote_addr", remoteAddr.String(),
 		"st", request.ST,

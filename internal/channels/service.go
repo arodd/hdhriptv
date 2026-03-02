@@ -158,7 +158,14 @@ type Service struct {
 }
 
 func NewService(store Store) *Service {
-	return &Service{store: store, startGuideNumber: TraditionalGuideStart}
+	return NewServiceWithStartGuideNumber(store, TraditionalGuideStart)
+}
+
+func NewServiceWithStartGuideNumber(store Store, startGuideNumber int) *Service {
+	if startGuideNumber < 1 || startGuideNumber >= DynamicGuideStart {
+		startGuideNumber = TraditionalGuideStart
+	}
+	return &Service{store: store, startGuideNumber: startGuideNumber}
 }
 
 func (s *Service) Create(ctx context.Context, itemKey, guideName, channelKey string, dynamicRule *DynamicSourceRule) (Channel, error) {

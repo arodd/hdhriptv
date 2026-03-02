@@ -220,6 +220,7 @@ The most common settings are listed below. For the full reference including all 
 | `--http-addr` | `HTTP_ADDR` | `:5004` | Primary HTTP listener. |
 | `--http-addr-legacy` | `HTTP_ADDR_LEGACY` | empty | Optional second listener, often `:80`. |
 | `--tuner-count` | `TUNER_COUNT` | `2` | Max concurrent stream sessions. |
+| `--traditional-guide-start` | `TRADITIONAL_GUIDE_START` | `100` | First guide number assigned to traditional channels. Must be between `1` and `9999`. Existing traditional channels are renumbered on startup when this value changes. |
 | `--friendly-name` | `FRIENDLY_NAME` | `HDHR IPTV` | Displayed in discover payloads and DVR UIs. |
 | `--stream-mode` | `STREAM_MODE` | `ffmpeg-copy` | `direct`, `ffmpeg-copy`, `ffmpeg-transcode`. |
 | `--ffmpeg-path` | `FFMPEG_PATH` | `ffmpeg` | Executable used for ffmpeg stream modes. |
@@ -230,7 +231,7 @@ The most common settings are listed below. For the full reference including all 
 | `--stall-policy` | `STALL_POLICY` | `failover_source` | `failover_source`, `restart_same`, `close_session`. |
 | `--recovery-filler-mode` | `RECOVERY_FILLER_MODE` | `slate_av` | `null`, `psi`, or `slate_av` (decodable A/V filler). |
 | `--enable-metrics` | `ENABLE_METRICS` | `false` | Enables `/metrics` Prometheus endpoint. |
-| `--log-level` | `LOG_LEVEL` | `info` | `debug`, `info`, `warn`, `error`. |
+| `--log-level` | `LOG_LEVEL` | `info` | `trace`, `debug`, `info`, `warn`, `error`. |
 
 ## Documentation
 

@@ -15958,6 +15958,33 @@ func TestNormalizeSessionManagerConfigRecoveryDefaults(t *testing.T) {
 	if cfg.ffmpegInputBufferSize != 0 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 0", cfg.ffmpegInputBufferSize)
 	}
+	if cfg.ffmpegRWTimeout != 0 {
+		t.Fatalf("ffmpegRWTimeout = %s, want 0", cfg.ffmpegRWTimeout)
+	}
+	if cfg.ffmpegSourceLogLevel != defaultFFmpegSourceSessionLogLevel {
+		t.Fatalf(
+			"ffmpegSourceLogLevel = %q, want %q",
+			cfg.ffmpegSourceLogLevel,
+			defaultFFmpegSourceSessionLogLevel,
+		)
+	}
+	if !cfg.ffmpegSourceStderrPassthroughEnabled {
+		t.Fatal("ffmpegSourceStderrPassthroughEnabled = false, want true")
+	}
+	if cfg.ffmpegSourceStderrLogLevel != slog.LevelInfo {
+		t.Fatalf(
+			"ffmpegSourceStderrLogLevel = %d, want %d",
+			cfg.ffmpegSourceStderrLogLevel,
+			slog.LevelInfo,
+		)
+	}
+	if cfg.ffmpegSourceStderrMaxLineBytes != defaultFFmpegSourceStderrLineBytes {
+		t.Fatalf(
+			"ffmpegSourceStderrMaxLineBytes = %d, want %d",
+			cfg.ffmpegSourceStderrMaxLineBytes,
+			defaultFFmpegSourceStderrLineBytes,
+		)
+	}
 	if cfg.ffprobePath != defaultStreamProfileFFprobePath {
 		t.Fatalf("ffprobePath = %q, want %q", cfg.ffprobePath, defaultStreamProfileFFprobePath)
 	}
@@ -16008,10 +16035,14 @@ func TestNormalizeSessionManagerConfigSessionDrainTimeoutOverride(t *testing.T) 
 	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
 		Mode:                  "ffmpeg-copy",
 		FFmpegInputBufferSize: 262144,
+		FFmpegRWTimeout:       2500 * time.Millisecond,
 		FFmpegDiscardCorrupt:  true,
 	})
 	if cfg.ffmpegInputBufferSize != 262144 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 262144", cfg.ffmpegInputBufferSize)
+	}
+	if cfg.ffmpegRWTimeout != 2500*time.Millisecond {
+		t.Fatalf("ffmpegRWTimeout = %s, want 2500ms", cfg.ffmpegRWTimeout)
 	}
 	if !cfg.ffmpegDiscardCorrupt {
 		t.Fatal("ffmpegDiscardCorrupt = false, want true")
@@ -16020,9 +16051,43 @@ func TestNormalizeSessionManagerConfigSessionDrainTimeoutOverride(t *testing.T) 
 	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
 		Mode:                  "ffmpeg-copy",
 		FFmpegInputBufferSize: -1,
+		FFmpegRWTimeout:       -1 * time.Millisecond,
 	})
 	if cfg.ffmpegInputBufferSize != 0 {
 		t.Fatalf("ffmpegInputBufferSize = %d, want 0 when negative", cfg.ffmpegInputBufferSize)
+	}
+	if cfg.ffmpegRWTimeout != 0 {
+		t.Fatalf("ffmpegRWTimeout = %s, want 0 when negative", cfg.ffmpegRWTimeout)
+	}
+
+	trueValue := true
+	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:                                 "ffmpeg-copy",
+		FFmpegSourceLogLevel:                 "debug",
+		FFmpegSourceStderrPassthroughEnabled: &trueValue,
+		FFmpegSourceStderrLogLevel:           "warn",
+		FFmpegSourceStderrMaxLineBytes:       4096,
+	})
+	if cfg.ffmpegSourceLogLevel != "debug" {
+		t.Fatalf("ffmpegSourceLogLevel = %q, want debug", cfg.ffmpegSourceLogLevel)
+	}
+	if !cfg.ffmpegSourceStderrPassthroughEnabled {
+		t.Fatal("ffmpegSourceStderrPassthroughEnabled = false, want true")
+	}
+	if cfg.ffmpegSourceStderrLogLevel != slog.LevelWarn {
+		t.Fatalf("ffmpegSourceStderrLogLevel = %d, want %d", cfg.ffmpegSourceStderrLogLevel, slog.LevelWarn)
+	}
+	if cfg.ffmpegSourceStderrMaxLineBytes != 4096 {
+		t.Fatalf("ffmpegSourceStderrMaxLineBytes = %d, want 4096", cfg.ffmpegSourceStderrMaxLineBytes)
+	}
+
+	falsePassthrough := false
+	cfg = normalizeSessionManagerConfig(SessionManagerConfig{
+		Mode:                                 "ffmpeg-copy",
+		FFmpegSourceStderrPassthroughEnabled: &falsePassthrough,
+	})
+	if cfg.ffmpegSourceStderrPassthroughEnabled {
+		t.Fatal("ffmpegSourceStderrPassthroughEnabled = true, want false override")
 	}
 
 	cfg = normalizeSessionManagerConfig(SessionManagerConfig{

@@ -118,15 +118,21 @@ Built by `ffmpegArgs()` (`ffmpeg.go:1839`):
 
 - `-readrate` controls producer pacing (default `1.0`).
 - `-readrate_catchup` sets temporary catch-up pacing when ffmpeg falls behind
-  realtime (default follows `-readrate`); falls back gracefully if the ffmpeg
-  build does not support this option.
-- `-readrate_initial_burst` sends an initial burst (default 1 s); falls back
+  realtime (default `1.75`); falls back gracefully if the ffmpeg build does not
+  support this option.
+- `-readrate_initial_burst` sends an initial burst (default 10 s); falls back
   gracefully if the ffmpeg build does not support this option.
 - `-probesize` and `-analyzeduration` control MPEG-TS stream detection window
   (defaults: 1 MB / 1500 ms). On incomplete detection, a retry with relaxed
   parameters is attempted (2 MB / 3 s).
 - Optional `-buffer_size` input sizing (`FFMPEG_INPUT_BUFFER_SIZE`) for
-  ffmpeg stream modes.
+  ffmpeg stream modes. This is primarily effective for `rist://`, `rtp://`,
+  `rtsp://`, and `udp://` inputs (typically less common in many M3U playlists).
+  Most playlist sources are `http://`/`https://` MPEG-TS or HLS (`.m3u8`), and
+  those inputs often reject this option. In mixed-protocol playlists, enabling
+  this can cause an initial startup failure on unsupported inputs before
+  fallback retries once without `-buffer_size`, which adds startup delay on
+  those attempts.
 - Optional `-reconnect*` flags for ffmpeg-level reconnection.
 - In `ffmpeg-copy` mode, `-fflags +genpts` is enabled by default so ffmpeg can
   regenerate timestamps when upstream PTS/DTS continuity is weak. This can be
@@ -269,7 +275,7 @@ subscribers.
 
 - `addSubscriber()` assigns a monotonic subscriber ID and records the client
   address. The ring's `StartSeqByLagBytes()` determines the initial read
-  sequence (configurable via `SubscriberJoinLagBytes`, default 2 MB).
+  sequence (configurable via `SubscriberJoinLagBytes`, default 8 MB).
 - `removeSubscriber()` deletes the subscriber entry and, if no subscribers
   remain, starts the idle timeout timer.
 
@@ -444,7 +450,7 @@ The main loop accumulates bytes into an internal chunk buffer (default
 capacity 64 KB + 188 bytes). Publication happens when:
 
 1. **Size threshold** — the buffer reaches `chunkBytes` (default 64 KB).
-2. **Time threshold** — `flushInterval` (default 100 ms) elapses since the
+2. **Time threshold** — `flushInterval` (default 20 ms) elapses since the
    last publish and the buffer is non-empty.
 3. **EOF/error** — remaining bytes are flushed as a final chunk.
 
@@ -769,7 +775,7 @@ an unbounded blocking write.
 
 ### Join lag
 
-`SubscriberJoinLagBytes` (default 2 MB) controls how far back from the live
+`SubscriberJoinLagBytes` (default 8 MB) controls how far back from the live
 tail a new subscriber starts reading. `ChunkRing.StartSeqByLagBytes()` walks
 backward through buffered chunks until the byte budget is exhausted.
 
@@ -832,9 +838,9 @@ Ordered priority list for stall-heavy or unstable environments:
    match your expected concurrent channel demand. Each active channel
    (including background probes) consumes one slot.
 
-6. **`STARTUP_TIMEOUT`** (default `6s`) — How long to wait for the first bytes
+6. **`STARTUP_TIMEOUT`** (default `12s`) — How long to wait for the first bytes
    from an upstream source before declaring startup failure. Increase for slow
-   providers or high-latency networks (e.g. `10s`–`15s`).
+   providers or high-latency networks (e.g. `15s`–`20s`).
 
 7. **`STALL_POLICY`** (default `failover_source`) — Action on stall:
    `failover_source` tries the next source, `restart_same` retries the current
@@ -862,9 +868,9 @@ frequently. Start from defaults, change one knob at a time, and compare
 | Knob | Default | Practical tuning range | Primary effect |
 |---|---|---|---|
 | `SUBSCRIBER_SLOW_CLIENT_POLICY` | `disconnect` | `disconnect` or `skip` | `disconnect` makes lag explicit and drops clients immediately; `skip` keeps sessions alive by dropping missed chunks. |
-| `SUBSCRIBER_JOIN_LAG_BYTES` | `2 MB` | `8 MB` to `64 MB` for 4K diagnostics | Larger values increase lag cushion before a subscriber falls behind ring tail. |
+| `SUBSCRIBER_JOIN_LAG_BYTES` | `8 MB` | `8 MB` to `64 MB` for 4K diagnostics | Larger values increase lag cushion before a subscriber falls behind ring tail. |
 | `BUFFER_CHUNK_BYTES` | `64 KiB` | `32 KiB` to `128 KiB` | Smaller chunks improve skip granularity; larger chunks reduce publish bookkeeping overhead. |
-| `BUFFER_PUBLISH_FLUSH_INTERVAL` | `100ms` | `20ms` to `120ms` | Lower values reduce latency/jitter at the cost of more flush/publish churn. |
+| `BUFFER_PUBLISH_FLUSH_INTERVAL` | `20ms` | `20ms` to `120ms` | Lower values reduce latency/jitter at the cost of more flush/publish churn. |
 | `SUBSCRIBER_MAX_BLOCKED_WRITE` | `6s` | `2s` to `12s` | Upper bound for a single subscriber write before teardown; higher values tolerate slower clients but can hide pressure longer. |
 
 Use `SUBSCRIBER_SLOW_CLIENT_POLICY=disconnect` as a short diagnostic run when
@@ -886,7 +892,7 @@ Quick examples:
 
 | `SUBSCRIBER_JOIN_LAG_BYTES` | `BUFFER_CHUNK_BYTES` | Per-session ring budget | 4 active sessions | 8 active sessions |
 |---|---|---|---|---|
-| `2 MB` | `64 KiB` | `3 MB` | `12 MB` | `24 MB` |
+| `8 MB` | `64 KiB` | `9 MB` | `36 MB` | `72 MB` |
 | `32 MB` | `64 KiB` | `33 MB` | `132 MB` | `264 MB` |
 | `64 MB` | `64 KiB` | `65 MB` | `260 MB` | `520 MB` |
 
@@ -903,12 +909,12 @@ config knob to adjust.
 |---|---|---|---|
 | High `recovery_cycle` count per session | Upstream instability or stall threshold too low | `STALL_DETECT`, `STALL_HARD_DEADLINE` | `4s`, `32s` |
 | Subscriber disconnects during recovery | No keepalive filler or wrong filler mode | `RECOVERY_FILLER_ENABLED`, `RECOVERY_FILLER_MODE` | `true`, `slate_av` |
-| Frequent 503 "channel tune backoff active" | Repeated channel startup failures triggering backoff gate | `TUNE_BACKOFF_MAX_TUNES`, `TUNE_BACKOFF_INTERVAL`, `STARTUP_TIMEOUT` | `8`, `1m`, `6s` |
+| Frequent 503 "channel tune backoff active" | Repeated channel startup failures triggering backoff gate | `TUNE_BACKOFF_MAX_TUNES`, `TUNE_BACKOFF_INTERVAL`, `STARTUP_TIMEOUT` | `8`, `1m`, `12s` |
 | Log: `provider overlimit cooldown` | HTTP 429 from upstream provider | `UPSTREAM_OVERLIMIT_COOLDOWN` | `3s` |
 | Log: `stream subscriber disconnected due to lag` | Slow client falling behind ring buffer | `SUBSCRIBER_SLOW_CLIENT_POLICY`, `SUBSCRIBER_MAX_BLOCKED_WRITE` | `disconnect`, `6s` |
-| High `slow_skip_events_total` or repeated `shared session subscriber lag skip` logs | Clients frequently fall behind but skip policy keeps sessions alive by dropping chunks | `SUBSCRIBER_SLOW_CLIENT_POLICY`, `SUBSCRIBER_JOIN_LAG_BYTES`, `SUBSCRIBER_MAX_BLOCKED_WRITE` | `disconnect`, `2 MB`, `6s` |
+| High `slow_skip_events_total` or repeated `shared session subscriber lag skip` logs | Clients frequently fall behind but skip policy keeps sessions alive by dropping chunks | `SUBSCRIBER_SLOW_CLIENT_POLICY`, `SUBSCRIBER_JOIN_LAG_BYTES`, `SUBSCRIBER_MAX_BLOCKED_WRITE` | `disconnect`, `8 MB`, `6s` |
 | High `same_source_reselect_count` | Single-source channels cycling on the same source | `STALL_POLICY`, `STALL_MAX_FAILOVERS_PER_STALL` | `failover_source`, `3` |
-| Startup failures / `reason: deadline` | Source too slow to deliver probe bytes in time | `STARTUP_TIMEOUT`, `MIN_PROBE_BYTES` | `6s`, `940` |
+| Startup failures / `reason: deadline` | Source too slow to deliver probe bytes in time | `STARTUP_TIMEOUT`, `MIN_PROBE_BYTES` | `12s`, `940` |
 | `recovery_keepalive_guardrail_count` incrementing | Filler output exceeding realtime pacing envelope | `RECOVERY_FILLER_MODE`, `RECOVERY_FILLER_INTERVAL` (null/psi only) | `slate_av`, `200ms` |
 | All tuners busy / `ErrNoTunersAvailable` | Concurrent demand exceeds tuner pool | `TUNER_COUNT` | `2` |
 | Sessions closing immediately after idle | Idle timeout too aggressive for bursty viewing | `SESSION_IDLE_TIMEOUT` | `5s` |
@@ -969,7 +975,7 @@ config knob to adjust.
   `SUBSCRIBER_SLOW_CLIENT_POLICY=skip` (drops chunks the client missed
   rather than disconnecting). Increase `SUBSCRIBER_MAX_BLOCKED_WRITE`
   (default `6s`) to give clients more time per chunk write. Increase
-  `SUBSCRIBER_JOIN_LAG_BYTES` (default `2 MB`) to widen the ring buffer
+  `SUBSCRIBER_JOIN_LAG_BYTES` (default `8 MB`) to widen the ring buffer
   window.
 
 ### Bounded Close Telemetry (`closeWithTimeout`)

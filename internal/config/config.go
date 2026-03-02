@@ -19,6 +19,8 @@ const (
 
 	defaultUPnPContentDirectoryUpdateIDCacheTTL = time.Second
 	defaultDVRLineupReloadTimeout               = 30 * time.Second
+	defaultTraditionalGuideStart                = 100
+	dynamicGuideStart                           = 10000
 	maxFFmpegInputBufferSize                    = 64 << 20
 
 	defaultCatalogSearchMaxTerms      = 12
@@ -28,11 +30,16 @@ const (
 	maxCatalogSearchMaxDisjunctsLimit = 128
 	maxCatalogSearchMaxTermRunesLimit = 256
 
-	defaultRecoveryFillerText           = "Channel recovering..."
-	defaultFFmpegStartupProbeSizeBytes  = 1_000_000
-	defaultFFmpegStartupAnalyzeDuration = 1500 * time.Millisecond
-	minFFmpegStartupProbeSizeBytes      = 128_000
-	minFFmpegStartupAnalyzeDuration     = 1 * time.Second
+	defaultRecoveryFillerText                   = "Channel recovering..."
+	defaultFFmpegStartupProbeSizeBytes          = 1_000_000
+	defaultFFmpegStartupAnalyzeDuration         = 1500 * time.Millisecond
+	defaultFFmpegRWTimeout                      = 3 * time.Second
+	defaultFFmpegSourceLogLevel                 = "warning"
+	defaultFFmpegSourceStderrLogLevel           = "info"
+	defaultFFmpegSourceStderrMaxLineBytes       = 2048
+	defaultFFmpegSourceStderrPassthroughEnabled = true
+	minFFmpegStartupProbeSizeBytes              = 128_000
+	minFFmpegStartupAnalyzeDuration             = 1 * time.Second
 )
 
 // Config carries runtime settings from CLI flags and environment variables.
@@ -48,6 +55,7 @@ type Config struct {
 	UPnPMaxAge                           time.Duration
 	UPnPContentDirectoryUpdateIDCacheTTL time.Duration
 	TunerCount                           int
+	TraditionalGuideStart                int
 	FriendlyName                         string
 	DeviceID                             string
 	DeviceAuth                           string
@@ -66,11 +74,16 @@ type Config struct {
 	FFmpegReconnectDelayMax              time.Duration
 	FFmpegReconnectMaxRetries            int
 	FFmpegReconnectHTTPErrors            string
+	FFmpegRWTimeout                      time.Duration
 	FFmpegStartupProbeSize               int
 	FFmpegStartupAnalyzeDuration         time.Duration
 	FFmpegInputBufferSize                int
 	FFmpegDiscardCorrupt                 bool
 	FFmpegCopyRegenerateTimestamps       bool
+	FFmpegSourceLogLevel                 string
+	FFmpegSourceStderrPassthroughEnabled bool
+	FFmpegSourceStderrLogLevel           string
+	FFmpegSourceStderrMaxLineBytes       int
 	ProducerReadRate                     float64
 	ProducerReadRateCatchup              float64
 	ProducerInitialBurst                 int
@@ -134,6 +147,7 @@ type RedactedConfig struct {
 	UPnPMaxAge                           string   `json:"upnp_max_age"`
 	UPnPContentDirectoryUpdateIDCacheTTL string   `json:"upnp_content_directory_update_id_cache_ttl"`
 	TunerCount                           int      `json:"tuner_count"`
+	TraditionalGuideStart                int      `json:"traditional_guide_start"`
 	FriendlyName                         string   `json:"friendly_name"`
 	DeviceID                             string   `json:"device_id"`
 	DeviceAuthConfigured                 bool     `json:"device_auth_configured"`
@@ -152,11 +166,16 @@ type RedactedConfig struct {
 	FFmpegReconnectDelayMax              string   `json:"ffmpeg_reconnect_delay_max"`
 	FFmpegReconnectMaxRetries            int      `json:"ffmpeg_reconnect_max_retries"`
 	FFmpegReconnectHTTPErrors            string   `json:"ffmpeg_reconnect_http_errors"`
+	FFmpegRWTimeout                      string   `json:"ffmpeg_rw_timeout"`
 	FFmpegStartupProbeSize               int      `json:"ffmpeg_startup_probesize"`
 	FFmpegStartupAnalyzeDuration         string   `json:"ffmpeg_startup_analyzeduration"`
 	FFmpegInputBufferSize                int      `json:"ffmpeg_input_buffer_size"`
 	FFmpegDiscardCorrupt                 bool     `json:"ffmpeg_discard_corrupt"`
 	FFmpegCopyRegenerateTimestamps       bool     `json:"ffmpeg_copy_regenerate_timestamps"`
+	FFmpegSourceLogLevel                 string   `json:"ffmpeg_source_log_level"`
+	FFmpegSourceStderrPassthroughEnabled bool     `json:"ffmpeg_source_stderr_passthrough_enabled"`
+	FFmpegSourceStderrLogLevel           string   `json:"ffmpeg_source_stderr_log_level"`
+	FFmpegSourceStderrMaxLineBytes       int      `json:"ffmpeg_source_stderr_max_line_bytes"`
 	ProducerReadRate                     string   `json:"producer_readrate"`
 	ProducerReadRateCatchup              string   `json:"producer_readrate_catchup"`
 	ProducerInitialBurst                 int      `json:"producer_initial_burst"`
@@ -220,6 +239,7 @@ func (c Config) Redacted() RedactedConfig {
 		UPnPMaxAge:                           c.UPnPMaxAge.String(),
 		UPnPContentDirectoryUpdateIDCacheTTL: c.UPnPContentDirectoryUpdateIDCacheTTL.String(),
 		TunerCount:                           c.TunerCount,
+		TraditionalGuideStart:                c.TraditionalGuideStart,
 		FriendlyName:                         c.FriendlyName,
 		DeviceID:                             c.DeviceID,
 		DeviceAuthConfigured:                 strings.TrimSpace(c.DeviceAuth) != "",
@@ -238,11 +258,16 @@ func (c Config) Redacted() RedactedConfig {
 		FFmpegReconnectDelayMax:              c.FFmpegReconnectDelayMax.String(),
 		FFmpegReconnectMaxRetries:            c.FFmpegReconnectMaxRetries,
 		FFmpegReconnectHTTPErrors:            c.FFmpegReconnectHTTPErrors,
+		FFmpegRWTimeout:                      c.FFmpegRWTimeout.String(),
 		FFmpegStartupProbeSize:               c.FFmpegStartupProbeSize,
 		FFmpegStartupAnalyzeDuration:         c.FFmpegStartupAnalyzeDuration.String(),
 		FFmpegInputBufferSize:                c.FFmpegInputBufferSize,
 		FFmpegDiscardCorrupt:                 c.FFmpegDiscardCorrupt,
 		FFmpegCopyRegenerateTimestamps:       c.FFmpegCopyRegenerateTimestamps,
+		FFmpegSourceLogLevel:                 c.FFmpegSourceLogLevel,
+		FFmpegSourceStderrPassthroughEnabled: c.FFmpegSourceStderrPassthroughEnabled,
+		FFmpegSourceStderrLogLevel:           c.FFmpegSourceStderrLogLevel,
+		FFmpegSourceStderrMaxLineBytes:       c.FFmpegSourceStderrMaxLineBytes,
 		ProducerReadRate:                     strconv.FormatFloat(c.ProducerReadRate, 'f', -1, 64),
 		ProducerReadRateCatchup:              strconv.FormatFloat(c.ProducerReadRateCatchup, 'f', -1, 64),
 		ProducerInitialBurst:                 c.ProducerInitialBurst,
@@ -319,6 +344,7 @@ func Load(args []string) (Config, error) {
 		UPnPMaxAge:                           getenvDuration("UPNP_MAX_AGE", 30*time.Minute),
 		UPnPContentDirectoryUpdateIDCacheTTL: getenvDuration("UPNP_CONTENT_DIRECTORY_UPDATE_ID_CACHE_TTL", defaultUPnPContentDirectoryUpdateIDCacheTTL),
 		TunerCount:                           getenvInt("TUNER_COUNT", 2),
+		TraditionalGuideStart:                getenvInt("TRADITIONAL_GUIDE_START", defaultTraditionalGuideStart),
 		FriendlyName:                         getenv("FRIENDLY_NAME", "HDHR IPTV"),
 		DeviceID:                             getenv("DEVICE_ID", ""),
 		DeviceAuth:                           getenv("DEVICE_AUTH", ""),
@@ -327,27 +353,32 @@ func Load(args []string) (Config, error) {
 		FFmpegPath:                           getenv("FFMPEG_PATH", "ffmpeg"),
 		FFprobePath:                          getenv("FFPROBE_PATH", "ffprobe"),
 		StreamMode:                           getenv("STREAM_MODE", streamModeFFmpegCopy),
-		StartupTimeout:                       getenvDuration("STARTUP_TIMEOUT", 6*time.Second),
+		StartupTimeout:                       getenvDuration("STARTUP_TIMEOUT", 12*time.Second),
 		StartupRandomAccessRecoveryOnly:      getenvBool("STARTUP_RANDOM_ACCESS_RECOVERY_ONLY", true),
 		MinProbeBytes:                        getenvInt("MIN_PROBE_BYTES", 940),
 		MaxFailovers:                         getenvInt("MAX_FAILOVERS", 3),
 		FailoverTotalTimeout:                 getenvDuration("FAILOVER_TOTAL_TIMEOUT", 32*time.Second),
 		UpstreamOverlimitCooldown:            getenvDuration("UPSTREAM_OVERLIMIT_COOLDOWN", 3*time.Second),
-		FFmpegReconnectEnabled:               getenvBool("FFMPEG_RECONNECT_ENABLED", false),
+		FFmpegReconnectEnabled:               getenvBool("FFMPEG_RECONNECT_ENABLED", true),
 		FFmpegReconnectDelayMax:              getenvDuration("FFMPEG_RECONNECT_DELAY_MAX", 3*time.Second),
 		FFmpegReconnectMaxRetries:            getenvInt("FFMPEG_RECONNECT_MAX_RETRIES", 1),
 		FFmpegReconnectHTTPErrors:            getenv("FFMPEG_RECONNECT_HTTP_ERRORS", ""),
+		FFmpegRWTimeout:                      getenvDuration("FFMPEG_RW_TIMEOUT", defaultFFmpegRWTimeout),
 		FFmpegStartupProbeSize:               getenvInt("FFMPEG_STARTUP_PROBESIZE_BYTES", defaultFFmpegStartupProbeSizeBytes),
 		FFmpegStartupAnalyzeDuration:         getenvDuration("FFMPEG_STARTUP_ANALYZEDURATION", defaultFFmpegStartupAnalyzeDuration),
 		FFmpegInputBufferSize:                getenvInt("FFMPEG_INPUT_BUFFER_SIZE", 0),
-		FFmpegDiscardCorrupt:                 getenvBool("FFMPEG_DISCARD_CORRUPT", false),
+		FFmpegDiscardCorrupt:                 getenvBool("FFMPEG_DISCARD_CORRUPT", true),
 		FFmpegCopyRegenerateTimestamps:       getenvBool("FFMPEG_COPY_REGENERATE_TIMESTAMPS", true),
+		FFmpegSourceLogLevel:                 getenv("FFMPEG_SOURCE_LOG_LEVEL", defaultFFmpegSourceLogLevel),
+		FFmpegSourceStderrPassthroughEnabled: getenvBool("FFMPEG_SOURCE_STDERR_PASSTHROUGH_ENABLED", defaultFFmpegSourceStderrPassthroughEnabled),
+		FFmpegSourceStderrLogLevel:           getenv("FFMPEG_SOURCE_STDERR_LOG_LEVEL", defaultFFmpegSourceStderrLogLevel),
+		FFmpegSourceStderrMaxLineBytes:       getenvInt("FFMPEG_SOURCE_STDERR_MAX_LINE_BYTES", defaultFFmpegSourceStderrMaxLineBytes),
 		ProducerReadRate:                     getenvFloat("PRODUCER_READRATE", 1),
-		ProducerReadRateCatchup:              getenvFloat("PRODUCER_READRATE_CATCHUP", 1),
-		ProducerInitialBurst:                 getenvInt("PRODUCER_INITIAL_BURST", 1),
+		ProducerReadRateCatchup:              getenvFloat("PRODUCER_READRATE_CATCHUP", 1.75),
+		ProducerInitialBurst:                 getenvInt("PRODUCER_INITIAL_BURST", 10),
 		BufferChunkBytes:                     getenvInt("BUFFER_CHUNK_BYTES", 64*1024),
-		BufferFlushInterval:                  getenvDuration("BUFFER_PUBLISH_FLUSH_INTERVAL", 100*time.Millisecond),
-		BufferTSAlign188:                     getenvBool("BUFFER_TS_ALIGN_188", false),
+		BufferFlushInterval:                  getenvDuration("BUFFER_PUBLISH_FLUSH_INTERVAL", 20*time.Millisecond),
+		BufferTSAlign188:                     getenvBool("BUFFER_TS_ALIGN_188", true),
 		StallDetect:                          getenvDuration("STALL_DETECT", 4*time.Second),
 		StallHardDeadline:                    getenvDuration("STALL_HARD_DEADLINE", 32*time.Second),
 		StallPolicy:                          getenv("STALL_POLICY", "failover_source"),
@@ -358,7 +389,7 @@ func Load(args []string) (Config, error) {
 		RecoveryFillerInterval:               getenvDuration("RECOVERY_FILLER_INTERVAL", 200*time.Millisecond),
 		RecoveryFillerText:                   getenv("RECOVERY_FILLER_TEXT", defaultRecoveryFillerText),
 		RecoveryFillerEnableAudio:            getenvBool("RECOVERY_FILLER_ENABLE_AUDIO", true),
-		SubscriberJoinLag:                    getenvInt("SUBSCRIBER_JOIN_LAG_BYTES", 2*1024*1024),
+		SubscriberJoinLag:                    getenvInt("SUBSCRIBER_JOIN_LAG_BYTES", 8*1024*1024),
 		SubscriberSlowPolicy:                 getenv("SUBSCRIBER_SLOW_CLIENT_POLICY", "disconnect"),
 		SubscriberMaxBlocked:                 getenvDuration("SUBSCRIBER_MAX_BLOCKED_WRITE", 6*time.Second),
 		SessionIdleTimeout:                   getenvDuration("SESSION_IDLE_TIMEOUT", 5*time.Second),
@@ -403,6 +434,7 @@ func Load(args []string) (Config, error) {
 	fs.DurationVar(&cfg.UPnPMaxAge, "upnp-max-age", cfg.UPnPMaxAge, "UPnP SSDP max-age advertised in CACHE-CONTROL")
 	fs.DurationVar(&cfg.UPnPContentDirectoryUpdateIDCacheTTL, "upnp-content-directory-update-id-cache-ttl", cfg.UPnPContentDirectoryUpdateIDCacheTTL, "UPnP ContentDirectory GetSystemUpdateID cache TTL")
 	fs.IntVar(&cfg.TunerCount, "tuner-count", cfg.TunerCount, "Number of emulated tuners")
+	fs.IntVar(&cfg.TraditionalGuideStart, "traditional-guide-start", cfg.TraditionalGuideStart, "First guide number used when assigning traditional channels")
 	fs.StringVar(&cfg.FriendlyName, "friendly-name", cfg.FriendlyName, "Device friendly name")
 	fs.StringVar(&cfg.DeviceID, "device-id", cfg.DeviceID, "8 hex character device ID")
 	fs.StringVar(&cfg.DeviceAuth, "device-auth", cfg.DeviceAuth, "Device auth token")
@@ -422,11 +454,16 @@ func Load(args []string) (Config, error) {
 	fs.DurationVar(&cfg.FFmpegReconnectDelayMax, "ffmpeg-reconnect-delay-max", cfg.FFmpegReconnectDelayMax, "Maximum ffmpeg reconnect delay between attempts for ffmpeg stream modes")
 	fs.IntVar(&cfg.FFmpegReconnectMaxRetries, "ffmpeg-reconnect-max-retries", cfg.FFmpegReconnectMaxRetries, "Maximum ffmpeg reconnect attempts per input URL (-1 uses ffmpeg defaults/unlimited)")
 	fs.StringVar(&cfg.FFmpegReconnectHTTPErrors, "ffmpeg-reconnect-http-errors", cfg.FFmpegReconnectHTTPErrors, "Comma-separated HTTP classes/codes for ffmpeg reconnect_on_http_error (for example 404,429,5xx)")
+	fs.DurationVar(&cfg.FFmpegRWTimeout, "ffmpeg-rw-timeout", cfg.FFmpegRWTimeout, "FFmpeg input rw_timeout for I/O operations in ffmpeg stream modes (0 disables)")
 	fs.IntVar(&cfg.FFmpegStartupProbeSize, "ffmpeg-startup-probesize-bytes", cfg.FFmpegStartupProbeSize, "FFmpeg input probesize in bytes used during startup analysis for ffmpeg stream modes (runtime floor applies)")
 	fs.DurationVar(&cfg.FFmpegStartupAnalyzeDuration, "ffmpeg-startup-analyzeduration", cfg.FFmpegStartupAnalyzeDuration, "FFmpeg input analyzeduration during startup for ffmpeg stream modes (runtime floor applies)")
 	fs.IntVar(&cfg.FFmpegInputBufferSize, "ffmpeg-input-buffer-size", cfg.FFmpegInputBufferSize, "FFmpeg input buffer size in bytes for ffmpeg stream modes (0 disables, max 64 MiB)")
 	fs.BoolVar(&cfg.FFmpegDiscardCorrupt, "ffmpeg-discard-corrupt", cfg.FFmpegDiscardCorrupt, "Enable ffmpeg input discard-corrupt handling using -fflags +discardcorrupt")
 	fs.BoolVar(&cfg.FFmpegCopyRegenerateTimestamps, "ffmpeg-copy-regenerate-timestamps", cfg.FFmpegCopyRegenerateTimestamps, "Enable ffmpeg-copy timestamp regeneration using -fflags +genpts")
+	fs.StringVar(&cfg.FFmpegSourceLogLevel, "ffmpeg-source-log-level", cfg.FFmpegSourceLogLevel, "Source-session ffmpeg input log level: error|warning|info|debug")
+	fs.BoolVar(&cfg.FFmpegSourceStderrPassthroughEnabled, "ffmpeg-source-stderr-passthrough-enabled", cfg.FFmpegSourceStderrPassthroughEnabled, "Emit source-session ffmpeg stderr lines into application logs")
+	fs.StringVar(&cfg.FFmpegSourceStderrLogLevel, "ffmpeg-source-stderr-log-level", cfg.FFmpegSourceStderrLogLevel, "Application log level for source-session ffmpeg stderr pass-through: debug|info|warn")
+	fs.IntVar(&cfg.FFmpegSourceStderrMaxLineBytes, "ffmpeg-source-stderr-max-line-bytes", cfg.FFmpegSourceStderrMaxLineBytes, "Maximum bytes retained per source-session ffmpeg stderr line before truncation")
 	fs.Float64Var(&cfg.ProducerReadRate, "producer-readrate", cfg.ProducerReadRate, "FFmpeg producer readrate value for shared sessions")
 	fs.Float64Var(&cfg.ProducerReadRateCatchup, "producer-readrate-catchup", cfg.ProducerReadRateCatchup, "FFmpeg producer catch-up readrate value for shared sessions (-readrate_catchup)")
 	fs.IntVar(&cfg.ProducerInitialBurst, "producer-initial-burst", cfg.ProducerInitialBurst, "FFmpeg producer initial burst seconds for shared sessions")
@@ -475,7 +512,7 @@ func Load(args []string) (Config, error) {
 	fs.BoolVar(&cfg.EnableMetrics, "enable-metrics", cfg.EnableMetrics, "Expose Prometheus metrics endpoint at /metrics")
 	fs.BoolVar(&cfg.HTTPRequestLogEnabled, "http-request-log-enabled", cfg.HTTPRequestLogEnabled, "Enable per-request HTTP access logs")
 	fs.StringVar(&cfg.LogDir, "log-dir", cfg.LogDir, "Directory for startup timestamped log files")
-	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: debug|info|warn|error")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Log level: trace|debug|info|warn|error")
 
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
@@ -528,6 +565,8 @@ func (c *Config) normalize() error {
 	c.SubscriberSlowPolicy = strings.ToLower(strings.TrimSpace(c.SubscriberSlowPolicy))
 	c.AutoPrioritizeWorkers = strings.ToLower(strings.TrimSpace(c.AutoPrioritizeWorkers))
 	c.LogLevel = strings.ToLower(strings.TrimSpace(c.LogLevel))
+	c.FFmpegSourceLogLevel = normalizeFFmpegSourceLogLevel(c.FFmpegSourceLogLevel)
+	c.FFmpegSourceStderrLogLevel = normalizeFFmpegSourceStderrLogLevel(c.FFmpegSourceStderrLogLevel)
 
 	normalizedTrustedProxies, err := normalizeTrustedProxyCIDRs(c.RateLimitTrustedProxies)
 	if err != nil {
@@ -574,6 +613,12 @@ func (c *Config) normalize() error {
 	if c.TunerCount < 1 {
 		return fmt.Errorf("tuner-count must be at least 1")
 	}
+	if c.TraditionalGuideStart < 1 {
+		return fmt.Errorf("traditional-guide-start must be at least 1")
+	}
+	if c.TraditionalGuideStart >= dynamicGuideStart {
+		return fmt.Errorf("traditional-guide-start must be less than %d", dynamicGuideStart)
+	}
 	if c.UPnPNotifyInterval < 0 {
 		return fmt.Errorf("upnp-notify-interval must be zero or positive")
 	}
@@ -609,6 +654,9 @@ func (c *Config) normalize() error {
 	if c.FFmpegReconnectMaxRetries < -1 {
 		return fmt.Errorf("ffmpeg-reconnect-max-retries must be -1 or greater")
 	}
+	if c.FFmpegRWTimeout < 0 {
+		return fmt.Errorf("ffmpeg-rw-timeout must be zero or positive")
+	}
 	if c.FFmpegInputBufferSize < 0 {
 		return fmt.Errorf("ffmpeg-input-buffer-size must be zero or positive")
 	}
@@ -617,6 +665,19 @@ func (c *Config) normalize() error {
 			"ffmpeg-input-buffer-size must be less than or equal to %d bytes (64 MiB)",
 			maxFFmpegInputBufferSize,
 		)
+	}
+	if c.FFmpegSourceStderrMaxLineBytes <= 0 {
+		return fmt.Errorf("ffmpeg-source-stderr-max-line-bytes must be positive")
+	}
+	switch c.FFmpegSourceLogLevel {
+	case "error", "warning", "info", "debug":
+	default:
+		return fmt.Errorf("invalid ffmpeg-source-log-level %q", c.FFmpegSourceLogLevel)
+	}
+	switch c.FFmpegSourceStderrLogLevel {
+	case "debug", "info", "warn":
+	default:
+		return fmt.Errorf("invalid ffmpeg-source-stderr-log-level %q", c.FFmpegSourceStderrLogLevel)
 	}
 	if c.ProducerReadRate <= 0 {
 		return fmt.Errorf("producer-readrate must be positive")
@@ -794,11 +855,43 @@ func (c *Config) normalize() error {
 		c.DeviceID = strings.ToUpper(c.DeviceID)
 	}
 
-	if c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
+	if c.LogLevel != "trace" && c.LogLevel != "debug" && c.LogLevel != "info" && c.LogLevel != "warn" && c.LogLevel != "error" {
 		return fmt.Errorf("invalid log-level %q", c.LogLevel)
 	}
 
 	return nil
+}
+
+func normalizeFFmpegSourceLogLevel(v string) string {
+	normalized := strings.ToLower(strings.TrimSpace(v))
+	switch normalized {
+	case "error":
+		return "error"
+	case "warning", "warn":
+		return "warning"
+	case "info":
+		return "info"
+	case "debug":
+		return "debug"
+	case "":
+		return defaultFFmpegSourceLogLevel
+	default:
+		return normalized
+	}
+}
+
+func normalizeFFmpegSourceStderrLogLevel(v string) string {
+	normalized := strings.ToLower(strings.TrimSpace(v))
+	switch normalized {
+	case "debug":
+		return "debug"
+	case "warn", "warning":
+		return "warn"
+	case "", "info":
+		return "info"
+	default:
+		return normalized
+	}
 }
 
 func normalizeFFmpegStartupProbeSize(v int) int {

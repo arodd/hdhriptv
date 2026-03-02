@@ -5426,6 +5426,12 @@ func TestAdminRoutesTunerStatusResolveIPLogsCacheStats(t *testing.T) {
 		t.Fatalf("NewAdminHandler() error = %v", err)
 	}
 	handler.resolveClientHostCacheTTL = 2 * time.Minute
+	handler.resolveClientHostSummaryLogInterval = 10 * time.Second
+
+	now := time.Unix(1_700_000_600, 0).UTC()
+	handler.resolveClientHostSummaryNow = func() time.Time {
+		return now
+	}
 
 	var logBuffer bytes.Buffer
 	handler.SetLogger(slog.New(slog.NewTextHandler(&logBuffer, &slog.HandlerOptions{Level: slog.LevelDebug})))
@@ -5453,21 +5459,34 @@ func TestAdminRoutesTunerStatusResolveIPLogsCacheStats(t *testing.T) {
 
 	var first stream.TunerStatusSnapshot
 	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &first)
+	now = now.Add(5 * time.Second)
 	var second stream.TunerStatusSnapshot
 	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &second)
+	now = now.Add(6 * time.Second)
+	var third stream.TunerStatusSnapshot
+	doJSON(t, mux, http.MethodGet, "/api/admin/tuners?resolve_ip=1", nil, http.StatusOK, &third)
 
 	logText := logBuffer.String()
-	if !strings.Contains(logText, "admin tuner resolve_ip completed") {
-		t.Fatalf("logs = %q, want resolve_ip completion debug event", logText)
+	if strings.Count(logText, "admin tuner resolve_ip summary") != 1 {
+		t.Fatalf("logs = %q, want exactly one periodic resolve_ip summary event", logText)
+	}
+	if strings.Contains(logText, "admin tuner resolve_ip completed") {
+		t.Fatalf("logs = %q, did not expect per-request resolve_ip completion event", logText)
+	}
+	if !strings.Contains(logText, "resolve_requests=3") {
+		t.Fatalf("logs = %q, want resolve_requests=3 in periodic summary", logText)
 	}
 	if !strings.Contains(logText, "cache_hit_rate=") {
 		t.Fatalf("logs = %q, want cache hit-rate field", logText)
 	}
-	if !strings.Contains(logText, "cache_hits=1") {
-		t.Fatalf("logs = %q, want cache_hits=1 after warm-cache request", logText)
+	if !strings.Contains(logText, "cache_hits=2") {
+		t.Fatalf("logs = %q, want cache_hits=2 across aggregated summary window", logText)
 	}
 	if !strings.Contains(logText, "cache_misses=1") {
 		t.Fatalf("logs = %q, want cache_misses=1 for initial cold-cache request", logText)
+	}
+	if !strings.Contains(logText, "lookup_calls=1") {
+		t.Fatalf("logs = %q, want lookup_calls=1 across aggregated summary window", logText)
 	}
 }
 

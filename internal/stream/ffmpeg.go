@@ -52,14 +52,27 @@ func (e *sourceStartupError) Unwrap() error {
 
 var upstreamStatusPattern = regexp.MustCompile(`(?i)(?:upstream returned status|http error|server returned)\s+([45][0-9]{2})(?:\b|:)`)
 
+var (
+	ffmpegStderrURLPattern    = regexp.MustCompile(`(?i)\b(?:https?|rtsp|rtsps|udp|tcp|srt|ftp)://[^\s"'<>]+`)
+	ffmpegStderrTokenPattern  = regexp.MustCompile(`(?i)\b(token|access_token|refresh_token|api[_-]?key|auth(?:orization)?|password|passwd|signature|sig)=([^\s&]+)`)
+	ffmpegStderrBearerPattern = regexp.MustCompile(`(?i)(authorization:\s*bearer\s+)([^\s,;]+)`)
+)
+
 const (
 	defaultFFmpegReconnectEnabled         = false
 	defaultFFmpegReconnectDelayMax        = 3 * time.Second
 	defaultFFmpegReconnectMaxRetries      = 1
 	defaultFFmpegReconnectHTTPErrors      = ""
+	defaultFFmpegRWTimeout                = 0
 	defaultFFmpegCopyRegenerateTimestamps = true
+	defaultFFmpegInputLogLevel            = "error"
+	defaultFFmpegSourceSessionLogLevel    = "warning"
+	defaultFFmpegSourceStderrLineBytes    = 2048
+	defaultFFmpegSourceStderrLogLevel     = slog.LevelInfo
+	defaultFFmpegSourceStderrPassthrough  = true
 	ffmpegReadrateInitialBurstOption      = "-readrate_initial_burst"
 	ffmpegReadrateCatchupOption           = "-readrate_catchup"
+	ffmpegRWTimeoutOption                 = "-rw_timeout"
 	ffmpegInputBufferSizeOption           = "-buffer_size"
 	ffmpegInputFlagsOption                = "-fflags"
 	ffmpegOutputTSOffsetOption            = "-output_ts_offset"
@@ -808,6 +821,7 @@ type streamSession struct {
 	startupInventory                 startupStreamInventory
 	startupNoInitialBurstFallback    bool
 	startupNoReadrateCatchupFallback bool
+	startupNoInputBufferSizeFallback bool
 	startupRetryRelaxedProbe         bool
 	startupRetryRelaxedProbeToken    string
 	abortFn                          func()
@@ -1261,11 +1275,30 @@ type ffmpegStartupOptions struct {
 	reconnectDelayMax      time.Duration
 	reconnectMaxRetries    int
 	reconnectHTTPErrors    string
+	rwTimeout              time.Duration
 	copyRegenerateTS       bool
 	outputTSOffset         time.Duration
 	inputBufferSize        int
 	discardCorrupt         bool
 	requireRandomAccess    bool
+	sourceLogLevel         string
+	stderrLogging          ffmpegSourceStderrLoggingOptions
+}
+
+type ffmpegSourceStderrLogContext struct {
+	channelID   int64
+	guideNumber string
+	sourceID    int64
+	sourceURL   string
+	tunerID     int
+}
+
+type ffmpegSourceStderrLoggingOptions struct {
+	enabled      bool
+	logger       *slog.Logger
+	logLevel     slog.Level
+	maxLineBytes int
+	context      ffmpegSourceStderrLogContext
 }
 
 func (o ffmpegStartupOptions) withReadRateCatchup(readRateCatchup float64) ffmpegStartupOptions {
@@ -1286,6 +1319,11 @@ func (o ffmpegStartupOptions) withStartupDetection(startupProbeSize int, startup
 
 func (o ffmpegStartupOptions) withInitialBurst(initialBurst int) ffmpegStartupOptions {
 	o.initialBurst = initialBurst
+	return o
+}
+
+func (o ffmpegStartupOptions) withInputBufferSize(inputBufferSize int) ffmpegStartupOptions {
+	o.inputBufferSize = inputBufferSize
 	return o
 }
 
@@ -1321,8 +1359,10 @@ func startFFmpeg(
 			reconnectDelayMax:      reconnectDelayMax,
 			reconnectMaxRetries:    reconnectMaxRetries,
 			reconnectHTTPErrors:    reconnectHTTPErrors,
+			rwTimeout:              defaultFFmpegRWTimeout,
 			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
 			requireRandomAccess:    requireRandomAccess,
+			sourceLogLevel:         defaultFFmpegInputLogLevel,
 		},
 	)
 }
@@ -1360,8 +1400,10 @@ func startFFmpegWithContexts(
 			reconnectDelayMax:      reconnectDelayMax,
 			reconnectMaxRetries:    reconnectMaxRetries,
 			reconnectHTTPErrors:    reconnectHTTPErrors,
+			rwTimeout:              defaultFFmpegRWTimeout,
 			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
 			requireRandomAccess:    requireRandomAccess,
+			sourceLogLevel:         defaultFFmpegInputLogLevel,
 		},
 	)
 }
@@ -1467,8 +1509,10 @@ func startFFmpegOnce(
 			reconnectDelayMax:      reconnectDelayMax,
 			reconnectMaxRetries:    reconnectMaxRetries,
 			reconnectHTTPErrors:    reconnectHTTPErrors,
+			rwTimeout:              defaultFFmpegRWTimeout,
 			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
 			requireRandomAccess:    requireRandomAccess,
+			sourceLogLevel:         defaultFFmpegInputLogLevel,
 		},
 	)
 }
@@ -1506,8 +1550,10 @@ func startFFmpegOnceWithContexts(
 			reconnectDelayMax:      reconnectDelayMax,
 			reconnectMaxRetries:    reconnectMaxRetries,
 			reconnectHTTPErrors:    reconnectHTTPErrors,
+			rwTimeout:              defaultFFmpegRWTimeout,
 			copyRegenerateTS:       defaultFFmpegCopyRegenerateTimestamps,
 			requireRandomAccess:    requireRandomAccess,
+			sourceLogLevel:         defaultFFmpegInputLogLevel,
 		},
 	)
 }
@@ -1528,7 +1574,7 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 	startupCtx, streamCtx = normalizeStartupAndStreamContexts(startupCtx, streamCtx)
 	startedAt := time.Now()
 
-	args := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
+	args := ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffsetAndLogLevel(
 		opts.mode,
 		opts.upstreamURL,
 		opts.readRate,
@@ -1543,7 +1589,9 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 		opts.copyRegenerateTS,
 		opts.outputTSOffset,
 		opts.inputBufferSize,
+		opts.rwTimeout,
 		opts.discardCorrupt,
+		opts.sourceLogLevel,
 	)
 	if len(args) == 0 {
 		return nil, &streamFailure{
@@ -1566,7 +1614,12 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 	}
 
 	stderr := newBoundedTailBuffer(ffmpegStreamStderrCaptureMax)
-	cmd.Stderr = stderr
+	stderrPassThrough := newFFmpegStderrLineLogger(opts.mode, opts.stderrLogging)
+	if stderrPassThrough != nil {
+		cmd.Stderr = io.MultiWriter(stderr, stderrPassThrough)
+	} else {
+		cmd.Stderr = stderr
+	}
 
 	if err := cmd.Start(); err != nil {
 		if startupCtx.Err() != nil {
@@ -1594,7 +1647,7 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 	)
 	if err != nil {
 		killCommand(cmd)
-		waitErr := waitFFmpeg(cmd, stderr)
+		waitErr := waitFFmpeg(cmd, stderr, stderrPassThrough)
 		if waitErr != nil && !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 			if ffmpegReadrateInitialBurstUnsupported(waitErr) && ffmpegArgsContains(args, ffmpegReadrateInitialBurstOption) {
 				remaining := opts.startupTimeout
@@ -1621,6 +1674,23 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, fallbackOpts)
 					if fallbackErr == nil {
 						fallbackSession.startupNoReadrateCatchupFallback = true
+						return fallbackSession, nil
+					}
+					return nil, fallbackErr
+				}
+			}
+			if ffmpegInputBufferSizeUnsupported(waitErr) &&
+				opts.inputBufferSize > 0 &&
+				ffmpegArgsContains(args, ffmpegInputBufferSizeOption) {
+				remaining := opts.startupTimeout
+				if opts.startupTimeout > 0 {
+					remaining = opts.startupTimeout - time.Since(startedAt)
+				}
+				if remaining > 0 || opts.startupTimeout <= 0 {
+					fallbackOpts := opts.withStartupTimeout(remaining).withInputBufferSize(0)
+					fallbackSession, fallbackErr := startFFmpegOnceWithContextsConfiguredReadrateCatchup(startupCtx, streamCtx, fallbackOpts)
+					if fallbackErr == nil {
+						fallbackSession.startupNoInputBufferSizeFallback = true
 						return fallbackSession, nil
 					}
 					return nil, fallbackErr
@@ -1658,7 +1728,7 @@ func startFFmpegOnceWithContextsConfiguredReadrateCatchup(
 			killCommand(cmd)
 		},
 		waitFn: func() error {
-			return waitFFmpeg(cmd, stderr)
+			return waitFFmpeg(cmd, stderr, stderrPassThrough)
 		},
 	}, nil
 }
@@ -2776,11 +2846,20 @@ func killCommand(cmd *exec.Cmd) {
 	terminateFFmpegCommand(cmd)
 }
 
-func waitFFmpeg(cmd *exec.Cmd, stderr *boundedTailBuffer) error {
+type ffmpegLineFlushWriter interface {
+	Flush()
+}
+
+func waitFFmpeg(cmd *exec.Cmd, stderr *boundedTailBuffer, flushers ...ffmpegLineFlushWriter) error {
 	if cmd == nil {
 		return nil
 	}
 	err := cmd.Wait()
+	for _, flusher := range flushers {
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
 	if err == nil {
 		return nil
 	}
@@ -2812,6 +2891,17 @@ func ffmpegReadrateCatchupUnsupported(err error) bool {
 	}
 	msg := strings.ToLower(strings.TrimSpace(err.Error()))
 	if msg == "" || !strings.Contains(msg, "readrate_catchup") {
+		return false
+	}
+	return strings.Contains(msg, "unrecognized option") || strings.Contains(msg, "option not found")
+}
+
+func ffmpegInputBufferSizeUnsupported(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	if msg == "" || !strings.Contains(msg, "buffer_size") {
 		return false
 	}
 	return strings.Contains(msg, "unrecognized option") || strings.Contains(msg, "option not found")
@@ -2890,6 +2980,230 @@ func (b *boundedTailBuffer) Bytes() []byte {
 	out = append(out, prefix...)
 	out = append(out, b.buf...)
 	return out
+}
+
+type ffmpegStderrLoggedLine struct {
+	seq       uint64
+	line      string
+	truncated bool
+	loggedAt  string
+}
+
+type ffmpegStderrLineLogger struct {
+	logger       *slog.Logger
+	level        slog.Level
+	maxLineBytes int
+	mode         string
+	context      ffmpegSourceStderrLogContext
+
+	mu               sync.Mutex
+	pending          []byte
+	pendingTruncated bool
+	seq              uint64
+}
+
+func newFFmpegStderrLineLogger(mode string, opts ffmpegSourceStderrLoggingOptions) *ffmpegStderrLineLogger {
+	if !opts.enabled || opts.logger == nil {
+		return nil
+	}
+
+	maxLineBytes := opts.maxLineBytes
+	if maxLineBytes <= 0 {
+		maxLineBytes = defaultFFmpegSourceStderrLineBytes
+	}
+
+	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
+	if normalizedMode == "" {
+		normalizedMode = "ffmpeg"
+	}
+
+	ctx := opts.context
+	ctx.sourceURL = sanitizeStreamURLForLog(ctx.sourceURL)
+
+	level := opts.logLevel
+	switch level {
+	case slog.LevelDebug, slog.LevelInfo, slog.LevelWarn:
+	default:
+		level = defaultFFmpegSourceStderrLogLevel
+	}
+
+	return &ffmpegStderrLineLogger{
+		logger:       opts.logger,
+		level:        level,
+		maxLineBytes: maxLineBytes,
+		mode:         normalizedMode,
+		context:      ctx,
+	}
+}
+
+func (l *ffmpegStderrLineLogger) Write(p []byte) (int, error) {
+	if l == nil || len(p) == 0 {
+		return len(p), nil
+	}
+
+	lines := make([]ffmpegStderrLoggedLine, 0, 1)
+
+	l.mu.Lock()
+	remaining := p
+	for len(remaining) > 0 {
+		newline := bytes.IndexByte(remaining, '\n')
+		if newline < 0 {
+			l.appendSegmentLocked(remaining)
+			break
+		}
+
+		l.appendSegmentLocked(remaining[:newline])
+		lines = append(lines, l.emitLocked())
+		remaining = remaining[newline+1:]
+	}
+	l.mu.Unlock()
+
+	l.logLines(lines)
+	return len(p), nil
+}
+
+func (l *ffmpegStderrLineLogger) Flush() {
+	if l == nil {
+		return
+	}
+
+	var pendingLine *ffmpegStderrLoggedLine
+
+	l.mu.Lock()
+	if len(l.pending) > 0 || l.pendingTruncated {
+		emitted := l.emitLocked()
+		pendingLine = &emitted
+	}
+	l.mu.Unlock()
+
+	if pendingLine != nil {
+		l.logLines([]ffmpegStderrLoggedLine{*pendingLine})
+	}
+}
+
+func (l *ffmpegStderrLineLogger) appendSegmentLocked(segment []byte) {
+	if len(segment) == 0 {
+		return
+	}
+	if l.maxLineBytes <= 0 {
+		l.pendingTruncated = true
+		return
+	}
+	if l.pendingTruncated {
+		return
+	}
+
+	remaining := l.maxLineBytes - len(l.pending)
+	if remaining <= 0 {
+		l.pendingTruncated = true
+		return
+	}
+	if len(segment) > remaining {
+		l.pending = append(l.pending, segment[:remaining]...)
+		l.pendingTruncated = true
+		return
+	}
+	l.pending = append(l.pending, segment...)
+}
+
+func (l *ffmpegStderrLineLogger) emitLocked() ffmpegStderrLoggedLine {
+	lineBytes := l.pending
+	if len(lineBytes) > 0 && lineBytes[len(lineBytes)-1] == '\r' {
+		lineBytes = lineBytes[:len(lineBytes)-1]
+	}
+
+	l.seq++
+	emitted := ffmpegStderrLoggedLine{
+		seq:       l.seq,
+		line:      sanitizeFFmpegStderrLineForLog(string(lineBytes)),
+		truncated: l.pendingTruncated,
+		loggedAt:  time.Now().UTC().Format(time.RFC3339Nano),
+	}
+
+	l.pending = l.pending[:0]
+	l.pendingTruncated = false
+	return emitted
+}
+
+func (l *ffmpegStderrLineLogger) logLines(lines []ffmpegStderrLoggedLine) {
+	if l == nil || l.logger == nil || len(lines) == 0 {
+		return
+	}
+
+	for _, line := range lines {
+		attrs := make([]any, 0, 20)
+		attrs = append(attrs,
+			"ffmpeg_mode", l.mode,
+			"ffmpeg_stderr_seq", line.seq,
+			"ffmpeg_stderr_line", line.line,
+			"ffmpeg_stderr_line_truncated", line.truncated,
+			"ffmpeg_stderr_logged_at", line.loggedAt,
+		)
+		if l.context.channelID > 0 {
+			attrs = append(attrs, "channel_id", l.context.channelID)
+		}
+		if guideNumber := strings.TrimSpace(l.context.guideNumber); guideNumber != "" {
+			attrs = append(attrs, "guide_number", guideNumber)
+		}
+		if l.context.sourceID > 0 {
+			attrs = append(attrs, "source_id", l.context.sourceID)
+		}
+		if sourceURL := strings.TrimSpace(l.context.sourceURL); sourceURL != "" {
+			attrs = append(attrs, "source_url", sourceURL)
+		}
+		if l.context.tunerID >= 0 {
+			attrs = append(attrs, "tuner_id", l.context.tunerID)
+		}
+
+		l.logger.Log(context.Background(), l.level, "ffmpeg source stderr line", attrs...)
+	}
+}
+
+func sanitizeFFmpegStderrLineForLog(line string) string {
+	line = strings.TrimRight(line, "\r\n")
+	if line == "" {
+		return ""
+	}
+
+	sanitized := ffmpegStderrURLPattern.ReplaceAllStringFunc(line, sanitizeFFmpegURLTokenForLog)
+	sanitized = ffmpegStderrTokenPattern.ReplaceAllStringFunc(sanitized, func(token string) string {
+		sep := strings.IndexByte(token, '=')
+		if sep <= 0 {
+			return token
+		}
+		return token[:sep+1] + "<redacted>"
+	})
+	sanitized = ffmpegStderrBearerPattern.ReplaceAllString(sanitized, "${1}<redacted>")
+	return sanitized
+}
+
+func sanitizeFFmpegURLTokenForLog(raw string) string {
+	core, suffix := splitTrailingFFmpegURLPunctuation(raw)
+	if core == "" {
+		return raw
+	}
+	sanitized := sanitizeStreamURLForLog(core)
+	if strings.TrimSpace(sanitized) == "" {
+		sanitized = core
+	}
+	return sanitized + suffix
+}
+
+func splitTrailingFFmpegURLPunctuation(raw string) (string, string) {
+	if raw == "" {
+		return "", ""
+	}
+
+	trimmedLen := len(raw)
+	for trimmedLen > 0 {
+		switch raw[trimmedLen-1] {
+		case '.', ',', ';', ')', ']', '}', '"', '\'':
+			trimmedLen--
+		default:
+			return raw[:trimmedLen], raw[trimmedLen:]
+		}
+	}
+	return "", raw
 }
 
 func ffmpegArgs(
@@ -2974,6 +3288,7 @@ func ffmpegArgsWithCopyTimestampRegenerationAndOutputTSOffset(
 		copyRegenerateTimestamps,
 		outputTSOffset,
 		0,
+		defaultFFmpegRWTimeout,
 		false,
 	)
 }
@@ -2992,9 +3307,50 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 	copyRegenerateTimestamps bool,
 	outputTSOffset time.Duration,
 	inputBufferSize int,
+	rwTimeout time.Duration,
 	discardCorrupt bool,
 ) []string {
+	return ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffsetAndLogLevel(
+		mode,
+		upstreamURL,
+		readRate,
+		readRateCatchup,
+		initialBurst,
+		startupProbeSize,
+		startupAnalyzeDuration,
+		reconnectEnabled,
+		reconnectDelayMax,
+		reconnectMaxRetries,
+		reconnectHTTPErrors,
+		copyRegenerateTimestamps,
+		outputTSOffset,
+		inputBufferSize,
+		rwTimeout,
+		discardCorrupt,
+		defaultFFmpegInputLogLevel,
+	)
+}
+
+func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffsetAndLogLevel(
+	mode, upstreamURL string,
+	readRate float64,
+	readRateCatchup float64,
+	initialBurst int,
+	startupProbeSize int,
+	startupAnalyzeDuration time.Duration,
+	reconnectEnabled bool,
+	reconnectDelayMax time.Duration,
+	reconnectMaxRetries int,
+	reconnectHTTPErrors string,
+	copyRegenerateTimestamps bool,
+	outputTSOffset time.Duration,
+	inputBufferSize int,
+	rwTimeout time.Duration,
+	discardCorrupt bool,
+	sourceLogLevel string,
+) []string {
 	normalizedMode := strings.ToLower(strings.TrimSpace(mode))
+	normalizedLogLevel := normalizeFFmpegSourceLogLevel(sourceLogLevel, defaultFFmpegInputLogLevel)
 	readRateArg := formatReadRate(readRate)
 	includeReadrateCatchup := true
 	if readRateCatchup < 0 {
@@ -3012,7 +3368,7 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 
 	inputArgs := []string{
 		"-hide_banner",
-		"-loglevel", "error",
+		"-loglevel", normalizedLogLevel,
 		"-nostdin",
 		"-readrate", readRateArg,
 	}
@@ -3039,6 +3395,7 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 	)
+	inputArgs = appendFFmpegRWTimeoutInputArg(inputArgs, rwTimeout)
 	inputArgs = appendFFmpegInputFlagsArg(inputArgs, normalizedMode, copyRegenerateTimestamps, discardCorrupt)
 	inputArgs = append(inputArgs, "-i", upstreamURL)
 
@@ -3065,6 +3422,39 @@ func ffmpegArgsWithCopyTimestampRegenerationReadrateCatchupAndOutputTSOffset(
 		return append(inputArgs, outputArgs...)
 	default:
 		return nil
+	}
+}
+
+func normalizeFFmpegSourceLogLevel(configured string, fallback string) string {
+	normalized := strings.ToLower(strings.TrimSpace(configured))
+	switch normalized {
+	case "error", "warning", "info", "debug":
+		return normalized
+	case "warn":
+		return "warning"
+	}
+
+	normalizedFallback := strings.ToLower(strings.TrimSpace(fallback))
+	switch normalizedFallback {
+	case "error", "warning", "info", "debug":
+		return normalizedFallback
+	case "warn":
+		return "warning"
+	default:
+		return defaultFFmpegInputLogLevel
+	}
+}
+
+func normalizeFFmpegSourceStderrLogLevel(configured string) slog.Level {
+	switch strings.ToLower(strings.TrimSpace(configured)) {
+	case "debug":
+		return slog.LevelDebug
+	case "warn", "warning":
+		return slog.LevelWarn
+	case "", "info":
+		return slog.LevelInfo
+	default:
+		return defaultFFmpegSourceStderrLogLevel
 	}
 }
 
@@ -3134,6 +3524,14 @@ func appendFFmpegReconnectInputArgs(args []string, enabled bool, delayMax time.D
 	}
 	args = append(args, "-reconnect_delay_max", strconv.Itoa(ffmpegReconnectDelayMaxSeconds(delayMax)))
 	return args
+}
+
+func appendFFmpegRWTimeoutInputArg(args []string, rwTimeout time.Duration) []string {
+	micros := ffmpegAnalyzeDurationMicroseconds(rwTimeout)
+	if micros <= 0 {
+		return args
+	}
+	return append(args, ffmpegRWTimeoutOption, strconv.FormatInt(micros, 10))
 }
 
 func ffmpegReconnectDelayMaxSeconds(delayMax time.Duration) int {
@@ -3259,9 +3657,12 @@ func startSourceSession(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		0,
+		defaultFFmpegRWTimeout,
 		false,
 		defaultFFmpegCopyRegenerateTimestamps,
 		0,
+		defaultFFmpegInputLogLevel,
+		ffmpegSourceStderrLoggingOptions{},
 		requireRandomAccess,
 	)
 }
@@ -3305,9 +3706,12 @@ func startSourceSessionWithContexts(
 		reconnectMaxRetries,
 		reconnectHTTPErrors,
 		0,
+		defaultFFmpegRWTimeout,
 		false,
 		defaultFFmpegCopyRegenerateTimestamps,
 		0,
+		defaultFFmpegInputLogLevel,
+		ffmpegSourceStderrLoggingOptions{},
 		requireRandomAccess,
 	)
 }
@@ -3331,11 +3735,17 @@ func startSourceSessionWithContextsConfigured(
 	reconnectMaxRetries int,
 	reconnectHTTPErrors string,
 	inputBufferSize int,
+	rwTimeout time.Duration,
 	discardCorrupt bool,
 	copyRegenerateTimestamps bool,
 	outputTSOffset time.Duration,
+	sourceLogLevel string,
+	stderrLogging ffmpegSourceStderrLoggingOptions,
 	requireRandomAccess bool,
 ) (*streamSession, error) {
+	if rwTimeout < 0 {
+		rwTimeout = 0
+	}
 	switch mode {
 	case "direct":
 		return startDirectWithContexts(
@@ -3366,11 +3776,14 @@ func startSourceSessionWithContextsConfigured(
 				reconnectDelayMax:      reconnectDelayMax,
 				reconnectMaxRetries:    reconnectMaxRetries,
 				reconnectHTTPErrors:    reconnectHTTPErrors,
+				rwTimeout:              rwTimeout,
 				copyRegenerateTS:       copyRegenerateTimestamps,
 				outputTSOffset:         outputTSOffset,
 				inputBufferSize:        inputBufferSize,
 				discardCorrupt:         discardCorrupt,
 				requireRandomAccess:    requireRandomAccess,
+				sourceLogLevel:         sourceLogLevel,
+				stderrLogging:          stderrLogging,
 			},
 		)
 	default:

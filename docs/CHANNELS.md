@@ -33,13 +33,14 @@ API visibility, and lifecycle management.
 
 | Class | Constant | Guide Range | API Surface |
 |-------|----------|-------------|-------------|
-| `traditional` | `ChannelClassTraditional` | `100`–`9999` | `GET /api/channels`, `/ui/channels` |
+| `traditional` | `ChannelClassTraditional` | configurable start–`9999` | `GET /api/channels`, `/ui/channels` |
 | `dynamic_generated` | `ChannelClassDynamicGenerated` | `10000`+ | `GET /api/dynamic-channels/{queryID}/channels`, `/ui/dynamic-channels/{queryID}` |
 
 Traditional channels are created manually (or via dynamic source rules) and
-occupy contiguous guide numbers starting at `100`. Dynamic generated channels
-are materialized by dynamic block queries into reserved guide ranges starting
-at `10000`.
+occupy contiguous guide numbers starting at `100` by default. The start can be
+shifted via `--traditional-guide-start` / `TRADITIONAL_GUIDE_START`. Dynamic
+generated channels are materialized by dynamic block queries into reserved
+guide ranges starting at `10000`.
 
 `GET /api/channels` is scoped to `channel_class=traditional` only. Generated
 dynamic rows are surfaced under per-block endpoints.
@@ -49,7 +50,7 @@ dynamic rows are surfaced under per-block endpoints.
 ## Service Type
 
 `channels.Service` wraps a `Store` implementation and a `startGuideNumber`
-(default `TraditionalGuideStart = 100`).
+(default `TraditionalGuideStart = 100`, configurable in runtime wiring).
 
 ```go
 type Service struct {

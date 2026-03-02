@@ -92,7 +92,7 @@ All routes below are protected by Basic Auth when `ADMIN_AUTH` is configured.
 | `GET` | `/api/channels` | List traditional published channels (`100-9999`) including per-channel source summary fields (`source_total`, `source_enabled`, `source_dynamic`, `source_manual`) |
 | `POST` | `/api/channels` | Create published channel from `item_key` with optional `dynamic_rule` |
 | `PATCH` | `/api/channels/{channelID}` | Update channel (`guide_name`, `enabled`, optional `dynamic_rule`) |
-| `PATCH` | `/api/channels/reorder` | Reorder complete channel list (`204 No Content` on success); successful reorder enqueues a coalesced DVR lineup reload (`debounce=60s`, `max_wait=300s`) |
+| `PATCH` | `/api/channels/reorder` | Reorder complete channel list (`204 No Content` on success); successful reorder enqueues a coalesced DVR lineup reload (`debounce=20s`, `max_wait=300s`) |
 | `DELETE` | `/api/channels/{channelID}` | Delete channel |
 | `GET` | `/api/dynamic-channels` | List dynamic channel blocks (paged metadata response) |
 | `POST` | `/api/dynamic-channels` | Create dynamic channel block |
@@ -100,7 +100,7 @@ All routes below are protected by Basic Auth when `ADMIN_AUTH` is configured.
 | `PATCH` | `/api/dynamic-channels/{queryID}` | Update dynamic channel block config |
 | `DELETE` | `/api/dynamic-channels/{queryID}` | Delete dynamic channel block |
 | `GET` | `/api/dynamic-channels/{queryID}/channels` | List generated channels for one dynamic block |
-| `PATCH` | `/api/dynamic-channels/{queryID}/channels/reorder` | Reorder generated channels within one dynamic block (`204 No Content` on success); successful reorder enqueues a coalesced DVR lineup reload (`debounce=60s`, `max_wait=300s`) |
+| `PATCH` | `/api/dynamic-channels/{queryID}/channels/reorder` | Reorder generated channels within one dynamic block (`204 No Content` on success); successful reorder enqueues a coalesced DVR lineup reload (`debounce=20s`, `max_wait=300s`) |
 | `GET` | `/api/channels/{channelID}/sources` | List channel sources |
 | `POST` | `/api/channels/{channelID}/sources` | Add source by `item_key` |
 | `POST` | `/api/channels/{channelID}/sources/health/clear` | Clear health/cooldown state for one channel's sources |
@@ -302,11 +302,11 @@ DVR sync routes parse optional JSON payloads using empty-body-tolerant decoding:
   - `block_start = 10000 + (order_index * 1000)`
   - generated channels are capped at `1000` entries per block
   - generated-channel reorder APIs reassign guide numbers deterministically within the block
-  - successful dynamic-block materialization/reorder changes enqueue a DVR lineup reload (coalesced queue, trailing edge, `debounce=60s`, `max_wait=300s`) so provider-side lineup views converge without reload churn.
+  - successful dynamic-block materialization/reorder changes enqueue a DVR lineup reload (coalesced queue, trailing edge, `debounce=20s`, `max_wait=300s`) so provider-side lineup views converge without reload churn.
 - DVR lineup reload queue behavior for reorder/materialization mutations:
   - all lineup-changing admin mutation paths enqueue through one shared queue (`/api/channels/reorder`, dynamic block materialization syncs, and `/api/dynamic-channels/{queryID}/channels/reorder`)
-  - enqueue is trailing-edge debounced by `60s`
-  - every new enqueue extends the due time to `now + 60s`, capped at `first_enqueue + 300s`
+  - enqueue is trailing-edge debounced by `20s`
+  - every new enqueue extends the due time to `now + 20s`, capped at `first_enqueue + 300s`
   - enqueue during an in-flight reload schedules exactly one follow-up debounced run
   - queue execution is detached from request cancellation and uses an internal timeout budget (`30s` default)
 

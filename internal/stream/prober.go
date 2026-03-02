@@ -58,6 +58,7 @@ type ProberConfig struct {
 	FFmpegReconnectDelayMax        time.Duration
 	FFmpegReconnectMaxRetries      int
 	FFmpegReconnectHTTPErrors      string
+	FFmpegRWTimeout                time.Duration
 	FFmpegStartupProbeSize         int
 	FFmpegStartupAnalyzeDelay      time.Duration
 	FFmpegInputBufferSize          int
@@ -86,6 +87,7 @@ type BackgroundProber struct {
 	ffmpegReconnectDelayMax        time.Duration
 	ffmpegReconnectMaxRetries      int
 	ffmpegReconnectHTTPErrors      string
+	ffmpegRWTimeout                time.Duration
 	ffmpegStartupProbeSize         int
 	ffmpegStartupAnalyzeDelay      time.Duration
 	ffmpegInputBufferSize          int
@@ -172,6 +174,10 @@ func NewBackgroundProber(cfg ProberConfig, provider ProbeChannelsProvider) *Back
 	if ffmpegInputBufferSize < 0 {
 		ffmpegInputBufferSize = 0
 	}
+	ffmpegRWTimeout := cfg.FFmpegRWTimeout
+	if ffmpegRWTimeout < 0 {
+		ffmpegRWTimeout = 0
+	}
 	ffmpegCopyRegenerateTimestamps := resolveFFmpegCopyRegenerateTimestamps(
 		mode,
 		cfg.FFmpegCopyRegenerateTimestamps,
@@ -206,6 +212,7 @@ func NewBackgroundProber(cfg ProberConfig, provider ProbeChannelsProvider) *Back
 		ffmpegReconnectDelayMax:        ffmpegReconnectDelayMax,
 		ffmpegReconnectMaxRetries:      ffmpegReconnectMaxRetries,
 		ffmpegReconnectHTTPErrors:      ffmpegReconnectHTTPErrors,
+		ffmpegRWTimeout:                ffmpegRWTimeout,
 		ffmpegStartupProbeSize:         ffmpegStartupProbeSize,
 		ffmpegStartupAnalyzeDelay:      ffmpegStartupAnalyzeDelay,
 		ffmpegInputBufferSize:          ffmpegInputBufferSize,
@@ -366,9 +373,12 @@ func (p *BackgroundProber) ProbeOnce(ctx context.Context) error {
 			p.ffmpegReconnectMaxRetries,
 			p.ffmpegReconnectHTTPErrors,
 			p.ffmpegInputBufferSize,
+			p.ffmpegRWTimeout,
 			p.ffmpegDiscardCorrupt,
 			p.ffmpegCopyRegenerateTimestamps,
 			0,
+			defaultFFmpegInputLogLevel,
+			ffmpegSourceStderrLoggingOptions{},
 			false,
 		)
 		if err != nil {

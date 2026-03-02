@@ -472,29 +472,34 @@ func slowClientLagDetailsFromError(err error) (slowClientLagDetails, bool) {
 
 // SessionManagerConfig controls shared per-channel stream sessions.
 type SessionManagerConfig struct {
-	Mode                            string
-	FFmpegPath                      string
-	FFprobePath                     string
-	HTTPClient                      *http.Client
-	Logger                          *slog.Logger
-	StartupTimeout                  time.Duration
-	StartupRandomAccessRecoveryOnly bool
-	MinProbeBytes                   int
-	MaxFailovers                    int
-	FailoverTotalTimeout            time.Duration
-	UpstreamOverlimitCooldown       time.Duration
-	FFmpegReconnectEnabled          bool
-	FFmpegReconnectDelayMax         time.Duration
-	FFmpegReconnectMaxRetries       int
-	FFmpegReconnectHTTPErrors       string
-	FFmpegStartupProbeSize          int
-	FFmpegStartupAnalyzeDelay       time.Duration
-	FFmpegInputBufferSize           int
-	FFmpegDiscardCorrupt            bool
-	FFmpegCopyRegenerateTimestamps  *bool
-	ProducerReadRate                float64
-	ProducerReadRateCatchup         float64
-	ProducerInitialBurst            int
+	Mode                                 string
+	FFmpegPath                           string
+	FFprobePath                          string
+	HTTPClient                           *http.Client
+	Logger                               *slog.Logger
+	StartupTimeout                       time.Duration
+	StartupRandomAccessRecoveryOnly      bool
+	MinProbeBytes                        int
+	MaxFailovers                         int
+	FailoverTotalTimeout                 time.Duration
+	UpstreamOverlimitCooldown            time.Duration
+	FFmpegReconnectEnabled               bool
+	FFmpegReconnectDelayMax              time.Duration
+	FFmpegReconnectMaxRetries            int
+	FFmpegReconnectHTTPErrors            string
+	FFmpegRWTimeout                      time.Duration
+	FFmpegStartupProbeSize               int
+	FFmpegStartupAnalyzeDelay            time.Duration
+	FFmpegInputBufferSize                int
+	FFmpegDiscardCorrupt                 bool
+	FFmpegCopyRegenerateTimestamps       *bool
+	FFmpegSourceLogLevel                 string
+	FFmpegSourceStderrPassthroughEnabled *bool
+	FFmpegSourceStderrLogLevel           string
+	FFmpegSourceStderrMaxLineBytes       int
+	ProducerReadRate                     float64
+	ProducerReadRateCatchup              float64
+	ProducerInitialBurst                 int
 
 	BufferChunkBytes           int
 	BufferPublishFlushInterval time.Duration
@@ -525,29 +530,34 @@ type SessionManagerConfig struct {
 }
 
 type sessionManagerConfig struct {
-	mode                            string
-	ffmpegPath                      string
-	ffprobePath                     string
-	httpClient                      *http.Client
-	logger                          *slog.Logger
-	startupWait                     time.Duration
-	startupRandomAccessRecoveryOnly bool
-	minProbe                        int
-	maxFailover                     int
-	failoverTTL                     time.Duration
-	upstreamOverlimitCooldown       time.Duration
-	ffmpegReconnectEnabled          bool
-	ffmpegReconnectDelayMax         time.Duration
-	ffmpegReconnectMaxRetries       int
-	ffmpegReconnectHTTPErrors       string
-	ffmpegStartupProbeSize          int
-	ffmpegStartupAnalyzeDelay       time.Duration
-	ffmpegInputBufferSize           int
-	ffmpegDiscardCorrupt            bool
-	ffmpegCopyRegenerateTimestamps  bool
-	producerReadRate                float64
-	producerReadRateCatchup         float64
-	producerInitialBurst            int
+	mode                                 string
+	ffmpegPath                           string
+	ffprobePath                          string
+	httpClient                           *http.Client
+	logger                               *slog.Logger
+	startupWait                          time.Duration
+	startupRandomAccessRecoveryOnly      bool
+	minProbe                             int
+	maxFailover                          int
+	failoverTTL                          time.Duration
+	upstreamOverlimitCooldown            time.Duration
+	ffmpegReconnectEnabled               bool
+	ffmpegReconnectDelayMax              time.Duration
+	ffmpegReconnectMaxRetries            int
+	ffmpegReconnectHTTPErrors            string
+	ffmpegRWTimeout                      time.Duration
+	ffmpegStartupProbeSize               int
+	ffmpegStartupAnalyzeDelay            time.Duration
+	ffmpegInputBufferSize                int
+	ffmpegDiscardCorrupt                 bool
+	ffmpegCopyRegenerateTimestamps       bool
+	ffmpegSourceLogLevel                 string
+	ffmpegSourceStderrPassthroughEnabled bool
+	ffmpegSourceStderrLogLevel           slog.Level
+	ffmpegSourceStderrMaxLineBytes       int
+	producerReadRate                     float64
+	producerReadRateCatchup              float64
+	producerInitialBurst                 int
 
 	bufferChunkBytes  int
 	bufferFlushPeriod time.Duration
@@ -5077,9 +5087,24 @@ func (s *sharedRuntimeSession) startSourceReader(
 		s.manager.cfg.ffmpegReconnectMaxRetries,
 		s.manager.cfg.ffmpegReconnectHTTPErrors,
 		s.manager.cfg.ffmpegInputBufferSize,
+		s.manager.cfg.ffmpegRWTimeout,
 		s.manager.cfg.ffmpegDiscardCorrupt,
 		s.manager.cfg.ffmpegCopyRegenerateTimestamps,
 		startupPTSOffset,
+		s.manager.cfg.ffmpegSourceLogLevel,
+		ffmpegSourceStderrLoggingOptions{
+			enabled:      s.manager.cfg.ffmpegSourceStderrPassthroughEnabled,
+			logger:       s.manager.cfg.logger,
+			logLevel:     s.manager.cfg.ffmpegSourceStderrLogLevel,
+			maxLineBytes: s.manager.cfg.ffmpegSourceStderrMaxLineBytes,
+			context: ffmpegSourceStderrLogContext{
+				channelID:   s.channel.ChannelID,
+				guideNumber: s.channel.GuideNumber,
+				sourceID:    sourceID,
+				sourceURL:   streamURL,
+				tunerID:     s.tunerID(),
+			},
+		},
 		requireRandomAccess,
 	)
 	if err != nil {
@@ -5101,6 +5126,16 @@ func (s *sharedRuntimeSession) startSourceReader(
 			"source_url", sanitizeStreamURLForLog(streamURL),
 			"ffmpeg_path", strings.TrimSpace(s.manager.cfg.ffmpegPath),
 			"unsupported_option", ffmpegReadrateCatchupOption,
+		)
+	}
+	if session.startupNoInputBufferSizeFallback && s.manager != nil && s.manager.logger != nil {
+		s.manager.logger.Warn(
+			"ffmpeg startup option unsupported; continuing without ffmpeg input buffer size",
+			"source_id", sourceID,
+			"source_url", sanitizeStreamURLForLog(streamURL),
+			"ffmpeg_path", strings.TrimSpace(s.manager.cfg.ffmpegPath),
+			"unsupported_option", ffmpegInputBufferSizeOption,
+			"configured_ffmpeg_input_buffer_size", s.manager.cfg.ffmpegInputBufferSize,
 		)
 	}
 	producer := fmt.Sprintf(
@@ -7961,10 +7996,27 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 	if ffmpegInputBufferSize < 0 {
 		ffmpegInputBufferSize = 0
 	}
+	ffmpegRWTimeout := cfg.FFmpegRWTimeout
+	if ffmpegRWTimeout < 0 {
+		ffmpegRWTimeout = 0
+	}
 	ffmpegCopyRegenerateTimestamps := resolveFFmpegCopyRegenerateTimestamps(
 		mode,
 		cfg.FFmpegCopyRegenerateTimestamps,
 	)
+	ffmpegSourceLogLevel := normalizeFFmpegSourceLogLevel(
+		cfg.FFmpegSourceLogLevel,
+		defaultFFmpegSourceSessionLogLevel,
+	)
+	ffmpegSourceStderrPassthroughEnabled := defaultFFmpegSourceStderrPassthrough
+	if cfg.FFmpegSourceStderrPassthroughEnabled != nil {
+		ffmpegSourceStderrPassthroughEnabled = *cfg.FFmpegSourceStderrPassthroughEnabled
+	}
+	ffmpegSourceStderrLogLevel := normalizeFFmpegSourceStderrLogLevel(cfg.FFmpegSourceStderrLogLevel)
+	ffmpegSourceStderrMaxLineBytes := cfg.FFmpegSourceStderrMaxLineBytes
+	if ffmpegSourceStderrMaxLineBytes <= 0 {
+		ffmpegSourceStderrMaxLineBytes = defaultFFmpegSourceStderrLineBytes
+	}
 
 	recoveryFillerEnabled := cfg.RecoveryFillerEnabled
 	recoveryFillerInterval := cfg.RecoveryFillerInterval
@@ -8060,54 +8112,59 @@ func normalizeSessionManagerConfig(cfg SessionManagerConfig) sessionManagerConfi
 	}
 
 	return sessionManagerConfig{
-		mode:                            mode,
-		ffmpegPath:                      ffmpegPath,
-		ffprobePath:                     ffprobePath,
-		httpClient:                      httpClient,
-		logger:                          logger,
-		startupWait:                     startupWait,
-		startupRandomAccessRecoveryOnly: cfg.StartupRandomAccessRecoveryOnly,
-		minProbe:                        minProbe,
-		maxFailover:                     maxFailover,
-		failoverTTL:                     failoverTTL,
-		upstreamOverlimitCooldown:       upstreamOverlimitCooldown,
-		ffmpegReconnectEnabled:          ffmpegReconnectEnabled,
-		ffmpegReconnectDelayMax:         ffmpegReconnectDelayMax,
-		ffmpegReconnectMaxRetries:       ffmpegReconnectMaxRetries,
-		ffmpegReconnectHTTPErrors:       ffmpegReconnectHTTPErrors,
-		ffmpegStartupProbeSize:          ffmpegStartupProbeSize,
-		ffmpegStartupAnalyzeDelay:       ffmpegStartupAnalyzeDelay,
-		ffmpegInputBufferSize:           ffmpegInputBufferSize,
-		ffmpegDiscardCorrupt:            cfg.FFmpegDiscardCorrupt,
-		ffmpegCopyRegenerateTimestamps:  ffmpegCopyRegenerateTimestamps,
-		producerReadRate:                producerReadRate,
-		producerReadRateCatchup:         producerReadRateCatchup,
-		producerInitialBurst:            producerInitialBurst,
-		bufferChunkBytes:                bufferChunkBytes,
-		bufferFlushPeriod:               bufferFlushPeriod,
-		bufferTSAlign188:                bufferTSAlign188,
-		stallDetect:                     stallDetect,
-		stallHardDeadline:               stallHardDeadline,
-		stallPolicy:                     stallPolicy,
-		stallMaxFailoversPerTry:         stallMaxFailovers,
-		cycleFailureMinHealth:           cycleFailureMinHealth,
-		recoveryFillerEnabled:           recoveryFillerEnabled,
-		recoveryFillerMode:              recoveryFillerMode,
-		recoveryFillerInterval:          recoveryFillerInterval,
-		recoveryTransitionMode:          recoveryTransitionMode,
-		recoveryFillerText:              recoveryFillerText,
-		recoveryFillerEnableAudio:       cfg.RecoveryFillerEnableAudio,
-		recoverySlateAVFactory:          defaultSlateAVProducerFactory,
-		subscriberJoinLagBytes:          joinLagBytes,
-		subscriberSlowPolicy:            slowPolicy,
-		subscriberMaxBlockedWrite:       maxBlockedWrite,
-		sessionIdleTimeout:              sessionIdleTimeout,
-		sessionMaxSubscribers:           sessionMaxSubscribers,
-		sessionHistoryLimit:             sessionHistoryLimit,
-		sessionSourceHistoryLimit:       sessionSourceHistoryLimit,
-		sessionSubscriberHistoryLimit:   sessionSubscriberHistoryLimit,
-		sessionDrainTimeout:             sessionDrainTimeout,
-		sourceHealthDrainTimeout:        sourceHealthDrainTimeout,
+		mode:                                 mode,
+		ffmpegPath:                           ffmpegPath,
+		ffprobePath:                          ffprobePath,
+		httpClient:                           httpClient,
+		logger:                               logger,
+		startupWait:                          startupWait,
+		startupRandomAccessRecoveryOnly:      cfg.StartupRandomAccessRecoveryOnly,
+		minProbe:                             minProbe,
+		maxFailover:                          maxFailover,
+		failoverTTL:                          failoverTTL,
+		upstreamOverlimitCooldown:            upstreamOverlimitCooldown,
+		ffmpegReconnectEnabled:               ffmpegReconnectEnabled,
+		ffmpegReconnectDelayMax:              ffmpegReconnectDelayMax,
+		ffmpegReconnectMaxRetries:            ffmpegReconnectMaxRetries,
+		ffmpegReconnectHTTPErrors:            ffmpegReconnectHTTPErrors,
+		ffmpegRWTimeout:                      ffmpegRWTimeout,
+		ffmpegStartupProbeSize:               ffmpegStartupProbeSize,
+		ffmpegStartupAnalyzeDelay:            ffmpegStartupAnalyzeDelay,
+		ffmpegInputBufferSize:                ffmpegInputBufferSize,
+		ffmpegDiscardCorrupt:                 cfg.FFmpegDiscardCorrupt,
+		ffmpegCopyRegenerateTimestamps:       ffmpegCopyRegenerateTimestamps,
+		ffmpegSourceLogLevel:                 ffmpegSourceLogLevel,
+		ffmpegSourceStderrPassthroughEnabled: ffmpegSourceStderrPassthroughEnabled,
+		ffmpegSourceStderrLogLevel:           ffmpegSourceStderrLogLevel,
+		ffmpegSourceStderrMaxLineBytes:       ffmpegSourceStderrMaxLineBytes,
+		producerReadRate:                     producerReadRate,
+		producerReadRateCatchup:              producerReadRateCatchup,
+		producerInitialBurst:                 producerInitialBurst,
+		bufferChunkBytes:                     bufferChunkBytes,
+		bufferFlushPeriod:                    bufferFlushPeriod,
+		bufferTSAlign188:                     bufferTSAlign188,
+		stallDetect:                          stallDetect,
+		stallHardDeadline:                    stallHardDeadline,
+		stallPolicy:                          stallPolicy,
+		stallMaxFailoversPerTry:              stallMaxFailovers,
+		cycleFailureMinHealth:                cycleFailureMinHealth,
+		recoveryFillerEnabled:                recoveryFillerEnabled,
+		recoveryFillerMode:                   recoveryFillerMode,
+		recoveryFillerInterval:               recoveryFillerInterval,
+		recoveryTransitionMode:               recoveryTransitionMode,
+		recoveryFillerText:                   recoveryFillerText,
+		recoveryFillerEnableAudio:            cfg.RecoveryFillerEnableAudio,
+		recoverySlateAVFactory:               defaultSlateAVProducerFactory,
+		subscriberJoinLagBytes:               joinLagBytes,
+		subscriberSlowPolicy:                 slowPolicy,
+		subscriberMaxBlockedWrite:            maxBlockedWrite,
+		sessionIdleTimeout:                   sessionIdleTimeout,
+		sessionMaxSubscribers:                sessionMaxSubscribers,
+		sessionHistoryLimit:                  sessionHistoryLimit,
+		sessionSourceHistoryLimit:            sessionSourceHistoryLimit,
+		sessionSubscriberHistoryLimit:        sessionSubscriberHistoryLimit,
+		sessionDrainTimeout:                  sessionDrainTimeout,
+		sourceHealthDrainTimeout:             sourceHealthDrainTimeout,
 	}
 }
 

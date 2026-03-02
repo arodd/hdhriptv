@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/arodd/hdhriptv/internal/channels"
 	"github.com/arodd/hdhriptv/internal/config"
 	"github.com/arodd/hdhriptv/internal/jobs"
 	"github.com/arodd/hdhriptv/internal/store/sqlite"
@@ -155,6 +156,124 @@ func TestSettingExplicitlyProvidedPrefersFlagOverEnv(t *testing.T) {
 	}
 	if !settingExplicitlyProvided([]string{"--device-id=9999AAAA"}, "--device-id", "DEVICE_ID") {
 		t.Fatal("settingExplicitlyProvided(non-empty flag) = false, want true")
+	}
+}
+
+func TestShouldWarnFFmpegRWTimeoutAgainstStallDetect(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  config.Config
+		want bool
+	}{
+		{
+			name: "copy mode disabled rw timeout",
+			cfg: config.Config{
+				StreamMode:      "ffmpeg-copy",
+				FFmpegRWTimeout: 0,
+				StallDetect:     4 * time.Second,
+			},
+			want: false,
+		},
+		{
+			name: "copy mode rw timeout below stall detect",
+			cfg: config.Config{
+				StreamMode:      "ffmpeg-copy",
+				FFmpegRWTimeout: 1500 * time.Millisecond,
+				StallDetect:     4 * time.Second,
+			},
+			want: false,
+		},
+		{
+			name: "copy mode rw timeout equals stall detect",
+			cfg: config.Config{
+				StreamMode:      "ffmpeg-copy",
+				FFmpegRWTimeout: 4 * time.Second,
+				StallDetect:     4 * time.Second,
+			},
+			want: true,
+		},
+		{
+			name: "transcode mode rw timeout above stall detect",
+			cfg: config.Config{
+				StreamMode:      "ffmpeg-transcode",
+				FFmpegRWTimeout: 5 * time.Second,
+				StallDetect:     4 * time.Second,
+			},
+			want: true,
+		},
+		{
+			name: "direct mode does not warn",
+			cfg: config.Config{
+				StreamMode:      "direct",
+				FFmpegRWTimeout: 5 * time.Second,
+				StallDetect:     4 * time.Second,
+			},
+			want: false,
+		},
+		{
+			name: "non positive stall detect does not warn",
+			cfg: config.Config{
+				StreamMode:      "ffmpeg-copy",
+				FFmpegRWTimeout: 5 * time.Second,
+				StallDetect:     0,
+			},
+			want: false,
+		},
+		{
+			name: "mode normalization still warns",
+			cfg: config.Config{
+				StreamMode:      "  FFMPEG-COPY  ",
+				FFmpegRWTimeout: 5 * time.Second,
+				StallDetect:     4 * time.Second,
+			},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := shouldWarnFFmpegRWTimeoutAgainstStallDetect(tc.cfg); got != tc.want {
+				t.Fatalf("shouldWarnFFmpegRWTimeoutAgainstStallDetect() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLogFFmpegRWTimeoutStallDetectWarning(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	logFFmpegRWTimeoutStallDetectWarning(logger, config.Config{
+		StreamMode:      "ffmpeg-copy",
+		FFmpegRWTimeout: 4 * time.Second,
+		StallDetect:     4 * time.Second,
+	})
+
+	out := logs.String()
+	if !strings.Contains(out, "ffmpeg rw_timeout is greater than or equal to stall-detect") {
+		t.Fatalf("warning log missing message: %s", out)
+	}
+	if !strings.Contains(out, "ffmpeg_rw_timeout=4s") {
+		t.Fatalf("warning log missing ffmpeg_rw_timeout field: %s", out)
+	}
+	if !strings.Contains(out, "stall_detect=4s") {
+		t.Fatalf("warning log missing stall_detect field: %s", out)
+	}
+}
+
+func TestLogFFmpegRWTimeoutStallDetectWarningNoopWhenSafe(t *testing.T) {
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelInfo}))
+
+	logFFmpegRWTimeoutStallDetectWarning(logger, config.Config{
+		StreamMode:      "ffmpeg-copy",
+		FFmpegRWTimeout: 1500 * time.Millisecond,
+		StallDetect:     4 * time.Second,
+	})
+
+	if out := logs.String(); out != "" {
+		t.Fatalf("expected no warning logs for safe config, got: %s", out)
 	}
 }
 
@@ -1052,6 +1171,133 @@ func TestLoadAnalyzerConfigDefaultsFFprobePathWhenBlank(t *testing.T) {
 	if got, want := cfg.FFmpegPath, "ffmpeg"; got != want {
 		t.Fatalf("FFmpegPath = %q, want %q", got, want)
 	}
+}
+
+func TestMigrateTraditionalGuideStartNoopWhenAlreadyAligned(t *testing.T) {
+	t.Parallel()
+
+	migrator := &fakeTraditionalGuideStartMigrator{
+		channels: []channels.Channel{
+			{ChannelID: 10, GuideNumber: "250", OrderIndex: 0},
+			{ChannelID: 20, GuideNumber: "251", OrderIndex: 1},
+		},
+	}
+
+	migrated, channelCount, err := migrateTraditionalGuideStart(context.Background(), migrator, 250)
+	if err != nil {
+		t.Fatalf("migrateTraditionalGuideStart() error = %v, want nil", err)
+	}
+	if migrated {
+		t.Fatal("migrateTraditionalGuideStart() migrated = true, want false")
+	}
+	if channelCount != 2 {
+		t.Fatalf("migrateTraditionalGuideStart() channelCount = %d, want 2", channelCount)
+	}
+	if migrator.reorderCalls != 0 {
+		t.Fatalf("reorderCalls = %d, want 0", migrator.reorderCalls)
+	}
+}
+
+func TestMigrateTraditionalGuideStartReordersWhenGuidesDrift(t *testing.T) {
+	t.Parallel()
+
+	migrator := &fakeTraditionalGuideStartMigrator{
+		channels: []channels.Channel{
+			{ChannelID: 11, GuideNumber: "100", OrderIndex: 0},
+			{ChannelID: 21, GuideNumber: "101", OrderIndex: 1},
+		},
+	}
+
+	migrated, channelCount, err := migrateTraditionalGuideStart(context.Background(), migrator, 300)
+	if err != nil {
+		t.Fatalf("migrateTraditionalGuideStart() error = %v, want nil", err)
+	}
+	if !migrated {
+		t.Fatal("migrateTraditionalGuideStart() migrated = false, want true")
+	}
+	if channelCount != 2 {
+		t.Fatalf("migrateTraditionalGuideStart() channelCount = %d, want 2", channelCount)
+	}
+	if migrator.reorderCalls != 1 {
+		t.Fatalf("reorderCalls = %d, want 1", migrator.reorderCalls)
+	}
+	if len(migrator.reorderIDs) != 2 || migrator.reorderIDs[0] != 11 || migrator.reorderIDs[1] != 21 {
+		t.Fatalf("reorderIDs = %v, want [11 21]", migrator.reorderIDs)
+	}
+}
+
+func TestMigrateTraditionalGuideStartReordersWhenOrderIndexDrifts(t *testing.T) {
+	t.Parallel()
+
+	migrator := &fakeTraditionalGuideStartMigrator{
+		channels: []channels.Channel{
+			{ChannelID: 5, GuideNumber: "400", OrderIndex: 4},
+			{ChannelID: 7, GuideNumber: "401", OrderIndex: 5},
+		},
+	}
+
+	migrated, channelCount, err := migrateTraditionalGuideStart(context.Background(), migrator, 400)
+	if err != nil {
+		t.Fatalf("migrateTraditionalGuideStart() error = %v, want nil", err)
+	}
+	if !migrated {
+		t.Fatal("migrateTraditionalGuideStart() migrated = false, want true")
+	}
+	if channelCount != 2 {
+		t.Fatalf("migrateTraditionalGuideStart() channelCount = %d, want 2", channelCount)
+	}
+	if migrator.reorderCalls != 1 {
+		t.Fatalf("reorderCalls = %d, want 1", migrator.reorderCalls)
+	}
+}
+
+func TestMigrateTraditionalGuideStartPropagatesErrors(t *testing.T) {
+	t.Parallel()
+
+	migrator := &fakeTraditionalGuideStartMigrator{
+		listErr: errors.New("list failed"),
+	}
+	if _, _, err := migrateTraditionalGuideStart(context.Background(), migrator, 100); err == nil {
+		t.Fatal("migrateTraditionalGuideStart(list error) = nil, want error")
+	}
+
+	migrator = &fakeTraditionalGuideStartMigrator{
+		channels:   []channels.Channel{{ChannelID: 1, GuideNumber: "99", OrderIndex: 0}},
+		reorderErr: errors.New("reorder failed"),
+	}
+	if _, _, err := migrateTraditionalGuideStart(context.Background(), migrator, 100); err == nil {
+		t.Fatal("migrateTraditionalGuideStart(reorder error) = nil, want error")
+	}
+
+	migrator = &fakeTraditionalGuideStartMigrator{
+		channels: []channels.Channel{{ChannelID: 0, GuideNumber: "100", OrderIndex: 0}},
+	}
+	if _, _, err := migrateTraditionalGuideStart(context.Background(), migrator, 100); err == nil {
+		t.Fatal("migrateTraditionalGuideStart(invalid channel id) = nil, want error")
+	}
+}
+
+type fakeTraditionalGuideStartMigrator struct {
+	channels     []channels.Channel
+	listErr      error
+	reorderErr   error
+	reorderCalls int
+	reorderIDs   []int64
+}
+
+func (m *fakeTraditionalGuideStartMigrator) List(_ context.Context) ([]channels.Channel, error) {
+	if m.listErr != nil {
+		return nil, m.listErr
+	}
+	out := make([]channels.Channel, len(m.channels))
+	copy(out, m.channels)
+	return out, nil
+}
+
+func (m *fakeTraditionalGuideStartMigrator) Reorder(_ context.Context, channelIDs []int64) error {
+	m.reorderCalls++
+	m.reorderIDs = append([]int64(nil), channelIDs...)
+	return m.reorderErr
 }
 
 type basicResponseWriter struct {

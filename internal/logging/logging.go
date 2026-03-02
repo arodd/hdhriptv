@@ -11,6 +11,11 @@ import (
 	"time"
 )
 
+const (
+	// LevelTrace is a verbosity level below debug used for deep troubleshooting.
+	LevelTrace = slog.Level(-8)
+)
+
 // Runtime contains the initialized logger and the backing log file metadata.
 type Runtime struct {
 	Logger      *slog.Logger
@@ -62,10 +67,13 @@ func newWithOutputs(
 		stderr = io.Discard
 	}
 
-	options := &slog.HandlerOptions{Level: lvl}
+	options := &slog.HandlerOptions{
+		Level:       lvl,
+		ReplaceAttr: replaceLevelAttr,
+	}
 	stdoutHandler := newLevelRangeHandler(
 		slog.NewTextHandler(stdout, options),
-		slog.LevelDebug,
+		LevelTrace,
 		slog.LevelInfo,
 		true,
 	)
@@ -92,6 +100,8 @@ func startupLogFileName(startup time.Time) string {
 func parseLevel(level string) *slog.LevelVar {
 	v := new(slog.LevelVar)
 	switch strings.ToLower(strings.TrimSpace(level)) {
+	case "trace":
+		v.Set(LevelTrace)
 	case "debug":
 		v.Set(slog.LevelDebug)
 	case "info", "":
@@ -104,6 +114,35 @@ func parseLevel(level string) *slog.LevelVar {
 		return nil
 	}
 	return v
+}
+
+func replaceLevelAttr(_ []string, attr slog.Attr) slog.Attr {
+	if attr.Key != slog.LevelKey {
+		return attr
+	}
+	level, ok := attr.Value.Any().(slog.Level)
+	if !ok {
+		return attr
+	}
+	attr.Value = slog.StringValue(slogLevelLabel(level))
+	return attr
+}
+
+func slogLevelLabel(level slog.Level) string {
+	switch level {
+	case LevelTrace:
+		return "TRACE"
+	case slog.LevelDebug:
+		return "DEBUG"
+	case slog.LevelInfo:
+		return "INFO"
+	case slog.LevelWarn:
+		return "WARN"
+	case slog.LevelError:
+		return "ERROR"
+	default:
+		return level.String()
+	}
 }
 
 type fanoutHandler struct {

@@ -230,6 +230,49 @@ func TestResolveFFmpegCopyRegenerateTimestamps(t *testing.T) {
 	}
 }
 
+func TestNormalizeFFmpegSourceLogLevel(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		fallback string
+		want     string
+	}{
+		{
+			name:     "explicit warning",
+			input:    "warning",
+			fallback: defaultFFmpegInputLogLevel,
+			want:     "warning",
+		},
+		{
+			name:     "warn alias",
+			input:    "warn",
+			fallback: defaultFFmpegInputLogLevel,
+			want:     "warning",
+		},
+		{
+			name:     "empty uses fallback",
+			input:    "",
+			fallback: "debug",
+			want:     "debug",
+		},
+		{
+			name:     "invalid uses default fallback",
+			input:    "trace",
+			fallback: "invalid",
+			want:     defaultFFmpegInputLogLevel,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			if got := normalizeFFmpegSourceLogLevel(tc.input, tc.fallback); got != tc.want {
+				t.Fatalf("normalizeFFmpegSourceLogLevel(%q, %q) = %q, want %q", tc.input, tc.fallback, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestFFmpegReconnectDelayMaxSeconds(t *testing.T) {
 	tests := []struct {
 		name string
@@ -1289,6 +1332,79 @@ sleep 1
 	}
 }
 
+func TestStartSourceSessionFallsBackWhenInputBufferSizeUnsupported(t *testing.T) {
+	tmp := t.TempDir()
+	argsLogPath := filepath.Join(tmp, "args.log")
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-input-buffer-size-unsupported.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+args_log=%q
+printf '%%s\n' "$*" >> "$args_log"
+for arg in "$@"; do
+  if [[ "$arg" == "-buffer_size" ]]; then
+    echo "Option buffer_size not found." >&2
+    echo "Error opening input files: Option not found" >&2
+    exit 1
+  fi
+done
+printf '\x47'
+sleep 1
+`, argsLogPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	session, err := startSourceSessionWithContextsConfigured(
+		ctx,
+		ctx,
+		"ffmpeg-copy",
+		nil,
+		ffmpegPath,
+		"https://example.test/live/stream.m3u8",
+		500*time.Millisecond,
+		1,
+		1,
+		1,
+		1,
+		32*1024,
+		250*time.Millisecond,
+		false,
+		0,
+		-1,
+		"",
+		8*1024*1024,
+		0,
+		false,
+		true,
+		0,
+		defaultFFmpegInputLogLevel,
+		ffmpegSourceStderrLoggingOptions{},
+		false,
+	)
+	if err != nil {
+		t.Fatalf("startSourceSessionWithContextsConfigured() error = %v", err)
+	}
+	defer session.close()
+
+	if !session.startupNoInputBufferSizeFallback {
+		t.Fatal("startupNoInputBufferSizeFallback = false, want true")
+	}
+
+	argsRaw, readErr := os.ReadFile(argsLogPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile(argsLogPath) error = %v", readErr)
+	}
+	lines := strings.Split(strings.TrimSpace(string(argsRaw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("len(argsLogLines) = %d, want 2; lines=%q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "-buffer_size 8388608") {
+		t.Fatalf("first attempt args = %q, want -buffer_size 8388608", lines[0])
+	}
+	if strings.Contains(lines[1], "-buffer_size") {
+		t.Fatalf("fallback attempt args = %q, want buffer_size removed", lines[1])
+	}
+}
+
 func TestBoundedTailBufferRetainsRecentStderr(t *testing.T) {
 	buf := newBoundedTailBuffer(8)
 	if _, err := buf.Write([]byte("12345")); err != nil {
@@ -1304,6 +1420,106 @@ func TestBoundedTailBufferRetainsRecentStderr(t *testing.T) {
 	}
 	if !strings.HasSuffix(got, "23456789") {
 		t.Fatalf("Bytes() suffix = %q, want retained tail bytes", got)
+	}
+}
+
+func TestSanitizeFFmpegStderrLineForLog(t *testing.T) {
+	raw := "open failed url=https://alice:secret@example.test/live.m3u8?token=signed&sig=abc authorization: Bearer x.y.z token=opaque"
+	sanitized := sanitizeFFmpegStderrLineForLog(raw)
+	if strings.Contains(sanitized, "alice:secret@") || strings.Contains(sanitized, "signed") || strings.Contains(sanitized, "x.y.z") || strings.Contains(sanitized, "opaque") {
+		t.Fatalf("sanitizeFFmpegStderrLineForLog leaked sensitive data: %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "https://example.test/live.m3u8") {
+		t.Fatalf("sanitizeFFmpegStderrLineForLog missing sanitized URL: %q", sanitized)
+	}
+	if !strings.Contains(sanitized, "token=<redacted>") {
+		t.Fatalf("sanitizeFFmpegStderrLineForLog missing token redaction: %q", sanitized)
+	}
+}
+
+func TestFFmpegStderrLineLoggerSanitizesAndEmitsContext(t *testing.T) {
+	logs := newTestLogBuffer()
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	writer := newFFmpegStderrLineLogger(
+		"ffmpeg-copy",
+		ffmpegSourceStderrLoggingOptions{
+			enabled:      true,
+			logger:       logger,
+			logLevel:     slog.LevelInfo,
+			maxLineBytes: 512,
+			context: ffmpegSourceStderrLogContext{
+				channelID:   91,
+				guideNumber: "191",
+				sourceID:    8,
+				sourceURL:   "https://alice:secret@example.test/live.m3u8?token=signed",
+				tunerID:     2,
+			},
+		},
+	)
+	if writer == nil {
+		t.Fatal("newFFmpegStderrLineLogger() = nil, want configured logger")
+	}
+
+	if _, err := writer.Write([]byte("first line\nhttp error opening https://alice:secret@example.test/live.m3u8?token=signed\n")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	writer.Flush()
+
+	text := logs.String()
+	if got := strings.Count(text, "ffmpeg source stderr line"); got != 2 {
+		t.Fatalf("log line count = %d, want 2; logs=%q", got, text)
+	}
+	if !strings.Contains(text, "ffmpeg_stderr_seq=1") || !strings.Contains(text, "ffmpeg_stderr_seq=2") {
+		t.Fatalf("expected monotonic ffmpeg_stderr_seq values in logs: %q", text)
+	}
+	if !strings.Contains(text, "channel_id=91") || !strings.Contains(text, "guide_number=191") || !strings.Contains(text, "source_id=8") || !strings.Contains(text, "tuner_id=2") {
+		t.Fatalf("stderr pass-through context fields missing from logs: %q", text)
+	}
+	if !strings.Contains(text, "source_url=https://example.test/live.m3u8") {
+		t.Fatalf("source_url not sanitized in context fields: %q", text)
+	}
+	if strings.Contains(text, "alice:secret@") || strings.Contains(text, "token=signed") {
+		t.Fatalf("stderr pass-through logs leaked sensitive source URL fields: %q", text)
+	}
+}
+
+func TestFFmpegStderrLineLoggerTruncatesAndFlushesPartialLine(t *testing.T) {
+	logs := newTestLogBuffer()
+	logger := slog.New(slog.NewTextHandler(logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	writer := newFFmpegStderrLineLogger(
+		"ffmpeg-copy",
+		ffmpegSourceStderrLoggingOptions{
+			enabled:      true,
+			logger:       logger,
+			logLevel:     slog.LevelInfo,
+			maxLineBytes: 8,
+			context:      ffmpegSourceStderrLogContext{},
+		},
+	)
+	if writer == nil {
+		t.Fatal("newFFmpegStderrLineLogger() = nil, want configured logger")
+	}
+
+	if _, err := writer.Write([]byte("abcdef")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	if _, err := writer.Write([]byte("ghi\nxyz012345")); err != nil {
+		t.Fatalf("Write() error = %v", err)
+	}
+	writer.Flush()
+
+	text := logs.String()
+	if got := strings.Count(text, "ffmpeg source stderr line"); got != 2 {
+		t.Fatalf("log line count = %d, want 2; logs=%q", got, text)
+	}
+	if !strings.Contains(text, "ffmpeg_stderr_line=abcdefgh") {
+		t.Fatalf("expected first truncated line in logs: %q", text)
+	}
+	if !strings.Contains(text, "ffmpeg_stderr_line=xyz01234") {
+		t.Fatalf("expected flushed truncated line in logs: %q", text)
+	}
+	if got := strings.Count(text, "ffmpeg_stderr_line_truncated=true"); got != 2 {
+		t.Fatalf("truncated marker count = %d, want 2; logs=%q", got, text)
 	}
 }
 
@@ -1325,6 +1541,24 @@ func TestFFmpegAnalyzeDurationMicroseconds(t *testing.T) {
 				t.Fatalf("ffmpegAnalyzeDurationMicroseconds(%s) = %d, want %d", tc.in, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAppendFFmpegRWTimeoutInputArg(t *testing.T) {
+	noTimeout := appendFFmpegRWTimeoutInputArg([]string{"-hide_banner"}, 0)
+	if len(noTimeout) != 1 {
+		t.Fatalf("appendFFmpegRWTimeoutInputArg(0) len = %d, want 1", len(noTimeout))
+	}
+	if noTimeout[0] != "-hide_banner" {
+		t.Fatalf("appendFFmpegRWTimeoutInputArg(0)[0] = %q, want -hide_banner", noTimeout[0])
+	}
+
+	args := appendFFmpegRWTimeoutInputArg([]string{"-hide_banner"}, 1500*time.Nanosecond)
+	if len(args) != 3 {
+		t.Fatalf("appendFFmpegRWTimeoutInputArg(1500ns) len = %d, want 3", len(args))
+	}
+	if args[1] != ffmpegRWTimeoutOption || args[2] != "2" {
+		t.Fatalf("appendFFmpegRWTimeoutInputArg(1500ns) = %#v, want %q %q", args, ffmpegRWTimeoutOption, "2")
 	}
 }
 
