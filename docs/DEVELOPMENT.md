@@ -104,6 +104,24 @@ Behavior summary:
 
 ## Testing
 
+## Build Versioning
+
+Builds now stamp runtime metadata into the binary via ldflags:
+
+- `internal/version.Version`
+- `internal/version.Commit`
+- `internal/version.BuildTime`
+
+Version behavior:
+
+- Release builds (for example `make release-github-sync-tag RELEASE_TAG=v1.2.3`) stamp the exact release tag.
+- Non-tag/interim builds stamp `<latest-release-tag>-dev+<shortsha>` (for example `v1.2.3-dev+abc123def456`).
+
+At runtime this metadata is:
+
+- Logged on startup (`app_version`, `app_commit`, `app_build_time`).
+- Persisted in SQLite settings (`app.version`, `app.commit`, `app.build_time`).
+
 ### Automated Tests
 
 ```bash

@@ -6,6 +6,7 @@ import (
 )
 
 type runMetadataContextKey struct{}
+type playlistSyncSourceIDContextKey struct{}
 
 // RunMetadata identifies a persisted job run in downstream call chains.
 type RunMetadata struct {
@@ -45,4 +46,28 @@ func RunMetadataFromContext(ctx context.Context) (RunMetadata, bool) {
 		return RunMetadata{}, false
 	}
 	return meta, true
+}
+
+// WithPlaylistSyncSourceID annotates ctx with an optional source scope for
+// playlist_sync runs triggered via the admin API.
+func WithPlaylistSyncSourceID(ctx context.Context, sourceID int64) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if sourceID <= 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, playlistSyncSourceIDContextKey{}, sourceID)
+}
+
+// PlaylistSyncSourceIDFromContext returns an optional playlist source scope.
+func PlaylistSyncSourceIDFromContext(ctx context.Context) (int64, bool) {
+	if ctx == nil {
+		return 0, false
+	}
+	sourceID, ok := ctx.Value(playlistSyncSourceIDContextKey{}).(int64)
+	if !ok || sourceID <= 0 {
+		return 0, false
+	}
+	return sourceID, true
 }

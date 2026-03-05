@@ -42,6 +42,9 @@ func TestDynamicChannelQueryCRUDAndListGeneratedChannels(t *testing.T) {
 	if len(created.GroupNames) != 1 || created.GroupNames[0] != "News" {
 		t.Fatalf("created.GroupNames = %#v, want [News]", created.GroupNames)
 	}
+	if len(created.SourceIDs) != 0 {
+		t.Fatalf("created.SourceIDs = %#v, want empty", created.SourceIDs)
+	}
 	if created.SearchRegex {
 		t.Fatal("created.SearchRegex = true, want false default")
 	}
@@ -50,8 +53,10 @@ func TestDynamicChannelQueryCRUDAndListGeneratedChannels(t *testing.T) {
 	}
 
 	multiGroups := []string{"Sports", "News", "sports"}
+	multiSourceIDs := []int64{0, -1, 1, 1}
 	updatedGroups, err := store.UpdateDynamicChannelQuery(ctx, created.QueryID, channels.DynamicChannelQueryUpdate{
 		GroupNames: &multiGroups,
+		SourceIDs:  &multiSourceIDs,
 	})
 	if err != nil {
 		t.Fatalf("UpdateDynamicChannelQuery(group_names) error = %v", err)
@@ -61,6 +66,9 @@ func TestDynamicChannelQueryCRUDAndListGeneratedChannels(t *testing.T) {
 	}
 	if len(updatedGroups.GroupNames) != 2 || updatedGroups.GroupNames[0] != "News" || updatedGroups.GroupNames[1] != "Sports" {
 		t.Fatalf("updatedGroups.GroupNames = %#v, want [News Sports]", updatedGroups.GroupNames)
+	}
+	if len(updatedGroups.SourceIDs) != 1 || updatedGroups.SourceIDs[0] != 1 {
+		t.Fatalf("updatedGroups.SourceIDs = %#v, want [1]", updatedGroups.SourceIDs)
 	}
 	if updatedGroups.SearchRegex {
 		t.Fatal("updatedGroups.SearchRegex = true, want false when omitted")
@@ -105,6 +113,9 @@ func TestDynamicChannelQueryCRUDAndListGeneratedChannels(t *testing.T) {
 	}
 	if queries[0].LastCount != 3 {
 		t.Fatalf("queries[0].LastCount = %d, want 3", queries[0].LastCount)
+	}
+	if len(queries[0].SourceIDs) != 1 || queries[0].SourceIDs[0] != 1 {
+		t.Fatalf("queries[0].SourceIDs = %#v, want [1]", queries[0].SourceIDs)
 	}
 	if queries[0].NextSlotCursor != 3 {
 		t.Fatalf("queries[0].NextSlotCursor = %d, want 3", queries[0].NextSlotCursor)

@@ -509,7 +509,7 @@ func TestHandlerDirectModeStreamsChannel(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 20; i++ {
-			_, _ = w.Write([]byte("transport-stream-data"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("transport-stream-data"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -541,7 +541,7 @@ func TestHandlerDirectModeStreamsChannel(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 		},
@@ -583,7 +583,7 @@ func TestHandlerDirectModeStreamsDynamicGuideRangeChannel(t *testing.T) {
 		ticker := time.NewTicker(fastStreamTestTiming.upstreamChunkInterval)
 		defer ticker.Stop()
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write([]byte("dynamic-transport-stream")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("dynamic-transport-stream")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -648,7 +648,7 @@ func TestHandlerRangeRequestWaitsForStartupReadiness(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(350 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("delayed-stream-data"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("delayed-stream-data"))
 	}))
 	defer upstream.Close()
 
@@ -675,7 +675,7 @@ func TestHandlerRangeRequestWaitsForStartupReadiness(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         25 * time.Millisecond,
@@ -713,7 +713,7 @@ func TestHandlerFallsBackToNextSource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 20; i++ {
-			_, _ = w.Write([]byte("good-stream"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("good-stream"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -753,7 +753,7 @@ func TestHandlerFallsBackToNextSource(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 		},
@@ -867,7 +867,7 @@ func TestHandlerTuneBackoffRejectsRepeatedStartupFailuresPerChannel(t *testing.T
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 80; i++ {
-			if _, err := w.Write([]byte("channel-two-stream")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("channel-two-stream")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -888,7 +888,7 @@ func TestHandlerTuneBackoffRejectsRepeatedStartupFailuresPerChannel(t *testing.T
 			SessionIdleTimeout:         50 * time.Millisecond,
 			FailoverTotalTimeout:       2 * time.Second,
 			StartupTimeout:             1 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 		},
@@ -987,7 +987,7 @@ func TestHandlerTuneBackoffSuccessfulStartsDoNotConsumeBudget(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 120; i++ {
-			_, _ = w.Write([]byte("shared-session-stream"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("shared-session-stream"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -1005,7 +1005,7 @@ func TestHandlerTuneBackoffSuccessfulStartsDoNotConsumeBudget(t *testing.T) {
 			TuneBackoffCooldown:        300 * time.Millisecond,
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         25 * time.Millisecond,
@@ -1096,7 +1096,7 @@ func TestHandlerTuneBackoffConcurrentStartupFailureCountsOneOutcomePerCycle(t *t
 			TuneBackoffCooldown:        2 * time.Second,
 			StartupTimeout:             1 * time.Second,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         40 * time.Millisecond,
@@ -1198,7 +1198,7 @@ func TestHandlerTuneBackoffJoinersNotRejectedWhileStartupPending(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 80; i++ {
-			_, _ = w.Write([]byte("pending-startup-stream"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("pending-startup-stream"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -1215,7 +1215,7 @@ func TestHandlerTuneBackoffJoinersNotRejectedWhileStartupPending(t *testing.T) {
 			TuneBackoffCooldown:        2 * time.Second,
 			StartupTimeout:             1 * time.Second,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         40 * time.Millisecond,
@@ -1326,7 +1326,7 @@ func TestHandlerReturnsServiceUnavailableWhenAllSourcesFail(t *testing.T) {
 			Mode:                 "direct",
 			StartupTimeout:       1 * time.Second,
 			FailoverTotalTimeout: 2 * time.Second,
-			MinProbeBytes:        1,
+			MinProbeBytes:        testVideoAudioStartupMinProbeBytes(),
 		},
 		NewPool(1),
 		provider,
@@ -1355,7 +1355,7 @@ func TestHandlerStartupDoesNotBlockOnSourceSuccessPersistence(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 12; i++ {
-			_, _ = w.Write([]byte("steady-stream"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("steady-stream"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -1388,7 +1388,7 @@ func TestHandlerStartupDoesNotBlockOnSourceSuccessPersistence(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 		},
@@ -1427,7 +1427,7 @@ func TestHandlerStartupFailoverDoesNotBlockOnSourceFailurePersistence(t *testing
 
 	goodUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("good-stream"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("good-stream"))
 	}))
 	defer goodUpstream.Close()
 
@@ -1463,7 +1463,7 @@ func TestHandlerStartupFailoverDoesNotBlockOnSourceFailurePersistence(t *testing
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 		},
@@ -1540,7 +1540,7 @@ func TestHandlerAllSourcesFailDoesNotBlockOnSourceHealthPersistence(t *testing.T
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       4 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         50 * time.Millisecond,
@@ -1764,7 +1764,7 @@ func TestHandlerLogsLagContextForSlowSubscriber(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 4096; i++ {
-			if _, err := w.Write([]byte("x")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("x")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -1798,7 +1798,7 @@ func TestHandlerLogsLagContextForSlowSubscriber(t *testing.T) {
 			Logger:                     logger,
 			StartupTimeout:             1500 * time.Millisecond,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 1 * time.Millisecond,
 			SubscriberJoinLagBytes:     1,
@@ -1846,7 +1846,7 @@ func TestHandlerTunerStatusSnapshotTracksSharedSubscribers(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 400; i++ {
-			_, _ = w.Write([]byte("x"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("x"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -1878,7 +1878,7 @@ func TestHandlerTunerStatusSnapshotTracksSharedSubscribers(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         500 * time.Millisecond,
@@ -1942,7 +1942,7 @@ func TestHandlerTunerStatusSnapshotTracksSharedSubscribers(t *testing.T) {
 
 func TestHandlerThirdClientJoinSharedChannelDoesNotEOFExistingClientWhenOtherTunerActive(t *testing.T) {
 	newUpstream := func(payload byte) *httptest.Server {
-		chunk := bytes.Repeat([]byte{payload}, 188)
+		chunk := testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte{payload}, 188))
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			flusher, _ := w.(http.Flusher)
@@ -2546,7 +2546,7 @@ func TestHandlerHTTPShutdownTimeoutForceClosesActiveStreams(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("X"), mpegTSPacketSize)
 		for {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -2572,7 +2572,7 @@ func TestHandlerHTTPShutdownTimeoutForceClosesActiveStreams(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         200 * time.Millisecond,
@@ -2678,7 +2678,7 @@ func TestHandlerSharedSessionOutlivesSubscriberDisconnect(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("D"), mpegTSPacketSize)
 		for {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -2707,7 +2707,7 @@ func TestHandlerSharedSessionOutlivesSubscriberDisconnect(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           64,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         1 * time.Second,

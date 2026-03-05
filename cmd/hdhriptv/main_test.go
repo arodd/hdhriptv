@@ -19,7 +19,10 @@ import (
 	"github.com/arodd/hdhriptv/internal/channels"
 	"github.com/arodd/hdhriptv/internal/config"
 	"github.com/arodd/hdhriptv/internal/jobs"
+	"github.com/arodd/hdhriptv/internal/playlist"
 	"github.com/arodd/hdhriptv/internal/store/sqlite"
+	"github.com/arodd/hdhriptv/internal/stream"
+	appversion "github.com/arodd/hdhriptv/internal/version"
 )
 
 func TestResolveIdentitySettingsGenerateAndPersistWhenMissing(t *testing.T) {
@@ -145,6 +148,58 @@ func TestResolveIdentitySettingsRepairsInvalidPersistedDeviceID(t *testing.T) {
 	assertSettingEquals(t, ctx, store, sqlite.SettingIdentityDeviceID, "DEADBEEF")
 }
 
+func TestPersistRuntimeVersionStoresCurrentMetadata(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	info := appversion.Info{
+		Version:   "v1.0.6-dev+abc123def456",
+		Source:    "dev",
+		Commit:    "abc123def456",
+		BuildTime: "2026-03-03T22:00:00Z",
+	}
+
+	previous, err := persistRuntimeVersion(ctx, store, info)
+	if err != nil {
+		t.Fatalf("persistRuntimeVersion() error = %v", err)
+	}
+	if previous != "" {
+		t.Fatalf("previous version = %q, want empty", previous)
+	}
+
+	assertSettingEquals(t, ctx, store, sqlite.SettingAppVersion, info.Version)
+	assertSettingEquals(t, ctx, store, sqlite.SettingAppCommit, info.Commit)
+	assertSettingEquals(t, ctx, store, sqlite.SettingAppBuildTime, info.BuildTime)
+}
+
+func TestPersistRuntimeVersionReturnsPreviousVersion(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	if err := store.SetSetting(ctx, sqlite.SettingAppVersion, "v1.0.5"); err != nil {
+		t.Fatalf("SetSetting(app.version) error = %v", err)
+	}
+
+	info := appversion.Info{
+		Version:   "v1.0.6",
+		Source:    "release",
+		Commit:    "ad2e8e86e4b9",
+		BuildTime: "2026-03-03T22:05:00Z",
+	}
+
+	previous, err := persistRuntimeVersion(ctx, store, info)
+	if err != nil {
+		t.Fatalf("persistRuntimeVersion() error = %v", err)
+	}
+	if previous != "v1.0.5" {
+		t.Fatalf("previous version = %q, want v1.0.5", previous)
+	}
+
+	assertSettingEquals(t, ctx, store, sqlite.SettingAppVersion, info.Version)
+	assertSettingEquals(t, ctx, store, sqlite.SettingAppCommit, info.Commit)
+	assertSettingEquals(t, ctx, store, sqlite.SettingAppBuildTime, info.BuildTime)
+}
+
 func TestSettingExplicitlyProvidedPrefersFlagOverEnv(t *testing.T) {
 	t.Setenv("DEVICE_ID", "ABCDEF12")
 
@@ -156,6 +211,441 @@ func TestSettingExplicitlyProvidedPrefersFlagOverEnv(t *testing.T) {
 	}
 	if !settingExplicitlyProvided([]string{"--device-id=9999AAAA"}, "--device-id", "DEVICE_ID") {
 		t.Fatal("settingExplicitlyProvided(non-empty flag) = false, want true")
+	}
+}
+
+func TestVersionFlagRequested(t *testing.T) {
+	testCases := []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{name: "missing", args: []string{"--http-addr=:5004"}, want: false},
+		{name: "present", args: []string{"--version"}, want: true},
+		{name: "explicit true", args: []string{"--version=true"}, want: true},
+		{name: "explicit false", args: []string{"--version=false"}, want: false},
+		{name: "invalid bool defaults true", args: []string{"--version=not-a-bool"}, want: true},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := versionFlagRequested(tc.args); got != tc.want {
+				t.Fatalf("versionFlagRequested(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPrintVersionIfRequested(t *testing.T) {
+	previousVersion := appversion.Version
+	t.Cleanup(func() {
+		appversion.Version = previousVersion
+	})
+	appversion.Version = "1.2.3"
+
+	info := appversion.Current()
+	var out bytes.Buffer
+	if !printVersionIfRequested([]string{"--version"}, &out, info) {
+		t.Fatal("printVersionIfRequested(--version) = false, want true")
+	}
+	if got := out.String(); got != "hdhriptv v1.2.3\n" {
+		t.Fatalf("printVersionIfRequested output = %q, want %q", got, "hdhriptv v1.2.3\n")
+	}
+
+	out.Reset()
+	if printVersionIfRequested([]string{"--http-addr=:5004"}, &out, info) {
+		t.Fatal("printVersionIfRequested(non-version args) = true, want false")
+	}
+	if got := out.String(); got != "" {
+		t.Fatalf("non-version output = %q, want empty", got)
+	}
+}
+
+func TestDetectExplicitAutomationSettings(t *testing.T) {
+	t.Setenv("PLAYLIST_URL", "http://env.example.com/playlist.m3u")
+	t.Setenv("TUNER_COUNT", "6")
+
+	got, err := detectExplicitAutomationSettings(nil)
+	if err != nil {
+		t.Fatalf("detectExplicitAutomationSettings(nil) error = %v", err)
+	}
+	if !got.PlaylistURL {
+		t.Fatal("PlaylistURL explicit detection = false, want true when env is set")
+	}
+	if !got.TunerCount {
+		t.Fatal("TunerCount explicit detection = false, want true when env is set")
+	}
+
+	got, err = detectExplicitAutomationSettings([]string{"--tuner-count", ""})
+	if err != nil {
+		t.Fatalf("detectExplicitAutomationSettings(empty flag override) error = %v", err)
+	}
+	if got.TunerCount {
+		t.Fatal("TunerCount explicit detection = true, want false for empty flag override")
+	}
+}
+
+func TestDetectExplicitAutomationSettingsRejectsInvalidExplicitTunerCount(t *testing.T) {
+	t.Setenv("TUNER_COUNT", "not-a-number")
+
+	if _, err := detectExplicitAutomationSettings(nil); err == nil {
+		t.Fatal("detectExplicitAutomationSettings(nil) error = nil, want invalid TUNER_COUNT error")
+	}
+}
+
+func TestApplyAutomationCLIOverridesExplicitPrimaryTunerCountUpdatesPrimarySource(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	before, err := store.GetPlaylistSource(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(primary before) error = %v", err)
+	}
+	if before.TunerCount != 2 {
+		t.Fatalf("primary tuner_count before override = %d, want 2 seeded default", before.TunerCount)
+	}
+
+	cfg := config.Config{
+		PrimaryTunerCount: 6,
+		PlaylistSources: []config.PlaylistSourceConfig{
+			{
+				Name:       "Primary",
+				TunerCount: 6,
+				Enabled:    true,
+			},
+		},
+	}
+	if err := applyAutomationCLIOverrides(ctx, store, cfg, automationExplicitSettings{TunerCount: true}); err != nil {
+		t.Fatalf("applyAutomationCLIOverrides(explicit tuner-count) error = %v", err)
+	}
+
+	after, err := store.GetPlaylistSource(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(primary after) error = %v", err)
+	}
+	if after.TunerCount != 6 {
+		t.Fatalf("primary tuner_count after explicit override = %d, want 6", after.TunerCount)
+	}
+
+	sources, err := resolveRuntimeVirtualTunerSources(ctx, store, cfg)
+	if err != nil {
+		t.Fatalf("resolveRuntimeVirtualTunerSources() error = %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("len(runtime sources) = %d, want 1", len(sources))
+	}
+	if sources[0].TunerCount != 6 {
+		t.Fatalf("runtime primary tuner_count = %d, want 6", sources[0].TunerCount)
+	}
+}
+
+func TestApplyAutomationCLIOverridesDoesNotOverwritePrimaryTunerCountWhenNotExplicit(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	cfg := config.Config{
+		PrimaryTunerCount: 6,
+		PlaylistSources: []config.PlaylistSourceConfig{
+			{
+				Name:       "Primary",
+				TunerCount: 6,
+				Enabled:    true,
+			},
+		},
+	}
+	if err := applyAutomationCLIOverrides(ctx, store, cfg, automationExplicitSettings{}); err != nil {
+		t.Fatalf("applyAutomationCLIOverrides(non-explicit tuner-count) error = %v", err)
+	}
+
+	after, err := store.GetPlaylistSource(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(primary after) error = %v", err)
+	}
+	if after.TunerCount != 2 {
+		t.Fatalf("primary tuner_count after non-explicit override = %d, want 2", after.TunerCount)
+	}
+}
+
+func TestApplyAutomationCLIOverridesReconcilesConfiguredPlaylistSourcesByNormalizedURL(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	existingMatched, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Existing Matched",
+		PlaylistURL: "HTTP://EXTRA.EXAMPLE.COM/playlist.m3u",
+		TunerCount:  3,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(existing matched) error = %v", err)
+	}
+	existingRetained, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Existing Retained",
+		PlaylistURL: "http://retained.example.com/playlist.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(existing retained) error = %v", err)
+	}
+
+	cfg := config.Config{
+		PlaylistSourcesStartupAuthoritative: false,
+		PlaylistSources: []config.PlaylistSourceConfig{
+			{Name: "Primary", PlaylistURL: "", TunerCount: 2, Enabled: true},
+			{Name: "Updated Extra", PlaylistURL: "http://extra.example.com/playlist.m3u", TunerCount: 7, Enabled: false},
+			{Name: "New Extra", PlaylistURL: "http://new.example.com/playlist.m3u", TunerCount: 4, Enabled: true},
+		},
+	}
+
+	if err := applyAutomationCLIOverrides(ctx, store, cfg, automationExplicitSettings{PlaylistSources: true}); err != nil {
+		t.Fatalf("applyAutomationCLIOverrides(reconcile non-authoritative) error = %v", err)
+	}
+
+	afterMatched, err := store.GetPlaylistSource(ctx, existingMatched.SourceID)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(matched after) error = %v", err)
+	}
+	if afterMatched.Name != "Updated Extra" {
+		t.Fatalf("matched source name = %q, want Updated Extra", afterMatched.Name)
+	}
+	if afterMatched.TunerCount != 7 {
+		t.Fatalf("matched source tuner_count = %d, want 7", afterMatched.TunerCount)
+	}
+	if afterMatched.Enabled {
+		t.Fatal("matched source enabled = true, want false")
+	}
+
+	afterRetained, err := store.GetPlaylistSource(ctx, existingRetained.SourceID)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(retained after) error = %v", err)
+	}
+	if afterRetained.Name != existingRetained.Name {
+		t.Fatalf("retained source name = %q, want %q", afterRetained.Name, existingRetained.Name)
+	}
+
+	sources, err := store.ListPlaylistSources(ctx)
+	if err != nil {
+		t.Fatalf("ListPlaylistSources(after non-authoritative reconcile) error = %v", err)
+	}
+	foundNew := false
+	for _, source := range sources {
+		if strings.TrimSpace(strings.ToLower(source.PlaylistURL)) == "http://new.example.com/playlist.m3u" {
+			foundNew = true
+			if source.Name != "New Extra" {
+				t.Fatalf("new source name = %q, want New Extra", source.Name)
+			}
+			break
+		}
+	}
+	if !foundNew {
+		t.Fatal("expected newly configured source to be created")
+	}
+}
+
+func TestApplyAutomationCLIOverridesAuthoritativePrunesUnspecifiedConfiguredSources(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	matched, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Matched",
+		PlaylistURL: "http://matched.example.com/playlist.m3u",
+		TunerCount:  3,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(matched) error = %v", err)
+	}
+	pruned, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Pruned",
+		PlaylistURL: "http://pruned.example.com/playlist.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(pruned) error = %v", err)
+	}
+
+	cfg := config.Config{
+		PlaylistSourcesStartupAuthoritative: true,
+		PlaylistSources: []config.PlaylistSourceConfig{
+			{Name: "Primary", PlaylistURL: "", TunerCount: 2, Enabled: true},
+			{Name: "Matched Updated", PlaylistURL: "http://matched.example.com/playlist.m3u", TunerCount: 5, Enabled: true},
+		},
+	}
+
+	if err := applyAutomationCLIOverrides(ctx, store, cfg, automationExplicitSettings{PlaylistSources: true}); err != nil {
+		t.Fatalf("applyAutomationCLIOverrides(authoritative reconcile) error = %v", err)
+	}
+
+	updatedMatched, err := store.GetPlaylistSource(ctx, matched.SourceID)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(matched after authoritative) error = %v", err)
+	}
+	if updatedMatched.Name != "Matched Updated" {
+		t.Fatalf("matched source name = %q, want Matched Updated", updatedMatched.Name)
+	}
+	if updatedMatched.TunerCount != 5 {
+		t.Fatalf("matched source tuner_count = %d, want 5", updatedMatched.TunerCount)
+	}
+
+	if _, err := store.GetPlaylistSource(ctx, pruned.SourceID); !errors.Is(err, playlist.ErrPlaylistSourceNotFound) {
+		t.Fatalf("GetPlaylistSource(pruned after authoritative) error = %v, want playlist source not found", err)
+	}
+}
+
+func TestHasEnabledPlaylistSourceURL(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	if hasEnabledPlaylistSourceURL(ctx, store) {
+		t.Fatal("hasEnabledPlaylistSourceURL() = true, want false with only empty primary URL")
+	}
+
+	disabled := false
+	if _, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Disabled URL Source",
+		PlaylistURL: "http://disabled.example.com/playlist.m3u",
+		TunerCount:  2,
+		Enabled:     &disabled,
+	}); err != nil {
+		t.Fatalf("CreatePlaylistSource(disabled) error = %v", err)
+	}
+	if hasEnabledPlaylistSourceURL(ctx, store) {
+		t.Fatal("hasEnabledPlaylistSourceURL() = true, want false when only disabled source has playlist_url")
+	}
+
+	if _, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Enabled URL Source",
+		PlaylistURL: "http://enabled.example.com/playlist.m3u",
+		TunerCount:  2,
+	}); err != nil {
+		t.Fatalf("CreatePlaylistSource(enabled) error = %v", err)
+	}
+	if !hasEnabledPlaylistSourceURL(ctx, store) {
+		t.Fatal("hasEnabledPlaylistSourceURL() = false, want true when enabled source has playlist_url")
+	}
+}
+
+func TestPlaylistSourceRuntimeReloaderReloadPlaylistSourcesSuccessCapsDiscoveryCount(t *testing.T) {
+	t.Parallel()
+
+	store := &fakePlaylistSourceLister{
+		sources: []playlist.PlaylistSource{
+			{
+				SourceID:   1,
+				Name:       "Primary",
+				TunerCount: 2,
+				Enabled:    true,
+				OrderIndex: 0,
+			},
+			{
+				SourceID:   2,
+				Name:       "Backup",
+				TunerCount: 8,
+				Enabled:    false,
+				OrderIndex: 1,
+			},
+		},
+	}
+	tunerPool := &fakePlaylistSourceRuntimeTunerPool{capacity: 370}
+	hdhrSetter := &fakeDiscoveryAdvertisedSetter{}
+	discoverySetter := &fakeDiscoveryAdvertisedSetter{}
+
+	reloader := &playlistSourceRuntimeReloader{
+		store:           store,
+		tunerPool:       tunerPool,
+		hdhrHandler:     hdhrSetter,
+		discoveryServer: discoverySetter,
+	}
+
+	if err := reloader.ReloadPlaylistSources(context.Background()); err != nil {
+		t.Fatalf("ReloadPlaylistSources() error = %v, want nil", err)
+	}
+	if store.calls != 1 {
+		t.Fatalf("store ListPlaylistSources calls = %d, want 1", store.calls)
+	}
+	if tunerPool.reconfigureCalls != 1 {
+		t.Fatalf("tunerPool Reconfigure calls = %d, want 1", tunerPool.reconfigureCalls)
+	}
+	if len(tunerPool.lastSources) != 2 {
+		t.Fatalf("len(tunerPool.lastSources) = %d, want 2", len(tunerPool.lastSources))
+	}
+	if tunerPool.lastSources[0].SourceID != 1 || tunerPool.lastSources[1].SourceID != 2 {
+		t.Fatalf("tunerPool source IDs = [%d %d], want [1 2]", tunerPool.lastSources[0].SourceID, tunerPool.lastSources[1].SourceID)
+	}
+	if hdhrSetter.calls != 1 || discoverySetter.calls != 1 {
+		t.Fatalf("setter calls = hdhr:%d discovery:%d, want both 1", hdhrSetter.calls, discoverySetter.calls)
+	}
+	if hdhrSetter.lastCount != 255 || discoverySetter.lastCount != 255 {
+		t.Fatalf("setter counts = hdhr:%d discovery:%d, want both 255 cap", hdhrSetter.lastCount, discoverySetter.lastCount)
+	}
+}
+
+func TestPlaylistSourceRuntimeReloaderReloadPlaylistSourcesListFailurePreventsMutations(t *testing.T) {
+	t.Parallel()
+
+	storeErr := errors.New("list failed")
+	store := &fakePlaylistSourceLister{err: storeErr}
+	tunerPool := &fakePlaylistSourceRuntimeTunerPool{capacity: 24}
+	hdhrSetter := &fakeDiscoveryAdvertisedSetter{}
+	discoverySetter := &fakeDiscoveryAdvertisedSetter{}
+
+	reloader := &playlistSourceRuntimeReloader{
+		store:           store,
+		tunerPool:       tunerPool,
+		hdhrHandler:     hdhrSetter,
+		discoveryServer: discoverySetter,
+	}
+
+	err := reloader.ReloadPlaylistSources(context.Background())
+	if !errors.Is(err, storeErr) {
+		t.Fatalf("ReloadPlaylistSources() error = %v, want %v", err, storeErr)
+	}
+	if tunerPool.reconfigureCalls != 0 {
+		t.Fatalf("tunerPool Reconfigure calls = %d, want 0 on list failure", tunerPool.reconfigureCalls)
+	}
+	if hdhrSetter.calls != 0 || discoverySetter.calls != 0 {
+		t.Fatalf("setter calls = hdhr:%d discovery:%d, want both 0 on list failure", hdhrSetter.calls, discoverySetter.calls)
+	}
+}
+
+func TestSummarizePlaylistSourcesForLog(t *testing.T) {
+	if got := summarizePlaylistSourcesForLog(nil); got != nil {
+		t.Fatalf("summarizePlaylistSourcesForLog(nil) = %#v, want nil", got)
+	}
+
+	sources := []config.PlaylistSourceConfig{
+		{
+			Name:        "Primary",
+			PlaylistURL: "http://primary.example.com/playlist.m3u",
+			TunerCount:  2,
+			Enabled:     true,
+		},
+		{
+			Name:        "Backup",
+			PlaylistURL: "   ",
+			TunerCount:  3,
+			Enabled:     false,
+		},
+	}
+	got := summarizePlaylistSourcesForLog(sources)
+	if len(got) != 2 {
+		t.Fatalf("len(summarizePlaylistSourcesForLog) = %d, want 2", len(got))
+	}
+	if name, _ := got[0]["name"].(string); name != "Primary" {
+		t.Fatalf("first source name = %q, want Primary", name)
+	}
+	if configured, _ := got[0]["playlist_url_configured"].(bool); !configured {
+		t.Fatalf("first source playlist_url_configured = %v, want true", configured)
+	}
+	if tuners, _ := got[0]["tuner_count"].(int); tuners != 2 {
+		t.Fatalf("first source tuner_count = %d, want 2", tuners)
+	}
+	if name, _ := got[1]["name"].(string); name != "Backup" {
+		t.Fatalf("second source name = %q, want Backup", name)
+	}
+	if configured, _ := got[1]["playlist_url_configured"].(bool); configured {
+		t.Fatalf("second source playlist_url_configured = %v, want false", configured)
+	}
+	if enabled, _ := got[1]["enabled"].(bool); enabled {
+		t.Fatalf("second source enabled = %v, want false", enabled)
 	}
 }
 
@@ -328,6 +818,146 @@ func TestRunAndWaitPlaylistSyncTimeoutCancelsUnderlyingRun(t *testing.T) {
 	run := waitForJobRunDone(t, runner, runs[0].RunID)
 	if run.Status != jobs.StatusCanceled {
 		t.Fatalf("run status = %q, want %q", run.Status, jobs.StatusCanceled)
+	}
+}
+
+func TestRunAndWaitPlaylistSyncAlreadyRunningWaitsForExistingRunSuccess(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	runner, err := jobs.NewRunner(store)
+	if err != nil {
+		t.Fatalf("jobs.NewRunner() error = %v", err)
+	}
+	defer runner.Close()
+
+	releaseExisting := make(chan struct{})
+	existingStarted := make(chan struct{})
+	existingRunID, err := runner.Start(ctx, jobs.JobPlaylistSync, jobs.TriggerSchedule, func(jobCtx context.Context, _ *jobs.RunContext) error {
+		close(existingStarted)
+		select {
+		case <-releaseExisting:
+			return nil
+		case <-jobCtx.Done():
+			return jobCtx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatalf("runner.Start(existing) error = %v", err)
+	}
+	<-existingStarted
+
+	var manualJobCalls atomic.Int32
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- runAndWaitPlaylistSync(ctx, runner, func(context.Context, *jobs.RunContext) error {
+			manualJobCalls.Add(1)
+			return nil
+		})
+	}()
+
+	select {
+	case waitErr := <-waitDone:
+		t.Fatalf("runAndWaitPlaylistSync() returned early with err=%v before existing run completed", waitErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseExisting)
+
+	select {
+	case waitErr := <-waitDone:
+		if waitErr != nil {
+			t.Fatalf("runAndWaitPlaylistSync() error = %v, want nil", waitErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for runAndWaitPlaylistSync to observe existing run completion")
+	}
+
+	if calls := manualJobCalls.Load(); calls != 0 {
+		t.Fatalf("manual job function call count = %d, want 0 when playlist sync is already running", calls)
+	}
+	existingRun := waitForJobRunDone(t, runner, existingRunID)
+	if existingRun.Status != jobs.StatusSuccess {
+		t.Fatalf("existing run status = %q, want %q", existingRun.Status, jobs.StatusSuccess)
+	}
+}
+
+func TestRunAndWaitPlaylistSyncAlreadyRunningReturnsExistingRunError(t *testing.T) {
+	ctx := context.Background()
+	store := openTestStore(t)
+
+	runner, err := jobs.NewRunner(store)
+	if err != nil {
+		t.Fatalf("jobs.NewRunner() error = %v", err)
+	}
+	defer runner.Close()
+
+	releaseExisting := make(chan struct{})
+	existingStarted := make(chan struct{})
+	existingErr := errors.New("existing playlist sync failed")
+	existingRunID, err := runner.Start(ctx, jobs.JobPlaylistSync, jobs.TriggerSchedule, func(jobCtx context.Context, _ *jobs.RunContext) error {
+		close(existingStarted)
+		select {
+		case <-releaseExisting:
+			return existingErr
+		case <-jobCtx.Done():
+			return jobCtx.Err()
+		}
+	})
+	if err != nil {
+		t.Fatalf("runner.Start(existing) error = %v", err)
+	}
+	<-existingStarted
+
+	var manualJobCalls atomic.Int32
+	waitDone := make(chan error, 1)
+	go func() {
+		waitDone <- runAndWaitPlaylistSync(ctx, runner, func(context.Context, *jobs.RunContext) error {
+			manualJobCalls.Add(1)
+			return nil
+		})
+	}()
+
+	select {
+	case waitErr := <-waitDone:
+		t.Fatalf("runAndWaitPlaylistSync() returned early with err=%v before existing run completed", waitErr)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(releaseExisting)
+
+	select {
+	case waitErr := <-waitDone:
+		if waitErr == nil {
+			t.Fatal("runAndWaitPlaylistSync() error = nil, want existing run failure")
+		}
+		if !strings.Contains(waitErr.Error(), "failed: existing playlist sync failed") {
+			t.Fatalf("runAndWaitPlaylistSync() error = %v, want existing run error text", waitErr)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for runAndWaitPlaylistSync existing-run error")
+	}
+	if calls := manualJobCalls.Load(); calls != 0 {
+		t.Fatalf("manual job function call count = %d, want 0 when playlist sync is already running", calls)
+	}
+
+	existingRun := waitForJobRunDone(t, runner, existingRunID)
+	if existingRun.Status != jobs.StatusError {
+		t.Fatalf("existing run status = %q, want %q", existingRun.Status, jobs.StatusError)
+	}
+}
+
+func TestRunAndWaitPlaylistSyncRejectsNilRunner(t *testing.T) {
+	t.Parallel()
+
+	err := runAndWaitPlaylistSync(context.Background(), nil, func(context.Context, *jobs.RunContext) error {
+		return nil
+	})
+	if err == nil {
+		t.Fatal("runAndWaitPlaylistSync(nil) error = nil, want non-nil")
+	}
+	if !strings.Contains(err.Error(), "job runner is required") {
+		t.Fatalf("runAndWaitPlaylistSync(nil) error = %v, want missing runner message", err)
 	}
 }
 
@@ -1298,6 +1928,47 @@ func (m *fakeTraditionalGuideStartMigrator) Reorder(_ context.Context, channelID
 	m.reorderCalls++
 	m.reorderIDs = append([]int64(nil), channelIDs...)
 	return m.reorderErr
+}
+
+type fakePlaylistSourceLister struct {
+	sources []playlist.PlaylistSource
+	err     error
+	calls   int
+}
+
+func (l *fakePlaylistSourceLister) ListPlaylistSources(context.Context) ([]playlist.PlaylistSource, error) {
+	l.calls++
+	if l.err != nil {
+		return nil, l.err
+	}
+	out := make([]playlist.PlaylistSource, len(l.sources))
+	copy(out, l.sources)
+	return out, nil
+}
+
+type fakePlaylistSourceRuntimeTunerPool struct {
+	capacity         int
+	reconfigureCalls int
+	lastSources      []stream.VirtualTunerSource
+}
+
+func (p *fakePlaylistSourceRuntimeTunerPool) Reconfigure(sources []stream.VirtualTunerSource) {
+	p.reconfigureCalls++
+	p.lastSources = append([]stream.VirtualTunerSource(nil), sources...)
+}
+
+func (p *fakePlaylistSourceRuntimeTunerPool) Capacity() int {
+	return p.capacity
+}
+
+type fakeDiscoveryAdvertisedSetter struct {
+	calls     int
+	lastCount int
+}
+
+func (s *fakeDiscoveryAdvertisedSetter) SetDiscoveryAdvertisedTunerCount(tunerCount int) {
+	s.calls++
+	s.lastCount = tunerCount
 }
 
 type basicResponseWriter struct {

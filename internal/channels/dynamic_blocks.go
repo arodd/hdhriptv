@@ -25,6 +25,7 @@ type DynamicChannelQuery struct {
 	Name        string   `json:"name"`
 	GroupName   string   `json:"group_name"`
 	GroupNames  []string `json:"group_names,omitempty"`
+	SourceIDs   []int64  `json:"source_ids"`
 	SearchQuery string   `json:"search_query"`
 	SearchRegex bool     `json:"search_regex,omitempty"`
 	// NextSlotCursor tracks where new dynamic matches should be placed next.
@@ -42,6 +43,7 @@ type DynamicChannelQueryCreate struct {
 	Name        string   `json:"name"`
 	GroupName   string   `json:"group_name"`
 	GroupNames  []string `json:"group_names,omitempty"`
+	SourceIDs   []int64  `json:"source_ids"`
 	SearchQuery string   `json:"search_query"`
 	SearchRegex bool     `json:"search_regex,omitempty"`
 }
@@ -52,6 +54,7 @@ type DynamicChannelQueryUpdate struct {
 	Name        *string   `json:"name,omitempty"`
 	GroupName   *string   `json:"group_name,omitempty"`
 	GroupNames  *[]string `json:"group_names,omitempty"`
+	SourceIDs   *[]int64  `json:"source_ids,omitempty"`
 	SearchQuery *string   `json:"search_query,omitempty"`
 	SearchRegex *bool     `json:"search_regex,omitempty"`
 }

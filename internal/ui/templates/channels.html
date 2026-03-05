@@ -262,63 +262,60 @@
       background: #f6f9ff;
     }
 
+{{template "shared-css-chips"}}
+
     .group-picker {
-      width: 100%;
-      border: 1px solid #dce5f5;
       border-radius: 8px;
       background: #ffffff;
+    }
+
+    .source-picker {
+      width: 100%;
+      border: 1px solid #c2e0d9;
+      border-radius: 10px;
+      background: #f5fcfa;
       padding: 8px;
       display: grid;
       gap: 8px;
     }
 
-    .group-picker-label {
-      color: var(--muted);
+    .source-picker-label {
+      color: #156b5a;
       font-size: 0.82rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.03em;
     }
 
-    .selected-groups {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      min-height: 26px;
-    }
-
-    .group-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border: 1px solid #aac5f0;
-      background: #e9f2ff;
-      color: #1f4e92;
-      border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 0.82rem;
-    }
-
-    .group-chip button {
-      border: none;
-      background: transparent;
-      padding: 0;
-      font-size: 0.85rem;
-      line-height: 1;
-      color: #1f4e92;
-      cursor: pointer;
-    }
-
-    .group-picker-controls {
+    .source-picker-controls {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
     }
 
-    .group-picker-controls input[type="text"] {
-      min-width: 200px;
-      flex: 1;
+    .source-dropdown {
+      border: 1px solid #9bcfc4;
+      background: #ffffff;
+      border-radius: 8px;
+      padding: 6px;
+      display: grid;
+      gap: 4px;
+      max-height: 180px;
+      overflow: auto;
+    }
+
+    .source-dropdown label {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.85rem;
+      padding: 4px;
+      border-radius: 6px;
+    }
+
+    .source-dropdown label:hover {
+      background: #e6f7f4;
     }
 
     #channel-list.dvr-mappings-hidden .mapping {
@@ -350,14 +347,14 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog">Catalog</a>
       <a href="/ui/channels" class="active">Channels</a>
       <a href="/ui/merge">Merge Suggestions</a>
       <a href="/ui/tuners">Tuners</a>
-      <a href="/ui/dvr">DVR</a>
-      <a href="/ui/automation">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation">Automation</a>{{end}}
     </nav>
   </header>
 
@@ -411,6 +408,16 @@
             </div>
           </div>
 
+          <div class="source-picker">
+            <div class="source-picker-label">Playlist Source Filter</div>
+            <div id="dynamic-source-chips" class="selected-groups"></div>
+            <div class="source-picker-controls">
+              <button id="dynamic-source-toggle" type="button">Select Sources</button>
+              <button id="dynamic-source-clear" type="button">All Sources</button>
+            </div>
+            <div id="dynamic-source-dropdown" class="source-dropdown" hidden></div>
+          </div>
+
           <input id="dynamic-search" type="text" placeholder="Catalog search query (token mode: |/OR and -term/!term; regex mode: full pattern)">
           <label class="channel-meta">
             <input id="dynamic-search-regex" type="checkbox">
@@ -449,6 +456,8 @@
       dynamicQueries: [],
       catalogGroups: [],
       dynamicCreateGroups: [],
+      dynamicCreateSourceIDs: [],
+      playlistSources: [],
       dvrMappings: {},
       defaultLineupID: "",
       lineups: [],
@@ -468,43 +477,24 @@
     const dynamicGroupOptionsEl = document.getElementById("dynamic-group-options");
     const dynamicGroupChipsEl = document.getElementById("dynamic-group-chips");
     const dynamicGroupInputEl = document.getElementById("dynamic-group-input");
+    const dynamicSourceChipsEl = document.getElementById("dynamic-source-chips");
+    const dynamicSourceDropdownEl = document.getElementById("dynamic-source-dropdown");
+    const dynamicSourceToggleBtn = document.getElementById("dynamic-source-toggle");
     const dynamicSearchRegexEl = document.getElementById("dynamic-search-regex");
     const defaultLineupEl = document.getElementById("dvr-default-lineup");
     const dvrToggleMappingsBtn = document.getElementById("dvr-toggle-mappings-btn");
     const dvrMappingVisibilityNoteEl = document.getElementById("dvr-mapping-visibility-note");
 
-    function showStatus(message, isError = false) {
-      statusEl.hidden = false;
-      statusEl.classList.toggle("error", isError);
-      statusEl.textContent = message;
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 3500);
-    }
-
-    async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `request failed (${resp.status})`);
-      }
-      if (resp.status === 204) {
-        return null;
-      }
-      return resp.json();
-    }
+    {{template "shared-js-show-status"}}
+    {{template "shared-js-api"}}
+    {{template "shared-js-group-helpers"}}
+    {{template "shared-js-load-paged-collection"}}
+    {{template "search-warning-summary-function"}}
 
     function handleError(err) {
       console.error(err);
       showStatus(err.message || "request failed", true);
     }
-
-    {{template "search-warning-summary-function"}}
 
     function persistDVRMappingVisibilityPreference() {
       try {
@@ -557,45 +547,6 @@
       }
     }
 
-    function normalizeGroupName(raw) {
-      if (raw && typeof raw === "object") {
-        if (typeof raw.name === "string") {
-          return raw.name.trim();
-        }
-        if (typeof raw.Name === "string") {
-          return raw.Name.trim();
-        }
-      }
-      return "";
-    }
-
-    function normalizeGroupNameValue(raw) {
-      return String(raw || "").trim();
-    }
-
-    function normalizeGroupNameList(raw) {
-      const deduped = new Map();
-      for (const value of raw || []) {
-        const trimmed = normalizeGroupNameValue(value);
-        if (!trimmed) {
-          continue;
-        }
-        const key = trimmed.toLowerCase();
-        if (deduped.has(key)) {
-          continue;
-        }
-        deduped.set(key, trimmed);
-      }
-      return Array.from(deduped.entries())
-        .sort((a, b) => {
-          if (a[0] === b[0]) {
-            return a[1].localeCompare(b[1]);
-          }
-          return a[0].localeCompare(b[0]);
-        })
-        .map((entry) => entry[1]);
-    }
-
     function groupAlias(groupNames) {
       return groupNames.length > 0 ? groupNames[0] : "";
     }
@@ -604,6 +555,49 @@
       const rawList = Array.isArray(query?.group_names) ? query.group_names : [];
       const rawLegacy = normalizeGroupNameValue(query?.group_name || "");
       return normalizeGroupNameList(rawList.length > 0 ? rawList : [rawLegacy]);
+    }
+
+    function normalizeSourceIDs(raw) {
+      if (!Array.isArray(raw)) {
+        return [];
+      }
+      return [...new Set(raw.map(Number).filter((value) => Number.isFinite(value) && value > 0))];
+    }
+
+    function parseSourceIDsCSV(raw, fieldName) {
+      const normalizedField = String(fieldName || "source_ids");
+      const text = String(raw || "").trim();
+      if (!text) {
+        return [];
+      }
+      const out = [];
+      for (const token of text.split(",")) {
+        const part = token.trim();
+        if (!part) {
+          continue;
+        }
+        const parsed = Number.parseInt(part, 10);
+        if (!Number.isFinite(parsed) || parsed <= 0) {
+          throw new Error(`${normalizedField} must contain only positive integers`);
+        }
+        if (!out.includes(parsed)) {
+          out.push(parsed);
+        }
+      }
+      return out;
+    }
+
+    function dynamicSourceNameByID(sourceID) {
+      const src = state.playlistSources.find((source) => source.source_id === sourceID);
+      return src ? src.name : `Source #${sourceID}`;
+    }
+
+    function dynamicQuerySourceSummary(sourceIDs) {
+      const normalized = normalizeSourceIDs(sourceIDs);
+      if (normalized.length === 0) {
+        return "(all sources)";
+      }
+      return normalized.map(dynamicSourceNameByID).join(", ");
     }
 
     function asNonNegativeInt(raw) {
@@ -691,9 +685,114 @@
       renderDynamicGroupOptions();
     }
 
+    function renderDynamicCreateSourceChips() {
+      dynamicSourceChipsEl.innerHTML = "";
+      if (state.dynamicCreateSourceIDs.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "empty";
+        hint.textContent = "All sources selected.";
+        dynamicSourceChipsEl.appendChild(hint);
+        return;
+      }
+
+      for (const sourceID of state.dynamicCreateSourceIDs) {
+        const chip = document.createElement("div");
+        chip.className = "source-chip";
+
+        const label = document.createElement("span");
+        label.textContent = dynamicSourceNameByID(sourceID);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "x";
+        removeBtn.setAttribute("aria-label", `Remove ${dynamicSourceNameByID(sourceID)}`);
+        removeBtn.addEventListener("click", () => {
+          state.dynamicCreateSourceIDs = state.dynamicCreateSourceIDs.filter((id) => id !== sourceID);
+          renderDynamicCreateSourceChips();
+          renderDynamicCreateSourceDropdown();
+          onDynamicCreateSourceFilterChanged();
+        });
+
+        chip.append(label, removeBtn);
+        dynamicSourceChipsEl.appendChild(chip);
+      }
+    }
+
+    function renderDynamicCreateSourceDropdown() {
+      dynamicSourceDropdownEl.innerHTML = "";
+      const validSourceIDs = new Set(
+        state.playlistSources
+          .map((source) => Number(source.source_id))
+          .filter((sourceID) => Number.isFinite(sourceID) && sourceID > 0),
+      );
+      state.dynamicCreateSourceIDs = state.dynamicCreateSourceIDs.filter((sourceID) => validSourceIDs.has(sourceID));
+
+      for (const src of state.playlistSources) {
+        const lbl = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = state.dynamicCreateSourceIDs.includes(src.source_id);
+        cb.addEventListener("change", () => {
+          if (cb.checked) {
+            state.dynamicCreateSourceIDs = normalizeSourceIDs(state.dynamicCreateSourceIDs.concat(src.source_id));
+          } else {
+            state.dynamicCreateSourceIDs = state.dynamicCreateSourceIDs.filter((id) => id !== src.source_id);
+          }
+          renderDynamicCreateSourceChips();
+          renderDynamicCreateSourceDropdown();
+          onDynamicCreateSourceFilterChanged();
+        });
+
+        const span = document.createElement("span");
+        span.textContent = src.name;
+        lbl.append(cb, span);
+        dynamicSourceDropdownEl.appendChild(lbl);
+      }
+
+      dynamicSourceToggleBtn.textContent = state.dynamicCreateSourceIDs.length > 0
+        ? `Sources (${state.dynamicCreateSourceIDs.length} selected)`
+        : "Select Sources";
+    }
+
+    function toggleDynamicCreateSourceDropdown() {
+      dynamicSourceDropdownEl.hidden = !dynamicSourceDropdownEl.hidden;
+    }
+
+    function clearDynamicCreateSources() {
+      state.dynamicCreateSourceIDs = [];
+      renderDynamicCreateSourceChips();
+      renderDynamicCreateSourceDropdown();
+      onDynamicCreateSourceFilterChanged();
+    }
+
+    function dynamicCatalogGroupsURL() {
+      const params = new URLSearchParams();
+      params.set("include_counts", "0");
+      if (state.dynamicCreateSourceIDs.length > 0) {
+        params.set("source_ids", state.dynamicCreateSourceIDs.join(","));
+      }
+      return `/api/groups?${params.toString()}`;
+    }
+
+    async function loadPlaylistSources() {
+      try {
+        const payload = await api("/api/admin/playlist-sources");
+        state.playlistSources = payload.playlist_sources || [];
+      } catch (err) {
+        console.warn("unable to load playlist sources for channels UI dynamic source picker", err);
+        state.playlistSources = [];
+      }
+      renderDynamicCreateSourceChips();
+      renderDynamicCreateSourceDropdown();
+    }
+
+    function onDynamicCreateSourceFilterChanged() {
+      loadCatalogGroups().catch(handleError);
+    }
+
     async function loadCatalogGroups() {
       try {
-        const groups = await loadPagedCollection("/api/groups?include_counts=0", "groups");
+        const groups = await loadPagedCollection(dynamicCatalogGroupsURL(), "groups");
         state.catalogGroups = groups.map(normalizeGroupName).filter((name) => name.length > 0);
       } catch (err) {
         console.warn("unable to load catalog groups for dynamic block autocomplete", err);
@@ -733,44 +832,6 @@
       renderLineupOptions();
       updateDVRStateSummary();
       applyDVRMappingVisibility();
-    }
-
-    async function loadPagedCollection(path, key, pageLimit = channelPageLimit) {
-      const items = [];
-      let offset = 0;
-      let total = -1;
-
-      while (true) {
-        const params = new URLSearchParams({
-          limit: String(pageLimit),
-          offset: String(offset),
-        });
-        const separator = path.includes("?") ? "&" : "?";
-        const data = await api(`${path}${separator}${params.toString()}`);
-        const page = Array.isArray(data?.[key]) ? data[key] : [];
-        const reportedTotal = Number(data?.total);
-        if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
-          total = reportedTotal;
-        }
-
-        items.push(...page);
-        if (page.length === 0) {
-          break;
-        }
-
-        const reportedLimit = Number(data?.limit);
-        const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
-        if (step <= 0) {
-          break;
-        }
-        offset += step;
-
-        if (total >= 0 && offset >= total) {
-          break;
-        }
-      }
-
-      return items;
     }
 
     async function loadTraditionalChannels() {
@@ -914,7 +975,8 @@
           : "";
         const queryGroups = normalizeDynamicQueryGroups(query);
         const groupSummary = queryGroups.length > 0 ? queryGroups.join(", ") : "(any)";
-        meta.textContent = `order ${query.order_index} | ${query.enabled ? "enabled" : "disabled"} | mode ${query.search_regex ? "regex" : "token"} | groups ${groupSummary} | query ${query.search_query || "(any)"} | generated ${query.generated_count || 0}${truncation}`;
+        const sourceSummary = dynamicQuerySourceSummary(query.source_ids);
+        meta.textContent = `order ${query.order_index} | ${query.enabled ? "enabled" : "disabled"} | mode ${query.search_regex ? "regex" : "token"} | sources ${sourceSummary} | groups ${groupSummary} | query ${query.search_query || "(any)"} | generated ${query.generated_count || 0}${truncation}`;
 
         const actions = document.createElement("div");
         actions.className = "row-actions";
@@ -1121,6 +1183,7 @@
 
       const name = document.getElementById("dynamic-name").value.trim();
       const groupNames = normalizeGroupNameList(state.dynamicCreateGroups);
+      const sourceIDs = normalizeSourceIDs(state.dynamicCreateSourceIDs);
       const searchQuery = document.getElementById("dynamic-search").value.trim();
       const searchRegex = Boolean(dynamicSearchRegexEl.checked);
       const enabled = Boolean(document.getElementById("dynamic-enabled").checked);
@@ -1131,6 +1194,7 @@
           name,
           group_name: groupAlias(groupNames),
           group_names: groupNames,
+          source_ids: sourceIDs,
           search_query: searchQuery,
           search_regex: searchRegex,
           enabled,
@@ -1140,11 +1204,15 @@
 
       document.getElementById("dynamic-name").value = "";
       state.dynamicCreateGroups = [];
+      state.dynamicCreateSourceIDs = [];
       renderDynamicCreateGroupChips();
       renderDynamicGroupOptions();
+      renderDynamicCreateSourceChips();
+      renderDynamicCreateSourceDropdown();
       document.getElementById("dynamic-search").value = "";
       dynamicSearchRegexEl.checked = false;
       document.getElementById("dynamic-enabled").checked = true;
+      await loadCatalogGroups();
 
       await loadDynamicQueries();
       showStatus(`Dynamic channel block created${warning ? `: ${warning}` : ""}`);
@@ -1182,6 +1250,17 @@
       if (nextGroupsRaw === null) {
         return;
       }
+      const existingSourceIDs = normalizeSourceIDs(query.source_ids);
+      const sourceHint = state.playlistSources.length > 0
+        ? state.playlistSources.map((source) => `${source.source_id}:${source.name}`).join(", ")
+        : "none";
+      const nextSourceIDsRaw = window.prompt(
+        `Playlist source IDs CSV (blank = all sources). Available: ${sourceHint}`,
+        existingSourceIDs.join(", "),
+      );
+      if (nextSourceIDsRaw === null) {
+        return;
+      }
       const nextSearch = window.prompt("Catalog search query (blank = any; token mode uses |/OR and -term/!term, regex mode uses one full pattern)", query.search_query || "");
       if (nextSearch === null) {
         return;
@@ -1198,10 +1277,12 @@
       const enabled = parseBooleanInput(enabledRaw, "enabled");
       const searchRegex = parseBooleanInput(regexRaw, "search_regex");
       const nextGroups = normalizeGroupNameList(String(nextGroupsRaw || "").split(","));
+      const nextSourceIDs = parseSourceIDsCSV(nextSourceIDsRaw, "source_ids");
       await updateDynamicQuery(query.query_id, {
         name: String(nextName).trim(),
         group_name: groupAlias(nextGroups),
         group_names: nextGroups,
+        source_ids: nextSourceIDs,
         search_query: String(nextSearch).trim(),
         search_regex: searchRegex,
         enabled,
@@ -1417,7 +1498,7 @@
     }
 
     async function loadAll() {
-      await loadDVRState();
+      await Promise.all([loadDVRState(), loadPlaylistSources()]);
       await Promise.all([
         loadTraditionalChannels(),
         loadDynamicQueries(),
@@ -1446,6 +1527,24 @@
 
     document.getElementById("dynamic-group-clear").addEventListener("click", () => {
       clearDynamicCreateGroups();
+    });
+
+    dynamicSourceToggleBtn.addEventListener("click", () => {
+      toggleDynamicCreateSourceDropdown();
+    });
+
+    document.getElementById("dynamic-source-clear").addEventListener("click", () => {
+      clearDynamicCreateSources();
+    });
+
+    document.addEventListener("click", (event) => {
+      if (
+        !dynamicSourceDropdownEl.hidden &&
+        !dynamicSourceDropdownEl.contains(event.target) &&
+        !dynamicSourceToggleBtn.contains(event.target)
+      ) {
+        dynamicSourceDropdownEl.hidden = true;
+      }
     });
 
     document.getElementById("refresh-btn").addEventListener("click", () => {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/arodd/hdhriptv/internal/channels"
@@ -179,5 +180,95 @@ func TestAdminRoutesDeleteSourceRecoveryForActiveSource(t *testing.T) {
 	}
 	if provider.lastTriggerReason != "admin_source_deleted" {
 		t.Fatalf("lastTriggerReason = %q, want %q", provider.lastTriggerReason, "admin_source_deleted")
+	}
+}
+
+func TestAdminRoutesSourceMutationsReturnChannelNotFoundForMissingChannel(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	ctx := context.Background()
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:src-missing-primary",
+			ChannelKey: "tvg:source-missing",
+			Name:       "Source Missing Primary",
+			Group:      "Source Mutation",
+			StreamURL:  "http://example.com/source-missing-primary.ts",
+		},
+		{
+			ItemKey:    "src:src-missing-secondary",
+			ChannelKey: "tvg:source-missing",
+			Name:       "Source Missing Secondary",
+			Group:      "Source Mutation",
+			StreamURL:  "http://example.com/source-missing-secondary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	channel, err := channelsSvc.Create(ctx, "src:src-missing-primary", "", "", nil)
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+	source, err := channelsSvc.AddSource(ctx, channel.ChannelID, "src:src-missing-secondary", true)
+	if err != nil {
+		t.Fatalf("AddSource() error = %v", err)
+	}
+
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	const missingChannelID int64 = 999999
+
+	updateRec := doRaw(
+		t,
+		mux,
+		http.MethodPatch,
+		fmt.Sprintf("/api/channels/%d/sources/%d", missingChannelID, source.SourceID),
+		map[string]any{"enabled": true},
+	)
+	if updateRec.Code != http.StatusNotFound {
+		t.Fatalf("PATCH source on missing channel status = %d, want %d", updateRec.Code, http.StatusNotFound)
+	}
+	if !strings.Contains(updateRec.Body.String(), channels.ErrChannelNotFound.Error()) {
+		t.Fatalf("PATCH source on missing channel body = %q, want channel not found", updateRec.Body.String())
+	}
+
+	deleteRec := doRaw(
+		t,
+		mux,
+		http.MethodDelete,
+		fmt.Sprintf("/api/channels/%d/sources/%d", missingChannelID, source.SourceID),
+		nil,
+	)
+	if deleteRec.Code != http.StatusNotFound {
+		t.Fatalf("DELETE source on missing channel status = %d, want %d", deleteRec.Code, http.StatusNotFound)
+	}
+	if !strings.Contains(deleteRec.Body.String(), channels.ErrChannelNotFound.Error()) {
+		t.Fatalf("DELETE source on missing channel body = %q, want channel not found", deleteRec.Body.String())
+	}
+
+	reorderRec := doRaw(
+		t,
+		mux,
+		http.MethodPatch,
+		fmt.Sprintf("/api/channels/%d/sources/reorder", missingChannelID),
+		map[string]any{"source_ids": []int64{}},
+	)
+	if reorderRec.Code != http.StatusNotFound {
+		t.Fatalf("PATCH reorder on missing channel status = %d, want %d", reorderRec.Code, http.StatusNotFound)
+	}
+	if !strings.Contains(reorderRec.Body.String(), channels.ErrChannelNotFound.Error()) {
+		t.Fatalf("PATCH reorder on missing channel body = %q, want channel not found", reorderRec.Body.String())
 	}
 }

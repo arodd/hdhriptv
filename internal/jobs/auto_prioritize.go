@@ -49,6 +49,13 @@ var reServerReturnedStatus = regexp.MustCompile(`(?i)\bserver returned\s+([1-5][
 type TunerUsageProvider interface {
 	InUseCount() int
 	AcquireProbe(ctx context.Context, label string, cancel context.CancelCauseFunc) (*stream.Lease, error)
+	AcquireProbeForSource(ctx context.Context, sourceID int64, label string, cancel context.CancelCauseFunc) (*stream.Lease, error)
+}
+
+// SourcePoolTunerUsageProvider exposes optional per-source pool accounting.
+type SourcePoolTunerUsageProvider interface {
+	CapacityForSource(sourceID int64) int
+	InUseCountForSource(sourceID int64) int
 }
 
 // AutoPrioritizeSettingsStore reads analyzer-related automation settings.
@@ -273,10 +280,18 @@ func (j *AutoPrioritizeJob) Run(ctx context.Context, run *RunContext) error {
 					cacheHits++
 					continue
 				}
-				tasks = append(tasks, analysisTask{ItemKey: itemKey, StreamURL: source.StreamURL})
+				tasks = append(tasks, analysisTask{
+					ItemKey:          itemKey,
+					StreamURL:        source.StreamURL,
+					PlaylistSourceID: source.PlaylistSourceID,
+				})
 				queuedItemKeys[itemKey] = struct{}{}
 			case cacheErr == sql.ErrNoRows:
-				tasks = append(tasks, analysisTask{ItemKey: itemKey, StreamURL: source.StreamURL})
+				tasks = append(tasks, analysisTask{
+					ItemKey:          itemKey,
+					StreamURL:        source.StreamURL,
+					PlaylistSourceID: source.PlaylistSourceID,
+				})
 				queuedItemKeys[itemKey] = struct{}{}
 			default:
 				return fmt.Errorf("load cached metric for %q: %w", itemKey, cacheErr)
@@ -285,21 +300,13 @@ func (j *AutoPrioritizeJob) Run(ctx context.Context, run *RunContext) error {
 	}
 
 	workers := j.resolveWorkers()
+	sourceProbeAvailability := j.resolveSourceProbeAvailability(tasks)
 	if len(tasks) > 0 && workers <= 0 {
-		inUse := 0
-		if j.opts.TunerUsage != nil {
-			inUse = j.opts.TunerUsage.InUseCount()
-			if inUse < 0 {
-				inUse = 0
-			}
-		}
-		return fmt.Errorf(
-			"auto-prioritize skipped: no probe slots available (tuners=%d, active_streams=%d)",
-			j.opts.TunerCount,
-			inUse,
-		)
+		// Even when initial slot snapshots are fully occupied, probe acquisition
+		// should still run bounded retries so transient contention can recover.
+		workers = 1
 	}
-	analysisResult, err := j.analyzePending(ctx, tasks, workers, now)
+	analysisResult, err := j.analyzePending(ctx, tasks, workers, sourceProbeAvailability, now)
 	if err != nil {
 		return err
 	}
@@ -536,6 +543,43 @@ func (j *AutoPrioritizeJob) resolveWorkers() int {
 	return workers
 }
 
+func (j *AutoPrioritizeJob) resolveSourceProbeAvailability(tasks []analysisTask) map[int64]int {
+	if j == nil || j.opts.TunerUsage == nil || len(tasks) == 0 {
+		return nil
+	}
+	perSource, ok := j.opts.TunerUsage.(SourcePoolTunerUsageProvider)
+	if !ok {
+		return nil
+	}
+
+	availability := make(map[int64]int)
+	for _, task := range tasks {
+		sourceID := task.PlaylistSourceID
+		if sourceID <= 0 {
+			continue
+		}
+		if _, seen := availability[sourceID]; seen {
+			continue
+		}
+		capacity := perSource.CapacityForSource(sourceID)
+		if capacity < 0 {
+			// Negative capacity indicates the provider does not expose source-
+			// specific accounting for this source (legacy/shared-pool path).
+			continue
+		}
+		inUse := perSource.InUseCountForSource(sourceID)
+		if inUse < 0 {
+			inUse = 0
+		}
+		available := capacity - inUse
+		if available < 0 {
+			available = 0
+		}
+		availability[sourceID] = available
+	}
+	return availability
+}
+
 type analysisScope struct {
 	EnabledOnly    bool
 	TopNPerChannel int
@@ -589,8 +633,9 @@ func selectAnalysisSources(sources []channels.Source, enabledOnly bool, topNPerC
 }
 
 type analysisTask struct {
-	ItemKey   string
-	StreamURL string
+	ItemKey          string
+	StreamURL        string
+	PlaylistSourceID int64
 }
 
 type analysisAggregate struct {
@@ -604,6 +649,7 @@ func (j *AutoPrioritizeJob) analyzePending(
 	ctx context.Context,
 	tasks []analysisTask,
 	workers int,
+	sourceProbeAvailability map[int64]int,
 	now time.Time,
 ) (analysisAggregate, error) {
 	result := analysisAggregate{
@@ -638,6 +684,18 @@ func (j *AutoPrioritizeJob) analyzePending(
 		fatalMu.Unlock()
 	}
 
+	sourceSemaphores := make(map[int64]chan struct{}, len(sourceProbeAvailability))
+	for sourceID, available := range sourceProbeAvailability {
+		if available <= 0 {
+			continue
+		}
+		sem := make(chan struct{}, available)
+		for i := 0; i < available; i++ {
+			sem <- struct{}{}
+		}
+		sourceSemaphores[sourceID] = sem
+	}
+
 	var wg sync.WaitGroup
 	for i := 0; i < workers; i++ {
 		wg.Add(1)
@@ -652,6 +710,18 @@ func (j *AutoPrioritizeJob) analyzePending(
 					ItemKey:    task.ItemKey,
 					AnalyzedAt: now.Unix(),
 				}
+				taskSourceID := task.PlaylistSourceID
+
+				permit := sourceSemaphores[taskSourceID]
+				acquiredSourcePermit := false
+				if permit != nil {
+					select {
+					case <-workCtx.Done():
+						return
+					case <-permit:
+						acquiredSourcePermit = true
+					}
+				}
 				retriedAfterHTTP429 := false
 				probeContentionAttempts := 0
 
@@ -665,21 +735,32 @@ func (j *AutoPrioritizeJob) analyzePending(
 					if j.opts.TunerUsage != nil {
 						probeCtx, probeCancel = context.WithCancelCause(workCtx)
 						var acquireErr error
-						probeLease, acquireErr = j.opts.TunerUsage.AcquireProbe(probeCtx, task.ItemKey, probeCancel)
+						probeLease, acquireErr = j.opts.TunerUsage.AcquireProbeForSource(
+							probeCtx,
+							taskSourceID,
+							task.ItemKey,
+							probeCancel,
+						)
 						if acquireErr != nil {
 							if probeCancel != nil {
 								probeCancel(nil)
 							}
 							if workCtx.Err() != nil {
+								if acquiredSourcePermit {
+									permit <- struct{}{}
+								}
 								return
 							}
 							if errors.Is(acquireErr, stream.ErrNoTunersAvailable) {
 								probeContentionAttempts++
 								if probeContentionAttempts >= maxProbeSlotAcquireAttempts {
-									metric.Error = formatProbeSlotUnavailableError(probeContentionAttempts, acquireErr)
+									metric.Error = formatProbeSlotUnavailableError(taskSourceID, probeContentionAttempts, acquireErr)
 									break
 								}
 								if waitErr := waitForProbeTuneDelay(workCtx, probeSlotAcquireBackoff(probeContentionAttempts)); waitErr != nil {
+									if acquiredSourcePermit {
+										permit <- struct{}{}
+									}
 									return
 								}
 								continue
@@ -701,14 +782,23 @@ func (j *AutoPrioritizeJob) analyzePending(
 					if err != nil {
 						if errors.Is(context.Cause(probeCtx), ErrProbePreempted) {
 							setFatal(fmt.Errorf("auto-prioritize interrupted: %w", ErrProbePreempted))
+							if acquiredSourcePermit {
+								permit <- struct{}{}
+							}
 							return
 						}
 						if workCtx.Err() != nil {
+							if acquiredSourcePermit {
+								permit <- struct{}{}
+							}
 							return
 						}
 						if classifyAnalysisError(err.Error()) == "http_429" && !retriedAfterHTTP429 {
 							retriedAfterHTTP429 = true
 							if waitErr := waitForProbeTuneDelay(workCtx, j.opts.HTTP429Backoff); waitErr != nil {
+								if acquiredSourcePermit {
+									permit <- struct{}{}
+								}
 								return
 							}
 							continue
@@ -725,13 +815,22 @@ func (j *AutoPrioritizeJob) analyzePending(
 					}
 					if acquiredProbeLease {
 						if err := waitForProbeTuneDelay(workCtx, j.opts.ProbeTuneDelay); err != nil {
+							if acquiredSourcePermit {
+								permit <- struct{}{}
+							}
 							return
 						}
 					}
 					break
 				}
 				if workCtx.Err() != nil {
+					if acquiredSourcePermit {
+						permit <- struct{}{}
+					}
 					return
+				}
+				if acquiredSourcePermit {
+					permit <- struct{}{}
 				}
 				resultCh <- metric
 			}
@@ -888,8 +987,13 @@ func probeSlotAcquireBackoff(attempt int) time.Duration {
 	return backoff
 }
 
-func formatProbeSlotUnavailableError(attempts int, cause error) string {
-	return fmt.Sprintf("probe slot unavailable after %d attempts: %v", attempts, cause)
+func formatProbeSlotUnavailableError(sourceID int64, attempts int, cause error) string {
+	return fmt.Sprintf(
+		"probe slot unavailable for playlist source %d after %d attempts: %v",
+		sourceID,
+		attempts,
+		cause,
+	)
 }
 
 func formatAnalysisErrorBucketsSummary(buckets map[string]int) string {

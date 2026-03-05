@@ -221,18 +221,20 @@
       opacity: 0.6;
       cursor: default;
     }
+
+{{template "shared-css-chips"}}
   </style>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog">Catalog</a>
       <a href="/ui/channels">Channels</a>
       <a href="/ui/merge" class="active">Merge Suggestions</a>
       <a href="/ui/tuners">Tuners</a>
-      <a href="/ui/dvr">DVR</a>
-      <a href="/ui/automation">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation">Automation</a>{{end}}
     </nav>
   </header>
 
@@ -279,6 +281,7 @@
       offset: 0,
       total: 0,
       groups: [],
+      playlistSources: [],
     };
 
     const statusEl = document.getElementById("status");
@@ -288,30 +291,43 @@
     const prevPageBtn = document.getElementById("prev-page-btn");
     const nextPageBtn = document.getElementById("next-page-btn");
 
-    function showStatus(message, isError = false) {
-      statusEl.hidden = false;
-      statusEl.classList.toggle("error", isError);
-      statusEl.textContent = message;
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 3000);
+    {{template "shared-js-show-status"}}
+    {{template "shared-js-api"}}
+
+    async function loadPlaylistSources() {
+      try {
+        const data = await api("/api/admin/playlist-sources");
+        state.playlistSources = data.playlist_sources || [];
+      } catch (err) {
+        console.warn("unable to load playlist sources", err);
+        state.playlistSources = [];
+      }
     }
 
-    async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
+    function itemSourceName(item) {
+      const explicitName = String(item?.playlist_source_name || "").trim();
+      if (explicitName) {
+        return explicitName;
+      }
+      const explicitSourceID = Number(item?.playlist_source_id || 0);
+      if (Number.isFinite(explicitSourceID) && explicitSourceID > 0) {
+        const byID = state.playlistSources.find((s) => s.source_id === explicitSourceID);
+        if (byID?.name) {
+          return byID.name;
+        }
+      }
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `request failed (${resp.status})`);
+      const itemKey = String(item?.item_key || "").trim();
+      if (!itemKey || !itemKey.startsWith("ps:")) {
+        const primary = state.playlistSources.find((s) => s.source_id === 1);
+        return primary ? primary.name : "";
       }
-      if (resp.status === 204) {
-        return null;
-      }
-      return resp.json();
+      const rest = itemKey.slice(3);
+      const colonIdx = rest.indexOf(":");
+      if (colonIdx < 0) return "";
+      const sourceKey = rest.slice(0, colonIdx);
+      const match = state.playlistSources.find((s) => s.source_key === sourceKey);
+      return match ? match.name : "";
     }
 
     function handleError(err) {
@@ -392,6 +408,13 @@
 
           const tdName = document.createElement("td");
           tdName.textContent = item.name || "(unnamed)";
+          const srcName = itemSourceName(item);
+          if (srcName) {
+            const badge = document.createElement("span");
+            badge.className = "source-badge";
+            badge.textContent = srcName;
+            tdName.append(" ", badge);
+          }
 
           const tdGroup = document.createElement("td");
           tdGroup.textContent = item.group_name || "Ungrouped";
@@ -508,7 +531,7 @@
       loadGroups().catch(handleError);
     });
 
-    loadGroups().catch(handleError);
+    loadPlaylistSources().then(() => loadGroups()).catch(handleError);
   </script>
 </body>
 </html>

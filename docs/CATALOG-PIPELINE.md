@@ -11,68 +11,100 @@ Source files:
 - `internal/playlist/manager.go` — HTTP fetch + parse wrapper
 - `internal/playlist/refresh.go` — fetch + persist orchestrator with streaming support
 - `internal/reconcile/reconcile.go` — channel source reconciliation engine
+- `internal/store/sqlite/playlist_sources.go` — playlist source CRUD and persistence
 
 ## End-to-End Data Flow
 
 ```
-                       ┌────────────────────────────┐
-                       │   Upstream M3U Playlist     │
-                       └─────────────┬──────────────┘
-                                     │ HTTP GET
-                                     v
-                       ┌────────────────────────────┐
-                       │  playlist.Manager           │
-                       │  (fetch + status check)     │
-                       └─────────────┬──────────────┘
-                                     │ io.Reader
-                                     v
-                       ┌────────────────────────────┐
-                       │  m3u.ParseEach              │
-                       │  (line scanner, #EXTINF     │
-                       │   attribute extraction,     │
-                       │   key generation)           │
-                       └─────────────┬──────────────┘
-                                     │ m3u.Item stream
-                                     v
-                       ┌────────────────────────────┐
-                       │  playlist.Refresher         │
-                       │  (streaming or batch        │
-                       │   catalog upsert)           │
-                       └─────────────┬──────────────┘
-                                     │ catalog rows in SQLite
-                                     v
-                       ┌────────────────────────────┐
-                       │  reconcile.Service          │
-                       │  ┌──────────────────────┐  │
-                       │  │ SyncDynamicChannel-   │  │
-                       │  │ Blocks (10000+ guide) │  │
-                       │  └──────────┬───────────┘  │
-                       │             v              │
-                       │  ┌──────────────────────┐  │
-                       │  │ Per-channel reconcile │  │
-                       │  │ (static or dynamic)   │  │
-                       │  └──────────────────────┘  │
-                       └─────────────┬──────────────┘
-                                     │
-                       ┌─────────────┴──────────────┐
-                       v                            v
-              published_channels            channel_sources
-              (guide numbers)               (ordered failover)
+              ┌──────────────────────────────────────────────┐
+              │           playlist_sources table              │
+              │  (source_id, source_key, url, tuner_count)   │
+              └───────┬──────────┬──────────┬───────────────┘
+                      │          │          │
+                 Source 1    Source 2    Source N
+                 (Primary)  (Backup)    ...
+                      │          │          │
+                      v          v          v
+              ┌────────────────────────────────────────┐
+              │   Sequential Per-Source Fetch Loop      │
+              │   (order_index order, enabled only)     │
+              └───────────────────┬────────────────────┘
+                                  │ for each source:
+                                  v
+                    ┌────────────────────────────┐
+                    │  playlist.Manager           │
+                    │  (fetch + status check)     │
+                    └─────────────┬──────────────┘
+                                  │ io.Reader
+                                  v
+                    ┌────────────────────────────┐
+                    │  m3u.ParseEach              │
+                    │  (line scanner, #EXTINF     │
+                    │   attribute extraction,     │
+                    │   key generation)           │
+                    └─────────────┬──────────────┘
+                                  │ m3u.Item stream
+                                  v
+                    ┌────────────────────────────┐
+                    │  Item Key Namespacing       │
+                    │  (primary: legacy key,      │
+                    │   non-primary:              │
+                    │   ps:<source_key>:<base>)   │
+                    └─────────────┬──────────────┘
+                                  │
+                                  v
+                    ┌────────────────────────────┐
+                    │  playlist.Refresher         │
+                    │  (streaming or batch        │
+                    │   source-scoped upsert)     │
+                    └─────────────┬──────────────┘
+                                  │ catalog rows in SQLite
+                                  │ (scoped to playlist_source_id)
+                                  v
+              ┌────────────────────────────────────────┐
+              │  Source-Scoped Deactivation             │
+              │  (mark inactive only within current     │
+              │   source_id, not globally)              │
+              └───────────────────┬────────────────────┘
+                                  │ (after all sources)
+                                  v
+                    ┌────────────────────────────┐
+                    │  reconcile.Service          │
+                    │  ┌──────────────────────┐  │
+                    │  │ SyncDynamicChannel-   │  │
+                    │  │ Blocks (10000+ guide) │  │
+                    │  └──────────┬───────────┘  │
+                    │             v              │
+                    │  ┌──────────────────────┐  │
+                    │  │ Per-channel reconcile │  │
+                    │  │ (static or dynamic)   │  │
+                    │  └──────────────────────┘  │
+                    └─────────────┬──────────────┘
+                                  │
+                    ┌─────────────┴──────────────┐
+                    v                            v
+           published_channels            channel_sources
+           (guide numbers)               (ordered failover)
 ```
 
 Trigger sources:
 
 - Startup one-shot sync (`cmd/hdhriptv/main.go`)
 - Scheduled cron trigger via `internal/scheduler/scheduler.go`
-- Manual trigger: `POST /api/admin/jobs/playlist-sync/run` (automation API)
+- Manual trigger: `POST /api/admin/jobs/playlist-sync/run` (all enabled sources)
+- Per-source manual trigger: `POST /api/admin/jobs/playlist-sync/run?source_id=N` (single source)
 
 The playlist sync job (`internal/jobs/playlist_sync.go`) orchestrates the
-full pipeline: refresh catalog, reconcile sources, then optionally reload
-DVR lineup.
+full pipeline: resolve playlist sources, refresh catalog for each enabled
+source (sequential by default, opt-in bounded concurrency available),
+reconcile channel sources, then optionally reload DVR
+lineup.
 
-The job requires `playlist.url` to be configured (via the `PLAYLIST_URL`
-environment variable or persisted settings). When the setting is missing or
-blank, the job returns an error immediately.
+The job requires at least one playlist source with a configured URL. Legacy
+single-source deployments use `playlist.url` (via the `PLAYLIST_URL`
+environment variable or persisted settings) which maps to the primary source
+(`source_id=1`). When no source has a configured URL, the job returns an
+error immediately.
 
 ## M3U Parser (`internal/m3u`)
 
@@ -145,13 +177,17 @@ within each category.
 
 Before hashing, stream URLs are normalized by `normalizedURLForKey`:
 
-1. Parse the URL. If the URL has a valid scheme and host, strip query
-   parameters and fragment, then reconstruct as `scheme://host/path`.
-2. If unparseable, fall back to the whitespace-trimmed raw value.
+1. Parse the URL. If the URL has a valid scheme and host, remove fragment
+   data.
+2. Parse query parameters and drop volatile auth/session keys (for example:
+   `token`, `auth*`, `sig*`, `session*`, `expires*`).
+3. Keep non-volatile query parameters, sorted deterministically by key/value.
+4. Reconstruct as `scheme://host/path` (plus normalized query when retained).
+5. If unparseable, fall back to the whitespace-trimmed raw value.
 
-This ensures that URL variations differing only in query parameters or
-fragments produce the same `item_key`, giving stable identity across
-provider URL rotation.
+This preserves stable identity across token/auth rotation while still
+distinguishing meaningful query-level stream variants, preventing
+same-source `item_key` collapse for distinct variants.
 
 ### Streaming vs Batch API
 
@@ -242,17 +278,91 @@ implementations that do not support streaming upsert.
 
 Each refresh cycle generates a `refreshMark` timestamp (`time.Now().UnixNano()`).
 During upsert, every matched item's `last_seen_at` is set to this mark and
-`active` is set to `1`. After all items are upserted, the store runs:
+`active` is set to `1`. After all items are upserted, the store runs a
+**source-scoped** deactivation query:
 
 ```sql
-UPDATE playlist_items SET active = 0 WHERE last_seen_at <> ? AND active <> 0
+UPDATE playlist_items SET active = 0
+WHERE playlist_source_id = ? AND last_seen_at <> ? AND active <> 0
 ```
 
-This deactivates any item not seen in the current refresh (its `last_seen_at`
-will be from a prior cycle). Deactivation is non-destructive — the row and
-all historical fields (`first_seen_at`, attributes, etc.) are preserved.
-Downstream consumers use the `active` flag to distinguish current catalog
-entries from stale ones.
+This deactivates only items belonging to the current source that were not
+seen in this refresh cycle. Items from other sources are unaffected —
+a failing source refresh does not deactivate rows from healthy sources.
+
+Deactivation is non-destructive — the row and all historical fields
+(`first_seen_at`, attributes, etc.) are preserved. Downstream consumers
+use the `active` flag to distinguish current catalog entries from stale ones.
+
+### Multi-Source Fetch Strategy
+
+When multiple playlist sources are configured, the sync pipeline processes
+enabled sources in `order_index` order, with configurable bounded
+parallelism:
+
+- `PLAYLIST_SYNC_SOURCE_CONCURRENCY=1` (default) keeps sequential behavior.
+- Values `>1` enable worker-pool refresh with a hard cap of `16` workers.
+- Result summaries keep source-order output even when refresh execution is
+  concurrent.
+
+```
+for each source in playlist_sources (order_index ASC, enabled=1):
+    1. Fetch + parse source URL via playlist.Manager
+    2. Apply item key namespacing (see below)
+    3. Source-scoped upsert + refresh-mark deactivation
+    4. Record per-source outcome (success/failure/item counts)
+```
+
+The current 30-second HTTP timeout applies per source. With sequential mode,
+worst-case sync duration is `N * 30s` for `N` sources. With bounded
+concurrency enabled, wall-clock duration can be reduced under multi-source
+load while keeping source-scoped deactivation semantics unchanged.
+
+After all sources have been processed, the pipeline runs reconciliation
+(if at least one source succeeded) and conditionally triggers DVR lineup
+reload. If all sources fail, the job terminates with error status and
+DVR lineup reload is skipped.
+
+### Multi-Source Item Key Namespacing
+
+To avoid cross-source `item_key` collisions while preserving legacy
+compatibility, item keys are namespaced per source:
+
+| Source | Key Format | Example |
+|--------|-----------|---------|
+| Primary (`source_id=1`) | Legacy key unchanged | `src:bbc_one:a1b2c3d4e5f6` |
+| Non-primary | `ps:<source_key>:<base_key>` | `ps:3f8a1b2cd4e5f607:src:bbc_one:a1b2c3d4e5f6` |
+
+`source_key` is an auto-generated immutable opaque identifier assigned at
+source creation time (8-byte random hex for newly created sources; older
+shorter keys remain valid). The primary source uses the well-known constant
+`"primary"` for deterministic legacy-to-multi-source transitions.
+
+`channel_key` generation remains unchanged regardless of source — the
+same logical channel across different sources produces the same
+`channel_key`, enabling cross-source grouping and failover.
+
+Impact on downstream keying:
+
+- **`channel_sources.item_key`**: Contains namespaced keys for non-primary
+  sources. No schema change needed.
+- **`stream_metrics.item_key`**: Namespaced keys mean the same stream URL
+  from different sources gets separate metric rows — correct behavior since
+  different sources may have different availability characteristics.
+- **`published_channels.dynamic_item_key`**: Contains namespaced keys for
+  dynamic-generated channels seeded from non-primary sources.
+
+### Source-Scoped Catalog Queries
+
+Catalog query APIs support optional source filtering via `source_ids`
+parameter:
+
+- `GET /api/items?source_ids=1,2` — filter items to specified sources
+- `GET /api/groups?source_ids=1,2` — list only groups present in selected
+  sources (deduplicated by name)
+
+When `source_ids` is omitted or empty, queries return results across all
+sources (backward-compatible default).
 
 ## Source Reconciliation (`internal/reconcile`)
 
@@ -313,7 +423,7 @@ Static reconciliation is append-only — it never removes existing sources.
 For channels with `DynamicRule.Enabled = true`:
 
 1. Build a `dynamicCatalogFilterKey` from the rule's `group_names`,
-   `search_query`, and `search_regex` flag.
+   `search_query`, `search_regex` flag, and optional `source_ids` filter.
 2. Choose the sync strategy based on runtime conditions:
 
 | Strategy         | When Used                                      | Memory Profile |
@@ -324,6 +434,8 @@ For channels with `DynamicRule.Enabled = true`:
 
 3. Invoke `SyncDynamicSources` (or `SyncDynamicSourcesByCatalogFilter`
    for paged mode) which:
+   - Filters candidate catalog items by `source_ids` when specified
+     (empty `source_ids` means all sources).
    - Adds missing `dynamic_query`-type source associations for matched
      catalog items.
    - Removes `dynamic_query` associations that no longer match.
@@ -338,8 +450,9 @@ channels. This avoids repeated full catalog filter scans for popular
 shared rules.
 
 The cache key is a composite of `GroupNames` (joined with `\x1f`
-separator), `SearchQuery` (trimmed), and `SearchRegex` flag. Cache
-entries are only retained for rules used by more than one channel.
+separator), `SearchQuery` (trimmed), `SearchRegex` flag, and
+`SourceIDs` (sorted, joined). Cache entries are only retained for rules
+used by more than one channel.
 
 ### Match Limit Guard
 

@@ -87,7 +87,12 @@ All routes below are protected by Basic Auth when `ADMIN_AUTH` is configured.
 | `GET` | `/ui/tuners` | Live tuner/session status, tuned source, connected subscribers, per-session recovery trigger actions, plus a history master-detail console with status/recovery filters and tabbed session diagnostics |
 | `GET` | `/ui/automation` | Automation settings, schedules, and manual job triggers |
 | `GET` | `/ui/dvr` | DVR provider configuration, mapping, and sync actions |
-| `GET` | `/api/groups` | Paged playlist groups metadata (optional count suppression) |
+| `GET` | `/api/admin/playlist-sources` | List all playlist sources ordered by `order_index` |
+| `POST` | `/api/admin/playlist-sources` | Create a new playlist source (auto-generates `source_key`) |
+| `GET` | `/api/admin/playlist-sources/{sourceID}` | Get a single playlist source |
+| `PUT` | `/api/admin/playlist-sources/{sourceID}` | Update a playlist source |
+| `DELETE` | `/api/admin/playlist-sources/{sourceID}` | Delete a playlist source (blocked for `source_id=1`) |
+| `GET` | `/api/groups` | Paged playlist groups metadata (optional count suppression, optional `source_ids` filter) |
 | `GET` | `/api/items` | Filtered catalog items |
 | `GET` | `/api/channels` | List traditional published channels (`100-9999`) including per-channel source summary fields (`source_total`, `source_enabled`, `source_dynamic`, `source_manual`) |
 | `POST` | `/api/channels` | Create published channel from `item_key` with optional `dynamic_rule` |
@@ -109,11 +114,11 @@ All routes below are protected by Basic Auth when `ADMIN_AUTH` is configured.
 | `DELETE` | `/api/channels/{channelID}/sources/{sourceID}` | Delete source |
 | `POST` | `/api/channels/sources/health/clear` | Clear health/cooldown state for all channel sources |
 | `GET` | `/api/suggestions/duplicates?min=2&q=cnn.us&limit=100&offset=0` | Paged duplicate catalog suggestions grouped by `channel_key` (optional case-insensitive search across `channel_key` and `tvg_id`) |
-| `GET` | `/api/admin/tuners` | Runtime tuner/session snapshot including shared-session subscriber mappings, bounded `session_history` timelines, process-lifetime `drain_wait` / `probe_close` telemetry counters, and optional reverse-DNS client host resolution via `resolve_ip` |
+| `GET` | `/api/admin/tuners` | Runtime tuner/session snapshot including per-source `virtual_tuners` summaries, shared-session subscriber mappings, bounded `session_history` timelines, process-lifetime `drain_wait` / `probe_close` telemetry counters, and optional reverse-DNS client host resolution via `resolve_ip` |
 | `POST` | `/api/admin/tuners/recovery` | Trigger manual shared-session recovery for an active channel (`channel_id`, optional `reason`) |
-| `GET` | `/api/admin/automation` | Current automation state (`playlist_url`, schedule config, analyzer settings, next/last run) |
+| `GET` | `/api/admin/automation` | Current automation state (`playlist_url`, `playlist_sources`, schedule config, analyzer settings, next/last run) |
 | `PUT` | `/api/admin/automation` | Update automation schedule/timezone/analyzer and playlist URL settings |
-| `POST` | `/api/admin/jobs/playlist-sync/run` | Trigger async playlist sync run |
+| `POST` | `/api/admin/jobs/playlist-sync/run` | Trigger async playlist sync run (optional `?source_id=N` for per-source sync) |
 | `POST` | `/api/admin/jobs/auto-prioritize/run` | Trigger async auto-prioritize run |
 | `POST` | `/api/admin/jobs/auto-prioritize/cache/clear` | Clear cached stream metrics used by auto-prioritize |
 | `GET` | `/api/admin/jobs/{runID}` | Fetch one job run (`running`, `success`, `error`, `canceled`) |
@@ -179,8 +184,65 @@ Admin mutation routes that decode JSON bodies use strict single-object parsing:
 - `offset` defaults to `0`; negative values are normalized to `0`.
 - Non-integer `limit`/`offset` values are treated as defaults (`100`/`0`) rather than returning HTTP `400`.
 
+### Playlist Source CRUD (`/api/admin/playlist-sources`)
+
+Dedicated REST endpoints for playlist source management:
+
+- `GET /api/admin/playlist-sources` — list all playlist sources ordered by `order_index`. Response: `{"playlist_sources": [...]}`.
+- `POST /api/admin/playlist-sources` — create a new playlist source. Auto-generates an immutable `source_key` (8-byte random hex for newly created sources; existing shorter legacy keys remain valid). Validates unique `name`, unique `playlist_url`, and `tuner_count >= 1`. `source_id` must not be provided in the body. Response: the created source object.
+- `GET /api/admin/playlist-sources/{sourceID}` — get a single playlist source. Returns `404` if not found.
+- `PUT /api/admin/playlist-sources/{sourceID}` — update a playlist source. Accepts partial updates: `name`, `playlist_url`, `tuner_count`, `enabled`. `source_key` is immutable and rejected. Updating the primary source's `playlist_url` also mirrors the change to the legacy `playlist.url` setting.
+- `DELETE /api/admin/playlist-sources/{sourceID}` — delete a playlist source. Returns `400` for `source_id=1` (primary source cannot be deleted). Source-owned catalog rows are removed (not reassigned), channel-source mappings for those rows are removed, generated dynamic channels keyed to deleted-source items are removed, and deleted `source_id` values are pruned from dynamic-rule/query source filters. Returns `404` if not found.
+- Playlist-source mutations persist first, then reload runtime source pools. When runtime reload fails after persistence, the API returns HTTP `500` with an explicit eventual-consistency payload:
+  - `error=playlist_source_runtime_apply_failed`
+  - `operation=<create_playlist_source|update_playlist_source|delete_playlist_source|update_playlist_sources>`
+  - `persisted=true`
+  - `runtime_applied=false`
+  - `consistency=eventual`
+  - `runtime_error=<reload failure detail>`
+  - plus mutation scope metadata (`source_id` or `source_ids`) when available.
+
+Source response fields: `source_id`, `source_key`, `name`, `playlist_url`, `tuner_count`, `enabled`, `order_index`, `created_at`, `updated_at`.
+
+Validation error responses:
+- Duplicate `name`: HTTP `400` with field identification
+- Duplicate `playlist_url`: HTTP `400` with field identification
+- `tuner_count < 1`: HTTP `400`
+- Primary source deletion: HTTP `400`
+
+### Per-Source Playlist Sync (`POST /api/admin/jobs/playlist-sync/run`)
+
+- Accepts optional `?source_id=N` query parameter.
+- When present, validates that the source exists and is enabled; returns `404` for nonexistent source, `400` for disabled source.
+- Scoped sync refreshes only the specified source (fetch + source-scoped upsert + reconcile + conditional DVR reload).
+- When absent, syncs all enabled sources (existing behavior).
+- Response includes `source_id` when scoped.
+
+### Groups (`GET /api/groups`) Source Filtering
+
+- Accepts optional `source_ids` query parameter (comma-separated or repeated: `?source_ids=1,2` or `?source_ids=1&source_ids=2`).
+- When present, returns only groups from the specified playlist sources (deduplicated by name).
+- When absent, returns groups from all sources (existing behavior).
+- When `source_ids` is requested against a backend that does not support source-scoped group paging, the API returns HTTP `501` with a structured contract payload:
+  - `error`: `source_scoped_operation_unsupported`
+  - `operation`: `groups_list`
+  - `parameter`: `source_ids`
+  - `detail`: actionable backend-capability description
+
+### Catalog Items (`GET /api/items`) Source Filtering
+
+- Accepts optional `source_ids` query parameter (comma-separated or repeated).
+- When present, filters catalog items to only those from the specified playlist sources.
+- When absent, returns items from all sources (existing behavior).
+
 ### Tuner Status (`GET /api/admin/tuners`)
 
+- `/api/admin/tuners` includes a `virtual_tuners` array with per-source tuner pool summaries:
+  - Each entry includes: `playlist_source_id`, `playlist_source_name`, `playlist_source_order`, `tuner_count`, `in_use_count`, `idle_count`, `active_session_count`.
+  - Sorted by `playlist_source_order`, then `playlist_source_id`.
+  - In single-pool mode, a single entry is synthesized for the primary source.
+  - During runtime source reconfigure drains, retained transitional source rows (including recently disabled/deleted sources with in-use leases) remain visible until lease drain completion.
+- Each tuner/session row and `client_streams` entry includes: `playlist_source_id`, `playlist_source_name`, `virtual_tuner_slot`.
 - `/api/admin/tuners` and `/ui/tuners` intentionally redact `source_stream_url` values. The status payload preserves scheme/host/path but strips URL userinfo, query, and fragment fields.
 - `/api/admin/tuners` supports optional `resolve_ip` boolean query semantics:
   - accepted true values: `1`, `true`, `yes`, `on`
@@ -277,6 +339,9 @@ DVR sync routes parse optional JSON payloads using empty-body-tolerant decoding:
   - `group_names` (`[]string`, optional preferred multi-group filter contract)
   - `search_query` (`string`, required when `enabled=true`; token semantics match `GET /api/items?q=...` when `search_regex=false`)
   - `search_regex` (`bool`, optional; defaults to `false`)
+  - `source_ids` (`[]int`, optional; playlist source filter — empty array means all sources)
+    - when provided, the backend must support source-scoped catalog filtering for dynamic sync.
+    - unsupported backends return HTTP `501` with `error=source_scoped_operation_unsupported` and operation identifiers (`channel_dynamic_rule_create` or `channel_dynamic_rule_update`).
     - when `true`, `search_query` is treated as one case-insensitive regex pattern matched against the full item name.
     - token operators (`|`/`OR`, `-term`/`!term`) are only applied when `search_regex=false`.
     - invalid regex inputs are rejected with HTTP `400` before persistence.
@@ -287,6 +352,9 @@ DVR sync routes parse optional JSON payloads using empty-body-tolerant decoding:
 - `POST /api/dynamic-channels` and `PATCH /api/dynamic-channels/{queryID}` accept the same search filter contract:
   - `search_query` (`string`, optional)
   - `search_regex` (`bool`, optional; defaults to `false`)
+  - `source_ids` (`[]int`, optional; playlist source filter — empty array means all sources)
+    - when provided, the backend must support source-scoped dynamic-channel materialization.
+    - unsupported backends return HTTP `501` with `error=source_scoped_operation_unsupported` and operation identifiers (`dynamic_channel_query_create` or `dynamic_channel_query_update`).
     - regex-mode validation semantics match `/api/items` and channel dynamic-rule validation.
   - create/update/read/list responses include additive `search_warning` metadata per query row, so token-mode truncation is visible for persisted dynamic block queries.
 - Channel create/update responses include normalized `dynamic_rule` values. Dynamic-rule sync executes asynchronously in the background, so these requests are not blocked on catalog/source reconciliation.
@@ -322,6 +390,7 @@ DVR sync routes parse optional JSON payloads using empty-body-tolerant decoding:
 
 - `PUT /api/admin/automation` accepts partial JSON updates; omitted fields are left unchanged:
   - top-level: `playlist_url`, `timezone`
+  - `playlist_sources` array for bulk source updates (must include all existing sources with `source_id`; validates unique names, unique URLs, `tuner_count >= 1`)
   - schedule objects: `playlist_sync` and `auto_prioritize` with optional `enabled` and `cron_spec`
   - analyzer object: `probe_timeout_ms`, `analyzeduration_us`, `probesize_bytes`, `bitrate_mode`, `sample_seconds`, `enabled_only`, `top_n_per_channel`
   - if a schedule resolves to `enabled=true`, `cron_spec` is required
@@ -332,7 +401,9 @@ DVR sync routes parse optional JSON payloads using empty-body-tolerant decoding:
 - `POST /api/admin/jobs/auto-prioritize/cache/clear` returns the number of deleted cached metric rows as `{"deleted":<count>}`.
 - Manual job triggers (`POST /api/admin/jobs/playlist-sync/run`, `POST /api/admin/jobs/auto-prioritize/run`) are detached from request cancellation after enqueue; once `202` is returned, client disconnects do not cancel the run.
 - `PUT /api/admin/automation` and `PUT /api/admin/dvr` are serialized under a shared admin-config mutation lock to prevent concurrent rollback clobber between automation and DVR config updates.
-- `PUT /api/admin/automation` validates cron only for enabled schedules, then applies persistence/runtime reload/rollback under a detached `30s` mutation context (`context.WithTimeout(context.WithoutCancel(...))`) so client disconnects do not cancel in-flight apply or rollback work. If runtime apply fails, prior automation settings are restored before returning an error.
+- `PUT /api/admin/automation` validates cron only for enabled schedules, then applies persistence/runtime reload/rollback under a detached `30s` mutation context (`context.WithTimeout(context.WithoutCancel(...))`) so client disconnects do not cancel in-flight apply or rollback work.
+  - Scheduler/timezone/analyzer setting runtime-apply failures are rolled back to the previous persisted settings.
+  - `playlist_sources` bulk mutations are persisted atomically first; if playlist-source runtime reload fails afterwards, the response returns the explicit eventual-consistency contract (`playlist_source_runtime_apply_failed`) and persisted source changes remain in effect for subsequent retries.
 - `PUT /api/admin/dvr` validates enabled sync cron before persisting config. If scheduler apply fails after persistence, the previous DVR config is restored and the response reports rollback outcome.
 
 ## Example API Usage
@@ -365,6 +436,30 @@ curl -u admin:change-me \
   -H "Content-Type: application/json" \
   -d '{"dynamic_rule":{"enabled":false}}' \
   http://127.0.0.1:5004/api/channels/1001
+```
+
+### Playlist Source Management
+
+```bash
+# List all playlist sources
+curl -u admin:change-me http://127.0.0.1:5004/api/admin/playlist-sources
+
+# Create a new playlist source
+curl -u admin:change-me \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Backup","playlist_url":"https://backup.example/playlist.m3u","tuner_count":2,"enabled":true}' \
+  http://127.0.0.1:5004/api/admin/playlist-sources
+
+# Update a playlist source
+curl -u admin:change-me \
+  -X PUT \
+  -H "Content-Type: application/json" \
+  -d '{"tuner_count":4}' \
+  http://127.0.0.1:5004/api/admin/playlist-sources/2
+
+# Trigger per-source playlist sync
+curl -u admin:change-me -X POST \
+  "http://127.0.0.1:5004/api/admin/jobs/playlist-sync/run?source_id=2"
 ```
 
 ### Automation
@@ -454,6 +549,7 @@ Example DVR sync response:
 
 - `401`: missing/invalid admin credentials
 - `404`: channel/source/item not found
+- `501`: source-scoped operation requested against unsupported backend capability
 - `429`: rate limit exceeded
 - `502`: upstream or ffmpeg stream failure
 - `503`: all tuners are busy, or channel tune backoff is active

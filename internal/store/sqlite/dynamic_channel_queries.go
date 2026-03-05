@@ -18,6 +18,7 @@ const dynamicChannelQuerySelectColumns = `
 		COALESCE(name, ''),
 		COALESCE(group_name, ''),
 		COALESCE(group_names_json, '[]'),
+		COALESCE(source_ids_json, '[]'),
 		COALESCE(search_query, ''),
 		COALESCE(search_regex, 0),
 		order_index,
@@ -121,6 +122,8 @@ func (s *Store) CreateDynamicChannelQuery(ctx context.Context, create channels.D
 	now := time.Now().UTC().Unix()
 	groupNames := channels.NormalizeGroupNames(create.GroupName, create.GroupNames)
 	groupNamesJSON := marshalGroupNamesJSON(groupNames)
+	sourceIDs := channels.NormalizeSourceIDs(create.SourceIDs)
+	sourceIDsJSON := marshalSourceIDsJSON(sourceIDs)
 	result, err := tx.ExecContext(
 		ctx,
 		`INSERT INTO dynamic_channel_queries (
@@ -128,6 +131,7 @@ func (s *Store) CreateDynamicChannelQuery(ctx context.Context, create channels.D
 				name,
 				group_name,
 				group_names_json,
+				source_ids_json,
 				search_query,
 				search_regex,
 				order_index,
@@ -137,11 +141,12 @@ func (s *Store) CreateDynamicChannelQuery(ctx context.Context, create channels.D
 				created_at,
 				updated_at
 			)
-			VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
 		boolToInt(enabled),
 		strings.TrimSpace(create.Name),
 		channels.GroupNameAlias(groupNames),
 		groupNamesJSON,
+		sourceIDsJSON,
 		create.SearchQuery,
 		boolToInt(create.SearchRegex),
 		nextOrderIndex,
@@ -195,6 +200,9 @@ func (s *Store) UpdateDynamicChannelQuery(ctx context.Context, queryID int64, up
 		current.GroupNames = channels.NormalizeGroupNames(legacy, raw)
 		current.GroupName = channels.GroupNameAlias(current.GroupNames)
 	}
+	if update.SourceIDs != nil {
+		current.SourceIDs = channels.NormalizeSourceIDs(*update.SourceIDs)
+	}
 	if update.SearchQuery != nil {
 		current.SearchQuery = strings.TrimSpace(*update.SearchQuery)
 	}
@@ -209,6 +217,7 @@ func (s *Store) UpdateDynamicChannelQuery(ctx context.Context, queryID int64, up
 
 	updatedAt := time.Now().UTC().Unix()
 	groupNamesJSON := marshalGroupNamesJSON(current.GroupNames)
+	sourceIDsJSON := marshalSourceIDsJSON(current.SourceIDs)
 	if _, err := tx.ExecContext(
 		ctx,
 		`UPDATE dynamic_channel_queries
@@ -216,6 +225,7 @@ func (s *Store) UpdateDynamicChannelQuery(ctx context.Context, queryID int64, up
 		     name = ?,
 		     group_name = ?,
 		     group_names_json = ?,
+		     source_ids_json = ?,
 		     search_query = ?,
 		     search_regex = ?,
 		     updated_at = ?
@@ -224,6 +234,7 @@ func (s *Store) UpdateDynamicChannelQuery(ctx context.Context, queryID int64, up
 		current.Name,
 		current.GroupName,
 		groupNamesJSON,
+		sourceIDsJSON,
 		current.SearchQuery,
 		boolToInt(current.SearchRegex),
 		updatedAt,
@@ -257,6 +268,10 @@ func (s *Store) DeleteDynamicChannelQuery(ctx context.Context, queryID int64) er
 		return channels.ErrDynamicQueryNotFound
 	}
 
+	if err := deleteDynamicGeneratedChannelChildRowsTx(ctx, tx, queryID); err != nil {
+		return err
+	}
+
 	if _, err := tx.ExecContext(
 		ctx,
 		`DELETE FROM published_channels
@@ -266,6 +281,9 @@ func (s *Store) DeleteDynamicChannelQuery(ctx context.Context, queryID int64) er
 		queryID,
 	); err != nil {
 		return fmt.Errorf("delete generated dynamic channels for query %d: %w", queryID, err)
+	}
+	if err := runOrphanChannelChildRowPruneSafetyCheckTx(ctx, tx); err != nil {
+		return err
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -310,6 +328,7 @@ func (s *Store) ListDynamicGeneratedChannelsPaged(ctx context.Context, queryID i
 			COALESCE(dynamic_sources_enabled, 0),
 			COALESCE(dynamic_group_name, ''),
 			COALESCE(dynamic_group_names_json, '[]'),
+			COALESCE(dynamic_source_ids_json, '[]'),
 			COALESCE(dynamic_search_query, ''),
 			COALESCE(dynamic_search_regex, 0)
 		FROM published_channels
@@ -334,6 +353,7 @@ func (s *Store) ListDynamicGeneratedChannelsPaged(ctx context.Context, queryID i
 			dynamicEnabledInt     int
 			dynamicSearchRegexInt int
 			dynamicGroupNamesJSON string
+			dynamicSourceIDsJSON  string
 		)
 		if err := rows.Scan(
 			&channel.ChannelID,
@@ -348,6 +368,7 @@ func (s *Store) ListDynamicGeneratedChannelsPaged(ctx context.Context, queryID i
 			&dynamicEnabledInt,
 			&channel.DynamicRule.GroupName,
 			&dynamicGroupNamesJSON,
+			&dynamicSourceIDsJSON,
 			&channel.DynamicRule.SearchQuery,
 			&dynamicSearchRegexInt,
 		); err != nil {
@@ -357,6 +378,7 @@ func (s *Store) ListDynamicGeneratedChannelsPaged(ctx context.Context, queryID i
 		channel.DynamicRule.Enabled = dynamicEnabledInt != 0
 		channel.DynamicRule.SearchRegex = dynamicSearchRegexInt != 0
 		channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames = normalizeStoredGroupNames(channel.DynamicRule.GroupName, dynamicGroupNamesJSON)
+		channel.DynamicRule.SourceIDs = normalizeStoredSourceIDs(dynamicSourceIDsJSON)
 		out = append(out, channel)
 	}
 	if err := rows.Err(); err != nil {
@@ -559,6 +581,7 @@ func scanDynamicChannelQueryRow(scanner dynamicChannelQueryScanner) (channels.Dy
 		enabledInt     int
 		searchRegexInt int
 		groupNamesJSON string
+		sourceIDsJSON  string
 	)
 	if err := scanner.Scan(
 		&query.QueryID,
@@ -566,6 +589,7 @@ func scanDynamicChannelQueryRow(scanner dynamicChannelQueryScanner) (channels.Dy
 		&query.Name,
 		&query.GroupName,
 		&groupNamesJSON,
+		&sourceIDsJSON,
 		&query.SearchQuery,
 		&searchRegexInt,
 		&query.OrderIndex,
@@ -581,6 +605,7 @@ func scanDynamicChannelQueryRow(scanner dynamicChannelQueryScanner) (channels.Dy
 	query.SearchRegex = searchRegexInt != 0
 	query.Name = strings.TrimSpace(query.Name)
 	query.GroupName, query.GroupNames = normalizeStoredGroupNames(query.GroupName, groupNamesJSON)
+	query.SourceIDs = normalizeStoredSourceIDs(sourceIDsJSON)
 	query.SearchQuery = strings.TrimSpace(query.SearchQuery)
 	if query.LastCount < 0 {
 		query.LastCount = 0

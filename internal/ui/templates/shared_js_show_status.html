@@ -1,0 +1,21 @@
+{{define "shared-js-show-status"}}
+function showStatus(message, levelOrIsError = "info") {
+  const isError = levelOrIsError === true || levelOrIsError === "error";
+  const isOk = levelOrIsError === "ok";
+  const isWarn = levelOrIsError === "warn" || levelOrIsError === "warning";
+  statusEl.hidden = false;
+  statusEl.classList.remove("error", "ok", "warn");
+  if (isError) {
+    statusEl.classList.add("error");
+  } else if (isOk) {
+    statusEl.classList.add("ok");
+  } else if (isWarn) {
+    statusEl.classList.add("warn");
+  }
+  statusEl.textContent = message;
+  window.clearTimeout(showStatus.timer);
+  showStatus.timer = window.setTimeout(() => {
+    statusEl.hidden = true;
+  }, 4500);
+}
+{{end}}

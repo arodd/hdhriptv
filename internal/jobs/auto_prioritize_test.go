@@ -281,12 +281,20 @@ func (f fakeTunerUsage) AcquireProbe(_ context.Context, _ string, _ context.Canc
 	return &stream.Lease{}, nil
 }
 
+func (f fakeTunerUsage) AcquireProbeForSource(_ context.Context, _ int64, _ string, _ context.CancelCauseFunc) (*stream.Lease, error) {
+	return &stream.Lease{}, nil
+}
+
 type scriptedTunerUsage struct {
 	inUse int
 
-	mu           sync.Mutex
-	acquireErrs  []error
-	acquireCalls int
+	mu                  sync.Mutex
+	acquireErrs         []error
+	acquireErrsBySource map[int64][]error
+	acquireCalls        int
+	callsBySource       map[int64]int
+	capacityBySource    map[int64]int
+	inUseBySource       map[int64]int
 }
 
 func (s *scriptedTunerUsage) InUseCount() int {
@@ -296,13 +304,28 @@ func (s *scriptedTunerUsage) InUseCount() int {
 	return s.inUse
 }
 
-func (s *scriptedTunerUsage) AcquireProbe(_ context.Context, _ string, _ context.CancelCauseFunc) (*stream.Lease, error) {
+func (s *scriptedTunerUsage) AcquireProbe(ctx context.Context, label string, cancel context.CancelCauseFunc) (*stream.Lease, error) {
+	return s.AcquireProbeForSource(ctx, 0, label, cancel)
+}
+
+func (s *scriptedTunerUsage) AcquireProbeForSource(_ context.Context, sourceID int64, _ string, _ context.CancelCauseFunc) (*stream.Lease, error) {
 	if s == nil {
 		return &stream.Lease{}, nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.acquireCalls++
+	if s.callsBySource == nil {
+		s.callsBySource = make(map[int64]int)
+	}
+	s.callsBySource[sourceID]++
+	if len(s.acquireErrsBySource[sourceID]) > 0 {
+		err := s.acquireErrsBySource[sourceID][0]
+		s.acquireErrsBySource[sourceID] = s.acquireErrsBySource[sourceID][1:]
+		if err != nil {
+			return nil, err
+		}
+	}
 	if len(s.acquireErrs) > 0 {
 		err := s.acquireErrs[0]
 		s.acquireErrs = s.acquireErrs[1:]
@@ -313,6 +336,30 @@ func (s *scriptedTunerUsage) AcquireProbe(_ context.Context, _ string, _ context
 	return &stream.Lease{}, nil
 }
 
+func (s *scriptedTunerUsage) CapacityForSource(sourceID int64) int {
+	if s == nil {
+		return -1
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.capacityBySource) == 0 {
+		return -1
+	}
+	return s.capacityBySource[sourceID]
+}
+
+func (s *scriptedTunerUsage) InUseCountForSource(sourceID int64) int {
+	if s == nil {
+		return -1
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if len(s.inUseBySource) == 0 {
+		return -1
+	}
+	return s.inUseBySource[sourceID]
+}
+
 func (s *scriptedTunerUsage) Calls() int {
 	if s == nil {
 		return 0
@@ -320,6 +367,15 @@ func (s *scriptedTunerUsage) Calls() int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.acquireCalls
+}
+
+func (s *scriptedTunerUsage) CallsForSource(sourceID int64) int {
+	if s == nil {
+		return 0
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.callsBySource[sourceID]
 }
 
 func TestAutoPrioritizeJobRunReordersByScore(t *testing.T) {
@@ -1580,7 +1636,7 @@ func TestOrderSourcesByScoreRepeatedFailuresStayBottomAcrossRuns(t *testing.T) {
 	}
 }
 
-func TestAutoPrioritizeJobFailsWhenNoProbeSlotsAvailable(t *testing.T) {
+func TestAutoPrioritizeJobRetriesWhenInitialProbeAvailabilitySnapshotIsZero(t *testing.T) {
 	channelsStore := &fakeAutoChannels{
 		channels: []channels.Channel{{ChannelID: 1, Enabled: true}},
 		sources: map[int64][]channels.Source{
@@ -1593,6 +1649,14 @@ func TestAutoPrioritizeJobFailsWhenNoProbeSlotsAvailable(t *testing.T) {
 	analyzerFake := &fakeAnalyzer{results: map[string]analyzer.Metrics{
 		"http://example.com/a": {Width: 1920, Height: 1080, FPS: 30, BitrateBPS: 3_000_000},
 	}}
+	tunerUsage := &scriptedTunerUsage{
+		inUse: 2,
+		acquireErrs: []error{
+			stream.ErrNoTunersAvailable,
+			stream.ErrNoTunersAvailable,
+			stream.ErrNoTunersAvailable,
+		},
+	}
 
 	job, err := NewAutoPrioritizeJob(
 		&fakeAutoSettings{},
@@ -1601,7 +1665,7 @@ func TestAutoPrioritizeJobFailsWhenNoProbeSlotsAvailable(t *testing.T) {
 		analyzerFake,
 		AutoPrioritizeOptions{
 			TunerCount: 2,
-			TunerUsage: fakeTunerUsage{inUse: 2},
+			TunerUsage: tunerUsage,
 		},
 	)
 	if err != nil {
@@ -1619,17 +1683,24 @@ func TestAutoPrioritizeJobFailsWhenNoProbeSlotsAvailable(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	run := waitForRunDone(t, runner, runID)
-	if run.Status != StatusError {
-		t.Fatalf("run status = %q, want %q", run.Status, StatusError)
+	if run.Status != StatusSuccess {
+		t.Fatalf("run status = %q, want %q", run.Status, StatusSuccess)
 	}
-	if !strings.Contains(run.ErrorMessage, "no probe slots available") {
-		t.Fatalf("error message = %q, want no probe slots failure", run.ErrorMessage)
+	if !strings.Contains(run.Summary, "analysis_errors=1") {
+		t.Fatalf("run summary = %q, want one probe-slot-unavailable analysis error", run.Summary)
+	}
+	buckets := ParseAnalysisErrorBuckets(run.Summary)
+	if buckets["probe_slot_unavailable"] != 1 {
+		t.Fatalf("probe_slot_unavailable bucket = %d, want 1", buckets["probe_slot_unavailable"])
+	}
+	if got := tunerUsage.Calls(); got != maxProbeSlotAcquireAttempts {
+		t.Fatalf("AcquireProbe call count = %d, want %d bounded retries", got, maxProbeSlotAcquireAttempts)
 	}
 
 	analyzerFake.mu.Lock()
 	defer analyzerFake.mu.Unlock()
 	if analyzerFake.calls["http://example.com/a"] != 0 {
-		t.Fatalf("analyzer call count = %d, want 0 when no slots available", analyzerFake.calls["http://example.com/a"])
+		t.Fatalf("analyzer call count = %d, want 0 on persistent contention", analyzerFake.calls["http://example.com/a"])
 	}
 }
 
@@ -1767,6 +1838,185 @@ func TestAutoPrioritizeJobProbeSlotContentionBecomesPerTaskError(t *testing.T) {
 	}
 	if callsB != 1 {
 		t.Fatalf("analyzer calls for source B = %d, want 1 for continued run progress", callsB)
+	}
+}
+
+func TestAutoPrioritizeJobRespectsPerSourceProbeAvailability(t *testing.T) {
+	channelsStore := &fakeAutoChannels{
+		channels: []channels.Channel{{ChannelID: 1, Enabled: true}},
+		sources: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:         11,
+					ChannelID:        1,
+					ItemKey:          "src:primary:a",
+					StreamURL:        "http://example.com/a",
+					Enabled:          true,
+					PriorityIndex:    0,
+					PlaylistSourceID: 1,
+				},
+				{
+					SourceID:         12,
+					ChannelID:        1,
+					ItemKey:          "src:backup:b",
+					StreamURL:        "http://example.com/b",
+					Enabled:          true,
+					PriorityIndex:    1,
+					PlaylistSourceID: 2,
+				},
+			},
+		},
+	}
+	metricsStore := &fakeMetricsStore{}
+	analyzerFake := &fakeAnalyzer{results: map[string]analyzer.Metrics{
+		"http://example.com/a": {Width: 1920, Height: 1080, FPS: 30, BitrateBPS: 3_000_000},
+	}}
+	tunerUsage := &scriptedTunerUsage{
+		inUse: 0,
+		capacityBySource: map[int64]int{
+			1: 1,
+			2: 1,
+		},
+		inUseBySource: map[int64]int{
+			1: 0,
+			2: 1,
+		},
+		acquireErrsBySource: map[int64][]error{
+			2: {
+				stream.ErrNoTunersAvailable,
+				stream.ErrNoTunersAvailable,
+				stream.ErrNoTunersAvailable,
+			},
+		},
+	}
+
+	job, err := NewAutoPrioritizeJob(
+		&fakeAutoSettings{},
+		channelsStore,
+		metricsStore,
+		analyzerFake,
+		AutoPrioritizeOptions{
+			WorkerMode:   "fixed",
+			FixedWorkers: 2,
+			TunerCount:   2,
+			TunerUsage:   tunerUsage,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewAutoPrioritizeJob() error = %v", err)
+	}
+
+	store := newMemoryStore()
+	runner, err := NewRunner(store)
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	runID, err := runner.Start(context.Background(), JobAutoPrioritize, TriggerManual, job.Run)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	run := waitForRunDone(t, runner, runID)
+	if run.Status != StatusSuccess {
+		t.Fatalf("run status = %q, want %q", run.Status, StatusSuccess)
+	}
+	if !strings.Contains(run.Summary, "analysis_errors=1") {
+		t.Fatalf("run summary = %q, want one per-source probe availability error", run.Summary)
+	}
+	buckets := ParseAnalysisErrorBuckets(run.Summary)
+	if buckets["probe_slot_unavailable"] != 1 {
+		t.Fatalf("probe_slot_unavailable bucket = %d, want 1", buckets["probe_slot_unavailable"])
+	}
+	if got := tunerUsage.CallsForSource(1); got != 1 {
+		t.Fatalf("AcquireProbeForSource calls for source 1 = %d, want 1", got)
+	}
+	if got := tunerUsage.CallsForSource(2); got != maxProbeSlotAcquireAttempts {
+		t.Fatalf("AcquireProbeForSource calls for source 2 = %d, want %d bounded retries under source contention", got, maxProbeSlotAcquireAttempts)
+	}
+
+	analyzerFake.mu.Lock()
+	callsA := analyzerFake.calls["http://example.com/a"]
+	callsB := analyzerFake.calls["http://example.com/b"]
+	analyzerFake.mu.Unlock()
+	if callsA != 1 {
+		t.Fatalf("analyzer calls for source A = %d, want 1", callsA)
+	}
+	if callsB != 0 {
+		t.Fatalf("analyzer calls for source B = %d, want 0 when source pool unavailable", callsB)
+	}
+}
+
+func TestAutoPrioritizeJobUsesUnscopedSourceIDWithoutPrimaryCoercion(t *testing.T) {
+	channelsStore := &fakeAutoChannels{
+		channels: []channels.Channel{{ChannelID: 1, Enabled: true}},
+		sources: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:         11,
+					ChannelID:        1,
+					ItemKey:          "src:invalid:source",
+					StreamURL:        "http://example.com/invalid.ts",
+					Enabled:          true,
+					PriorityIndex:    0,
+					PlaylistSourceID: 0,
+				},
+				{
+					SourceID:         12,
+					ChannelID:        1,
+					ItemKey:          "src:valid:source",
+					StreamURL:        "http://example.com/valid.ts",
+					Enabled:          true,
+					PriorityIndex:    1,
+					PlaylistSourceID: 2,
+				},
+			},
+		},
+	}
+	metricsStore := &fakeMetricsStore{}
+	analyzerFake := &fakeAnalyzer{results: map[string]analyzer.Metrics{
+		"http://example.com/invalid.ts": {Width: 960, Height: 540, FPS: 30, BitrateBPS: 1_000_000},
+		"http://example.com/valid.ts":   {Width: 1280, Height: 720, FPS: 30, BitrateBPS: 2_000_000},
+	}}
+	tunerUsage := &scriptedTunerUsage{}
+
+	job, err := NewAutoPrioritizeJob(
+		&fakeAutoSettings{},
+		channelsStore,
+		metricsStore,
+		analyzerFake,
+		AutoPrioritizeOptions{
+			WorkerMode:   "fixed",
+			FixedWorkers: 1,
+			TunerCount:   1,
+			TunerUsage:   tunerUsage,
+		},
+	)
+	if err != nil {
+		t.Fatalf("NewAutoPrioritizeJob() error = %v", err)
+	}
+
+	store := newMemoryStore()
+	runner, err := NewRunner(store)
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+
+	runID, err := runner.Start(context.Background(), JobAutoPrioritize, TriggerManual, job.Run)
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	run := waitForRunDone(t, runner, runID)
+	if run.Status != StatusSuccess {
+		t.Fatalf("run status = %q, want %q", run.Status, StatusSuccess)
+	}
+	if got := tunerUsage.CallsForSource(0); got != 1 {
+		t.Fatalf("AcquireProbeForSource calls for source 0 = %d, want 1 (legacy/unscoped source)", got)
+	}
+	if got := tunerUsage.CallsForSource(1); got != 0 {
+		t.Fatalf("AcquireProbeForSource calls for source 1 = %d, want 0 (no primary coercion)", got)
+	}
+	if got := tunerUsage.CallsForSource(2); got != 1 {
+		t.Fatalf("AcquireProbeForSource calls for source 2 = %d, want 1", got)
 	}
 }
 

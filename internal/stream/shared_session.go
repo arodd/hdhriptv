@@ -129,51 +129,56 @@ var (
 	streamSlowSkipLagChunksTotal uint64
 	streamSlowSkipLagBytesTotal  uint64
 
-	streamSubscriberWriteDeadlineTimeoutsCount uint64
-	streamSubscriberWriteShortWritesCount      uint64
-	streamSubscriberWriteBlockedDurationUS     uint64
+	streamSubscriberWriteDeadlineTimeoutsCount    uint64
+	streamSubscriberWriteDeadlineUnsupportedCount uint64
+	streamSubscriberWriteShortWritesCount         uint64
+	streamSubscriberWriteBlockedDurationUS        uint64
 
 	streamSourceReadPauseEventsCount   uint64
 	streamSourceReadPauseDurationUS    uint64
 	streamSourceReadPauseMaxDurationUS uint64
 	streamSourceReadPauseInProgress    uint64
 
-	streamSlowSkipEventsMetric = promauto.NewCounter(prometheus.CounterOpts{
+	streamSlowSkipEventsMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_slow_skip_events_total",
 		Help: "Total number of shared-session subscriber lag skip events.",
-	})
-	streamSlowSkipLagChunksMetric = promauto.NewHistogram(prometheus.HistogramOpts{
+	}, []string{"playlist_source"})
+	streamSlowSkipLagChunksMetric = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stream_slow_skip_lag_chunks",
 		Help:    "Lag depth in chunks for shared-session subscriber lag skip events.",
 		Buckets: []float64{1, 2, 4, 8, 16, 32, 64, 128, 256, 512, 1024, 2048, 4096},
-	})
-	streamSlowSkipLagBytesMetric = promauto.NewHistogram(prometheus.HistogramOpts{
+	}, []string{"playlist_source"})
+	streamSlowSkipLagBytesMetric = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stream_slow_skip_lag_bytes",
 		Help:    "Estimated lag depth in bytes for shared-session subscriber lag skip events.",
 		Buckets: prometheus.ExponentialBuckets(1024, 2, 16),
-	})
-	streamSubscriberWriteDeadlineTimeoutsMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	streamSubscriberWriteDeadlineTimeoutsMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_subscriber_write_deadline_timeouts_total",
 		Help: "Total number of shared-session subscriber writes that timed out on write deadline.",
-	})
-	streamSubscriberWriteShortWritesMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	streamSubscriberWriteDeadlineUnsupportedMetric = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "stream_subscriber_write_deadline_unsupported_total",
+		Help: "Total number of shared-session subscriber writes that fell back because write deadlines are unsupported.",
+	}, []string{"playlist_source"})
+	streamSubscriberWriteShortWritesMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_subscriber_write_short_writes_total",
 		Help: "Total number of shared-session subscriber writes that returned short writes.",
-	})
-	streamSubscriberWriteBlockedSecondsMetric = promauto.NewHistogram(prometheus.HistogramOpts{
+	}, []string{"playlist_source"})
+	streamSubscriberWriteBlockedSecondsMetric = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stream_subscriber_write_blocked_seconds",
 		Help:    "Duration spent blocked in shared-session subscriber write calls.",
 		Buckets: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2, 4, 8},
-	})
+	}, []string{"playlist_source"})
 	streamSourceReadPauseEventsMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_source_read_pause_events_total",
 		Help: "Total number of shared-session source read pauses that exceeded the minimum duration threshold.",
-	}, []string{"reason"})
+	}, []string{"reason", "playlist_source"})
 	streamSourceReadPauseSecondsMetric = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "stream_source_read_pause_seconds",
 		Help:    "Duration of shared-session source read pauses that exceeded the minimum duration threshold.",
 		Buckets: []float64{0.25, 0.5, 1, 2, 4, 8, 16},
-	}, []string{"reason"})
+	}, []string{"reason", "playlist_source"})
 )
 
 var errPumpStallDetected = errors.New("stream pump stall detected")
@@ -196,10 +201,11 @@ type streamSlowSkipStats struct {
 }
 
 type streamSubscriberWriteStats struct {
-	DeadlineTimeouts  uint64
-	ShortWrites       uint64
-	BlockedDurationUS uint64
-	BlockedDurationMS uint64
+	DeadlineUnsupported uint64
+	DeadlineTimeouts    uint64
+	ShortWrites         uint64
+	BlockedDurationUS   uint64
+	BlockedDurationMS   uint64
 }
 
 type streamSourceReadPauseStats struct {
@@ -244,14 +250,16 @@ func resetStreamSlowSkipStatsForTest() {
 func streamSubscriberWriteStatsSnapshot() streamSubscriberWriteStats {
 	blockedDurationUS := atomic.LoadUint64(&streamSubscriberWriteBlockedDurationUS)
 	return streamSubscriberWriteStats{
-		DeadlineTimeouts:  atomic.LoadUint64(&streamSubscriberWriteDeadlineTimeoutsCount),
-		ShortWrites:       atomic.LoadUint64(&streamSubscriberWriteShortWritesCount),
-		BlockedDurationUS: blockedDurationUS,
-		BlockedDurationMS: blockedDurationUS / 1000,
+		DeadlineUnsupported: atomic.LoadUint64(&streamSubscriberWriteDeadlineUnsupportedCount),
+		DeadlineTimeouts:    atomic.LoadUint64(&streamSubscriberWriteDeadlineTimeoutsCount),
+		ShortWrites:         atomic.LoadUint64(&streamSubscriberWriteShortWritesCount),
+		BlockedDurationUS:   blockedDurationUS,
+		BlockedDurationMS:   blockedDurationUS / 1000,
 	}
 }
 
 func resetStreamSubscriberWriteStatsForTest() {
+	atomic.StoreUint64(&streamSubscriberWriteDeadlineUnsupportedCount, 0)
 	atomic.StoreUint64(&streamSubscriberWriteDeadlineTimeoutsCount, 0)
 	atomic.StoreUint64(&streamSubscriberWriteShortWritesCount, 0)
 	atomic.StoreUint64(&streamSubscriberWriteBlockedDurationUS, 0)
@@ -288,6 +296,14 @@ func normalizeStreamSourceReadPauseReason(reason string) string {
 	}
 }
 
+func normalizePlaylistSourceMetricLabel(label string) string {
+	label = strings.TrimSpace(label)
+	if label == "" {
+		return playlistSourceMetricUnknown
+	}
+	return label
+}
+
 func incrementStreamSourceReadPauseInProgress() {
 	atomic.AddUint64(&streamSourceReadPauseInProgress, 1)
 }
@@ -304,35 +320,44 @@ func decrementStreamSourceReadPauseInProgress() {
 	}
 }
 
-func recordStreamSlowSkipTelemetry(lagChunks, lagBytes uint64) {
+func recordStreamSlowSkipTelemetry(playlistSource string, lagChunks, lagBytes uint64) {
 	atomic.AddUint64(&streamSlowSkipEventsCount, 1)
 	atomic.AddUint64(&streamSlowSkipLagChunksTotal, lagChunks)
 	atomic.AddUint64(&streamSlowSkipLagBytesTotal, lagBytes)
-	streamSlowSkipEventsMetric.Inc()
-	streamSlowSkipLagChunksMetric.Observe(float64(lagChunks))
-	streamSlowSkipLagBytesMetric.Observe(float64(lagBytes))
+	playlistSource = normalizePlaylistSourceMetricLabel(playlistSource)
+	streamSlowSkipEventsMetric.WithLabelValues(playlistSource).Inc()
+	streamSlowSkipLagChunksMetric.WithLabelValues(playlistSource).Observe(float64(lagChunks))
+	streamSlowSkipLagBytesMetric.WithLabelValues(playlistSource).Observe(float64(lagBytes))
 }
 
-func recordStreamSubscriberWriteTelemetry(sample subscriberWritePressureSample) {
+func recordStreamSubscriberWriteTelemetry(playlistSource string, sample subscriberWritePressureSample) {
+	playlistSource = normalizePlaylistSourceMetricLabel(playlistSource)
+	if sample.DeadlineUnsupported {
+		atomic.AddUint64(&streamSubscriberWriteDeadlineUnsupportedCount, 1)
+		streamSubscriberWriteDeadlineUnsupportedMetric.WithLabelValues(playlistSource).Inc()
+	}
 	if sample.DeadlineTimeout {
 		atomic.AddUint64(&streamSubscriberWriteDeadlineTimeoutsCount, 1)
-		streamSubscriberWriteDeadlineTimeoutsMetric.Inc()
+		streamSubscriberWriteDeadlineTimeoutsMetric.WithLabelValues(playlistSource).Inc()
 	}
 	if sample.ShortWrite {
 		atomic.AddUint64(&streamSubscriberWriteShortWritesCount, 1)
-		streamSubscriberWriteShortWritesMetric.Inc()
+		streamSubscriberWriteShortWritesMetric.WithLabelValues(playlistSource).Inc()
 	}
 	if sample.BlockedDuration > 0 {
 		atomic.AddUint64(&streamSubscriberWriteBlockedDurationUS, sample.BlockedDuration)
-		streamSubscriberWriteBlockedSecondsMetric.Observe(float64(sample.BlockedDuration) / float64(time.Second/time.Microsecond))
+		streamSubscriberWriteBlockedSecondsMetric.WithLabelValues(playlistSource).Observe(
+			float64(sample.BlockedDuration) / float64(time.Second/time.Microsecond),
+		)
 	}
 }
 
-func recordStreamSourceReadPauseTelemetry(reason string, duration time.Duration) {
+func recordStreamSourceReadPauseTelemetry(playlistSource, reason string, duration time.Duration) {
 	if duration <= 0 {
 		return
 	}
 	reason = normalizeStreamSourceReadPauseReason(reason)
+	playlistSource = normalizePlaylistSourceMetricLabel(playlistSource)
 
 	durationUS := uint64(duration / time.Microsecond)
 	if durationUS == 0 {
@@ -351,8 +376,8 @@ func recordStreamSourceReadPauseTelemetry(reason string, duration time.Duration)
 		}
 	}
 
-	streamSourceReadPauseEventsMetric.WithLabelValues(reason).Inc()
-	streamSourceReadPauseSecondsMetric.WithLabelValues(reason).Observe(float64(duration) / float64(time.Second))
+	streamSourceReadPauseEventsMetric.WithLabelValues(reason, playlistSource).Inc()
+	streamSourceReadPauseSecondsMetric.WithLabelValues(reason, playlistSource).Observe(float64(duration) / float64(time.Second))
 }
 
 type manualRecoveryError struct {
@@ -591,84 +616,88 @@ type sessionManagerConfig struct {
 
 // SharedSessionStats reports per-channel shared-session state for diagnostics.
 type SharedSessionStats struct {
-	TunerID                              int
-	ChannelID                            int64
-	GuideNumber                          string
-	GuideName                            string
-	SourceID                             int64
-	SourceItemKey                        string
-	SourceStreamURL                      string
-	SourceStartupProbeRawBytes           int
-	SourceStartupProbeTrimmedBytes       int
-	SourceStartupProbeCutoverOffset      int
-	SourceStartupProbeDroppedBytes       int
-	SourceStartupProbeBytes              int
-	SourceStartupRandomAccessReady       bool
-	SourceStartupRandomAccessCodec       string
-	SourceStartupInventoryMethod         string
-	SourceStartupVideoStreams            int
-	SourceStartupAudioStreams            int
-	SourceStartupVideoCodecs             string
-	SourceStartupAudioCodecs             string
-	SourceStartupComponentState          string
-	SourceStartupRetryRelaxedProbe       bool
-	SourceStartupRetryRelaxedProbeReason string
-	Resolution                           string
-	FrameRate                            float64
-	VideoCodec                           string
-	AudioCodec                           string
-	CurrentBitrateBPS                    int64
-	ProfileBitrateBPS                    int64
-	Producer                             string
-	StartedAt                            time.Time
-	LastByteAt                           time.Time
-	LastPushAt                           time.Time
-	BytesRead                            int64
-	BytesPushed                          int64
-	ChunksPushed                         int64
-	Subscribers                          int
-	SubscriberInfo                       []SubscriberStats
-	SlowSkipEventsTotal                  uint64
-	SlowSkipLagChunksTotal               uint64
-	SlowSkipLagBytesTotal                uint64
-	SlowSkipMaxLagChunks                 uint64
-	SubscriberWriteDeadlineTimeoutsTotal uint64
-	SubscriberWriteShortWritesTotal      uint64
-	SubscriberWriteBlockedDurationUS     uint64
-	SubscriberWriteBlockedDurationMS     uint64
-	StallCount                           int64
-	RecoveryCycle                        int64
-	RecoveryReason                       string
-	RecoveryTransitionMode               string
-	RecoveryTransitionEffectiveMode      string
-	RecoveryTransitionSignalsApplied     string
-	RecoveryTransitionSignalSkips        string
-	RecoveryTransitionFallbackCount      int64
-	RecoveryTransitionFallbackReason     string
-	RecoveryTransitionStitchApplied      bool
-	RecoveryKeepaliveMode                string
-	RecoveryKeepaliveFallbackCount       int64
-	RecoveryKeepaliveFallbackReason      string
-	RecoveryKeepaliveStartedAt           time.Time
-	RecoveryKeepaliveStoppedAt           time.Time
-	RecoveryKeepaliveDuration            string
-	RecoveryKeepaliveBytes               int64
-	RecoveryKeepaliveChunks              int64
-	RecoveryKeepaliveRateBytesPerSecond  float64
-	RecoveryKeepaliveExpectedRate        float64
-	RecoveryKeepaliveRealtimeMultiplier  float64
-	RecoveryKeepaliveGuardrailCount      int64
-	RecoveryKeepaliveGuardrailReason     string
-	SourceSelectCount                    int64
-	SameSourceReselectCount              int64
-	LastSourceSelectedAt                 time.Time
-	LastSourceSelectReason               string
-	SinceLastSourceSelect                string
-	LastError                            string
-	SourceHealthPersistCoalescedTotal    int64
-	SourceHealthPersistDroppedTotal      int64
-	SourceHealthPersistCoalescedBySource map[int64]int64
-	SourceHealthPersistDroppedBySource   map[int64]int64
+	TunerID                                 int
+	PlaylistSourceID                        int64
+	PlaylistSourceName                      string
+	VirtualTunerSlot                        int
+	ChannelID                               int64
+	GuideNumber                             string
+	GuideName                               string
+	SourceID                                int64
+	SourceItemKey                           string
+	SourceStreamURL                         string
+	SourceStartupProbeRawBytes              int
+	SourceStartupProbeTrimmedBytes          int
+	SourceStartupProbeCutoverOffset         int
+	SourceStartupProbeDroppedBytes          int
+	SourceStartupProbeBytes                 int
+	SourceStartupRandomAccessReady          bool
+	SourceStartupRandomAccessCodec          string
+	SourceStartupInventoryMethod            string
+	SourceStartupVideoStreams               int
+	SourceStartupAudioStreams               int
+	SourceStartupVideoCodecs                string
+	SourceStartupAudioCodecs                string
+	SourceStartupComponentState             string
+	SourceStartupRetryRelaxedProbe          bool
+	SourceStartupRetryRelaxedProbeReason    string
+	Resolution                              string
+	FrameRate                               float64
+	VideoCodec                              string
+	AudioCodec                              string
+	CurrentBitrateBPS                       int64
+	ProfileBitrateBPS                       int64
+	Producer                                string
+	StartedAt                               time.Time
+	LastByteAt                              time.Time
+	LastPushAt                              time.Time
+	BytesRead                               int64
+	BytesPushed                             int64
+	ChunksPushed                            int64
+	Subscribers                             int
+	SubscriberInfo                          []SubscriberStats
+	SlowSkipEventsTotal                     uint64
+	SlowSkipLagChunksTotal                  uint64
+	SlowSkipLagBytesTotal                   uint64
+	SlowSkipMaxLagChunks                    uint64
+	SubscriberWriteDeadlineUnsupportedTotal uint64
+	SubscriberWriteDeadlineTimeoutsTotal    uint64
+	SubscriberWriteShortWritesTotal         uint64
+	SubscriberWriteBlockedDurationUS        uint64
+	SubscriberWriteBlockedDurationMS        uint64
+	StallCount                              int64
+	RecoveryCycle                           int64
+	RecoveryReason                          string
+	RecoveryTransitionMode                  string
+	RecoveryTransitionEffectiveMode         string
+	RecoveryTransitionSignalsApplied        string
+	RecoveryTransitionSignalSkips           string
+	RecoveryTransitionFallbackCount         int64
+	RecoveryTransitionFallbackReason        string
+	RecoveryTransitionStitchApplied         bool
+	RecoveryKeepaliveMode                   string
+	RecoveryKeepaliveFallbackCount          int64
+	RecoveryKeepaliveFallbackReason         string
+	RecoveryKeepaliveStartedAt              time.Time
+	RecoveryKeepaliveStoppedAt              time.Time
+	RecoveryKeepaliveDuration               string
+	RecoveryKeepaliveBytes                  int64
+	RecoveryKeepaliveChunks                 int64
+	RecoveryKeepaliveRateBytesPerSecond     float64
+	RecoveryKeepaliveExpectedRate           float64
+	RecoveryKeepaliveRealtimeMultiplier     float64
+	RecoveryKeepaliveGuardrailCount         int64
+	RecoveryKeepaliveGuardrailReason        string
+	SourceSelectCount                       int64
+	SameSourceReselectCount                 int64
+	LastSourceSelectedAt                    time.Time
+	LastSourceSelectReason                  string
+	SinceLastSourceSelect                   string
+	LastError                               string
+	SourceHealthPersistCoalescedTotal       int64
+	SourceHealthPersistDroppedTotal         int64
+	SourceHealthPersistCoalescedBySource    map[int64]int64
+	SourceHealthPersistDroppedBySource      map[int64]int64
 }
 
 // SubscriberStats reports one connected subscriber on a shared session.
@@ -681,40 +710,41 @@ type SubscriberStats struct {
 // SharedSessionHistory reports bounded historical shared-session lifecycle
 // windows for both active and recently closed sessions.
 type SharedSessionHistory struct {
-	SessionID                            uint64                           `json:"session_id"`
-	ChannelID                            int64                            `json:"channel_id,omitempty"`
-	GuideNumber                          string                           `json:"guide_number,omitempty"`
-	GuideName                            string                           `json:"guide_name,omitempty"`
-	TunerID                              int                              `json:"tuner_id"`
-	OpenedAt                             time.Time                        `json:"opened_at"`
-	ClosedAt                             time.Time                        `json:"closed_at,omitempty"`
-	Active                               bool                             `json:"active"`
-	TerminalStatus                       string                           `json:"terminal_status,omitempty"`
-	TerminalError                        string                           `json:"terminal_error,omitempty"`
-	PeakSubscribers                      int                              `json:"peak_subscribers"`
-	TotalSubscribers                     int64                            `json:"total_subscribers"`
-	CompletedSubscribers                 int64                            `json:"completed_subscribers"`
-	SlowSkipEventsTotal                  uint64                           `json:"slow_skip_events_total"`
-	SlowSkipLagChunksTotal               uint64                           `json:"slow_skip_lag_chunks_total"`
-	SlowSkipLagBytesTotal                uint64                           `json:"slow_skip_lag_bytes_total"`
-	SlowSkipMaxLagChunks                 uint64                           `json:"slow_skip_max_lag_chunks"`
-	SubscriberWriteDeadlineTimeoutsTotal uint64                           `json:"subscriber_write_deadline_timeouts_total"`
-	SubscriberWriteShortWritesTotal      uint64                           `json:"subscriber_write_short_writes_total"`
-	SubscriberWriteBlockedDurationUS     uint64                           `json:"subscriber_write_blocked_duration_us"`
-	SubscriberWriteBlockedDurationMS     uint64                           `json:"subscriber_write_blocked_duration_ms"`
-	RecoveryCycleCount                   int64                            `json:"recovery_cycle_count"`
-	LastRecoveryReason                   string                           `json:"last_recovery_reason,omitempty"`
-	SourceSelectCount                    int64                            `json:"source_select_count"`
-	SameSourceReselectCount              int64                            `json:"same_source_reselect_count"`
-	LastSourceSelectedAt                 time.Time                        `json:"last_source_selected_at,omitempty"`
-	LastSourceSelectReason               string                           `json:"last_source_select_reason,omitempty"`
-	LastError                            string                           `json:"last_error,omitempty"`
-	Sources                              []SharedSessionSourceHistory     `json:"sources,omitempty"`
-	Subscribers                          []SharedSessionSubscriberHistory `json:"subscribers,omitempty"`
-	SourceHistoryLimit                   int                              `json:"source_history_limit,omitempty"`
-	SourceHistoryTruncated               int64                            `json:"source_history_truncated_count,omitempty"`
-	SubscriberHistoryLimit               int                              `json:"subscriber_history_limit,omitempty"`
-	SubscriberHistoryTruncated           int64                            `json:"subscriber_history_truncated_count,omitempty"`
+	SessionID                               uint64                           `json:"session_id"`
+	ChannelID                               int64                            `json:"channel_id,omitempty"`
+	GuideNumber                             string                           `json:"guide_number,omitempty"`
+	GuideName                               string                           `json:"guide_name,omitempty"`
+	TunerID                                 int                              `json:"tuner_id"`
+	OpenedAt                                time.Time                        `json:"opened_at"`
+	ClosedAt                                time.Time                        `json:"closed_at,omitempty"`
+	Active                                  bool                             `json:"active"`
+	TerminalStatus                          string                           `json:"terminal_status,omitempty"`
+	TerminalError                           string                           `json:"terminal_error,omitempty"`
+	PeakSubscribers                         int                              `json:"peak_subscribers"`
+	TotalSubscribers                        int64                            `json:"total_subscribers"`
+	CompletedSubscribers                    int64                            `json:"completed_subscribers"`
+	SlowSkipEventsTotal                     uint64                           `json:"slow_skip_events_total"`
+	SlowSkipLagChunksTotal                  uint64                           `json:"slow_skip_lag_chunks_total"`
+	SlowSkipLagBytesTotal                   uint64                           `json:"slow_skip_lag_bytes_total"`
+	SlowSkipMaxLagChunks                    uint64                           `json:"slow_skip_max_lag_chunks"`
+	SubscriberWriteDeadlineUnsupportedTotal uint64                           `json:"subscriber_write_deadline_unsupported_total"`
+	SubscriberWriteDeadlineTimeoutsTotal    uint64                           `json:"subscriber_write_deadline_timeouts_total"`
+	SubscriberWriteShortWritesTotal         uint64                           `json:"subscriber_write_short_writes_total"`
+	SubscriberWriteBlockedDurationUS        uint64                           `json:"subscriber_write_blocked_duration_us"`
+	SubscriberWriteBlockedDurationMS        uint64                           `json:"subscriber_write_blocked_duration_ms"`
+	RecoveryCycleCount                      int64                            `json:"recovery_cycle_count"`
+	LastRecoveryReason                      string                           `json:"last_recovery_reason,omitempty"`
+	SourceSelectCount                       int64                            `json:"source_select_count"`
+	SameSourceReselectCount                 int64                            `json:"same_source_reselect_count"`
+	LastSourceSelectedAt                    time.Time                        `json:"last_source_selected_at,omitempty"`
+	LastSourceSelectReason                  string                           `json:"last_source_select_reason,omitempty"`
+	LastError                               string                           `json:"last_error,omitempty"`
+	Sources                                 []SharedSessionSourceHistory     `json:"sources,omitempty"`
+	Subscribers                             []SharedSessionSubscriberHistory `json:"subscribers,omitempty"`
+	SourceHistoryLimit                      int                              `json:"source_history_limit,omitempty"`
+	SourceHistoryTruncated                  int64                            `json:"source_history_truncated_count,omitempty"`
+	SubscriberHistoryLimit                  int                              `json:"subscriber_history_limit,omitempty"`
+	SubscriberHistoryTruncated              int64                            `json:"subscriber_history_truncated_count,omitempty"`
 }
 
 // SharedSessionSourceHistory reports one source-selection window for a shared session.
@@ -760,7 +790,7 @@ type SharedSessionSubscriberHistory struct {
 // SessionManager coordinates shared channel stream sessions.
 type SessionManager struct {
 	channels     ChannelsProvider
-	tuners       *Pool
+	tuners       tunerUsage
 	cfg          sessionManagerConfig
 	logger       *slog.Logger
 	recentHealth *recentSourceHealth
@@ -839,109 +869,110 @@ type sharedRuntimeSession struct {
 	readyCh   chan struct{}
 	readyErr  error
 
-	mu                               sync.Mutex
-	subscribers                      map[uint64]SubscriberStats
-	nextSubscriberID                 uint64
-	idleTimer                        *time.Timer
-	idleToken                        uint64
-	idleCancelValidatedHook          func()
-	startupAttemptIdleCancelHook     func()
-	closed                           bool
-	lastErr                          error
-	sourceID                         int64
-	sourceItemKey                    string
-	sourceStreamURL                  string
-	sourceStartupProbeRawBytes       int
-	sourceStartupProbeTrimmedBytes   int
-	sourceStartupProbeCutoverOffset  int
-	sourceStartupProbeDroppedBytes   int
-	sourceStartupProbeBytes          int
-	sourceStartupRandomAccessReady   bool
-	sourceStartupRandomAccessCodec   string
-	sourceStartupInventoryMethod     string
-	sourceStartupVideoStreams        int
-	sourceStartupAudioStreams        int
-	sourceStartupVideoCodecs         string
-	sourceStartupAudioCodecs         string
-	sourceStartupComponentState      string
-	sourceStartupRetryRelaxedProbe   bool
-	sourceStartupRetryReason         string
-	sourceSelectBytesBase            int64
-	sourceProfile                    streamProfile
-	producer                         string
-	sourceSelects                    int64
-	lastSourceSelectedAt             time.Time
-	lastSourceSelectReason           string
-	sameSourceReselectCount          int64
-	startupProbeWarnedAt             time.Time
-	startupProbeWarnSuppressed       int64
-	profileProbeGeneration           uint64
-	profileProbeCancel               context.CancelFunc
-	profileProbeLastStartedAt        time.Time
-	recoveryCycle                    int64
-	recoveryReason                   string
-	recoveryTransitionMode           string
-	recoveryTransitionEffective      string
-	recoveryTransitionSignalsApplied string
-	recoveryTransitionSignalSkips    string
-	recoveryTransitionFallbacks      int64
-	recoveryTransitionLastFallback   string
-	recoveryTransitionStitchApplied  bool
-	recoveryKeepaliveMode            string
-	recoveryKeepaliveFallbacks       int64
-	recoveryKeepaliveLastFallback    string
-	recoveryKeepaliveStartedAt       time.Time
-	recoveryKeepaliveStoppedAt       time.Time
-	recoveryKeepaliveBytes           int64
-	recoveryKeepaliveChunks          int64
-	recoveryKeepaliveRateBytesPerSec float64
-	recoveryKeepaliveExpectedRate    float64
-	recoveryKeepaliveProfileRate     float64
-	recoveryKeepaliveMultiplier      float64
-	recoveryKeepaliveOverrateSince   time.Time
-	recoveryKeepaliveGuardrailCount  int64
-	recoveryKeepaliveGuardrailReason string
-	recoveryPATContinuity            byte
-	recoveryPMTContinuity            byte
-	recoveryPCRContinuity            byte
-	recoveryPATVersion               byte
-	recoveryPMTVersion               byte
-	recoveryObservedPCRBase          uint64
-	recoveryObservedPCRAt            time.Time
-	recoveryBoundaryPCRBase          uint64
-	recoveryBoundaryPCRSet           bool
-	recoveryBurstCount               int
-	recoveryBurstStartedAt           time.Time
-	recoveryTriggerLastLogAt         time.Time
-	recoveryTriggerLastSourceID      int64
-	recoveryTriggerLastReason        string
-	recoveryTriggerLogsSuppressed    int64
-	slateAVCloseWarnLastLogAt        time.Time
-	slateAVCloseWarnLogsSuppressed   int64
-	firstByteLogged                  bool
-	slowSkipEventsTotal              uint64
-	slowSkipLagChunksTotal           uint64
-	slowSkipLagBytesTotal            uint64
-	slowSkipMaxLagChunks             uint64
-	subscriberWriteDeadlineTimeouts  uint64
-	subscriberWriteShortWrites       uint64
-	subscriberWriteBlockedDurationUS uint64
-	stallCount                       int64
-	shortLivedRecoveryBySource       map[int64]shortLivedRecoveryPenalty
-	manualRecoveryCh                 chan string
-	manualRecoveryPending            bool
-	manualRecoveryInProgress         bool
-	startedAt                        time.Time
-	sourceHealthPersistCh            chan sourceHealthPersistRequest
-	sourceHealthPersistDone          chan struct{}
-	profileProbePersistWg            sync.WaitGroup
-	sourceHealthPersistMu            sync.Mutex
-	sourceHealthCoalesced            map[int64]sourceHealthPersistRequest
-	sourceHealthQueue                []int64
-	sourceHealthCoalescedTotal       int64
-	sourceHealthDroppedTotal         int64
-	sourceHealthCoalescedBySource    map[int64]int64
-	sourceHealthDroppedBySource      map[int64]int64
+	mu                                 sync.Mutex
+	subscribers                        map[uint64]SubscriberStats
+	nextSubscriberID                   uint64
+	idleTimer                          *time.Timer
+	idleToken                          uint64
+	idleCancelValidatedHook            func()
+	startupAttemptIdleCancelHook       func()
+	closed                             bool
+	lastErr                            error
+	sourceID                           int64
+	sourceItemKey                      string
+	sourceStreamURL                    string
+	sourceStartupProbeRawBytes         int
+	sourceStartupProbeTrimmedBytes     int
+	sourceStartupProbeCutoverOffset    int
+	sourceStartupProbeDroppedBytes     int
+	sourceStartupProbeBytes            int
+	sourceStartupRandomAccessReady     bool
+	sourceStartupRandomAccessCodec     string
+	sourceStartupInventoryMethod       string
+	sourceStartupVideoStreams          int
+	sourceStartupAudioStreams          int
+	sourceStartupVideoCodecs           string
+	sourceStartupAudioCodecs           string
+	sourceStartupComponentState        string
+	sourceStartupRetryRelaxedProbe     bool
+	sourceStartupRetryReason           string
+	sourceSelectBytesBase              int64
+	sourceProfile                      streamProfile
+	producer                           string
+	sourceSelects                      int64
+	lastSourceSelectedAt               time.Time
+	lastSourceSelectReason             string
+	sameSourceReselectCount            int64
+	startupProbeWarnedAt               time.Time
+	startupProbeWarnSuppressed         int64
+	profileProbeGeneration             uint64
+	profileProbeCancel                 context.CancelFunc
+	profileProbeLastStartedAt          time.Time
+	recoveryCycle                      int64
+	recoveryReason                     string
+	recoveryTransitionMode             string
+	recoveryTransitionEffective        string
+	recoveryTransitionSignalsApplied   string
+	recoveryTransitionSignalSkips      string
+	recoveryTransitionFallbacks        int64
+	recoveryTransitionLastFallback     string
+	recoveryTransitionStitchApplied    bool
+	recoveryKeepaliveMode              string
+	recoveryKeepaliveFallbacks         int64
+	recoveryKeepaliveLastFallback      string
+	recoveryKeepaliveStartedAt         time.Time
+	recoveryKeepaliveStoppedAt         time.Time
+	recoveryKeepaliveBytes             int64
+	recoveryKeepaliveChunks            int64
+	recoveryKeepaliveRateBytesPerSec   float64
+	recoveryKeepaliveExpectedRate      float64
+	recoveryKeepaliveProfileRate       float64
+	recoveryKeepaliveMultiplier        float64
+	recoveryKeepaliveOverrateSince     time.Time
+	recoveryKeepaliveGuardrailCount    int64
+	recoveryKeepaliveGuardrailReason   string
+	recoveryPATContinuity              byte
+	recoveryPMTContinuity              byte
+	recoveryPCRContinuity              byte
+	recoveryPATVersion                 byte
+	recoveryPMTVersion                 byte
+	recoveryObservedPCRBase            uint64
+	recoveryObservedPCRAt              time.Time
+	recoveryBoundaryPCRBase            uint64
+	recoveryBoundaryPCRSet             bool
+	recoveryBurstCount                 int
+	recoveryBurstStartedAt             time.Time
+	recoveryTriggerLastLogAt           time.Time
+	recoveryTriggerLastSourceID        int64
+	recoveryTriggerLastReason          string
+	recoveryTriggerLogsSuppressed      int64
+	slateAVCloseWarnLastLogAt          time.Time
+	slateAVCloseWarnLogsSuppressed     int64
+	firstByteLogged                    bool
+	slowSkipEventsTotal                uint64
+	slowSkipLagChunksTotal             uint64
+	slowSkipLagBytesTotal              uint64
+	slowSkipMaxLagChunks               uint64
+	subscriberWriteDeadlineUnsupported uint64
+	subscriberWriteDeadlineTimeouts    uint64
+	subscriberWriteShortWrites         uint64
+	subscriberWriteBlockedDurationUS   uint64
+	stallCount                         int64
+	shortLivedRecoveryBySource         map[int64]shortLivedRecoveryPenalty
+	manualRecoveryCh                   chan string
+	manualRecoveryPending              bool
+	manualRecoveryInProgress           bool
+	startedAt                          time.Time
+	sourceHealthPersistCh              chan sourceHealthPersistRequest
+	sourceHealthPersistDone            chan struct{}
+	profileProbePersistWg              sync.WaitGroup
+	sourceHealthPersistMu              sync.Mutex
+	sourceHealthCoalesced              map[int64]sourceHealthPersistRequest
+	sourceHealthQueue                  []int64
+	sourceHealthCoalescedTotal         int64
+	sourceHealthDroppedTotal           int64
+	sourceHealthCoalescedBySource      map[int64]int64
+	sourceHealthDroppedBySource        map[int64]int64
 
 	historySessionID            uint64
 	historyPeakSubscribers      int
@@ -1001,7 +1032,7 @@ type SessionSubscription struct {
 type subscriberClientAddrContextKey struct{}
 
 // NewSessionManager builds a new shared session manager.
-func NewSessionManager(cfg SessionManagerConfig, tuners *Pool, channelsProvider ChannelsProvider) *SessionManager {
+func NewSessionManager(cfg SessionManagerConfig, tuners tunerUsage, channelsProvider ChannelsProvider) *SessionManager {
 	if tuners == nil || channelsProvider == nil {
 		return nil
 	}
@@ -1688,9 +1719,10 @@ type slowSkipSessionSnapshot struct {
 }
 
 type subscriberWritePressureSample struct {
-	DeadlineTimeout bool
-	ShortWrite      bool
-	BlockedDuration uint64
+	DeadlineUnsupported bool
+	DeadlineTimeout     bool
+	ShortWrite          bool
+	BlockedDuration     uint64
 }
 
 func (s *SessionSubscription) recordSlowSkipEvent(read ReadResult) {
@@ -1699,7 +1731,11 @@ func (s *SessionSubscription) recordSlowSkipEvent(read ReadResult) {
 	}
 	details := slowClientLagDetailsFromReadResult(read)
 	lagBytes := estimateSlowClientLagBytes(read, details.LagChunks)
-	recordStreamSlowSkipTelemetry(details.LagChunks, lagBytes)
+	playlistSource := playlistSourceMetricUnknown
+	if s.session != nil {
+		playlistSource = s.session.currentPlaylistSourceMetricLabel()
+	}
+	recordStreamSlowSkipTelemetry(playlistSource, details.LagChunks, lagBytes)
 
 	sessionSnapshot := slowSkipSessionSnapshot{}
 	if s.session != nil {
@@ -1896,7 +1932,13 @@ func (m *SessionManager) getOrCreateSession(
 		m.wg.Add(1) // track creation lifecycle from reservation; happens-before Close's wg.Wait
 		m.mu.Unlock()
 
-		lease, err := m.tuners.AcquireClient(createCtx, channel.GuideNumber, "shared:"+channel.GuideNumber)
+		initialPlaylistSourceID := m.initialLeasePlaylistSourceID(createCtx, channel)
+		lease, err := m.tuners.AcquireClientForSource(
+			createCtx,
+			initialPlaylistSourceID,
+			channel.GuideNumber,
+			"shared:"+channel.GuideNumber,
+		)
 		if err != nil {
 			createCancel()
 			m.mu.Lock()
@@ -1944,6 +1986,47 @@ func (m *SessionManager) getOrCreateSession(
 		}()
 		return session, true, nil
 	}
+}
+
+func (m *SessionManager) initialLeasePlaylistSourceID(ctx context.Context, channel channels.Channel) int64 {
+	if m == nil || m.channels == nil {
+		return 0
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if channel.ChannelID <= 0 {
+		return 0
+	}
+
+	sources, err := m.channels.ListSources(ctx, channel.ChannelID, true)
+	if err != nil || len(sources) == 0 {
+		return 0
+	}
+
+	sources = m.applyRecentSourceHealth(sources)
+	ordered := orderSourcesByAvailability(sources, time.Now().UTC())
+	ordered = limitSourcesByFailovers(ordered, m.cfg.maxFailover)
+	if len(ordered) == 0 {
+		return 0
+	}
+	fallbackSourceID := int64(0)
+	for _, source := range ordered {
+		if strings.TrimSpace(source.StreamURL) == "" {
+			continue
+		}
+		if fallbackSourceID == 0 {
+			fallbackSourceID = source.PlaylistSourceID
+		}
+		if !sourceHasAvailableTunerSlot(m.tuners, source.PlaylistSourceID, 0, false) {
+			continue
+		}
+		return source.PlaylistSourceID
+	}
+	if fallbackSourceID != 0 {
+		return fallbackSourceID
+	}
+	return ordered[0].PlaylistSourceID
 }
 
 func (s *sharedRuntimeSession) isClosed() bool {
@@ -2863,7 +2946,7 @@ func (s *sharedRuntimeSession) runCycle(reader io.ReadCloser) (error, bool) {
 		if pauseDuration < 0 {
 			pauseDuration = 0
 		}
-		recordStreamSourceReadPauseTelemetry(reason, pauseDuration)
+		recordStreamSourceReadPauseTelemetry(s.currentPlaylistSourceMetricLabel(), reason, pauseDuration)
 		sourceReadPauseStartedAt = time.Time{}
 		decrementStreamSourceReadPauseInProgress()
 	}
@@ -3017,11 +3100,12 @@ func (s *sharedRuntimeSession) startRecoverySource(
 		candidates = s.applyShortLivedRecoveryPenalties(candidates, now)
 		ordered := orderFailoverRecoveryCandidates(candidates, currentSource.SourceID, now)
 		limited := limitSourcesByFailovers(ordered, s.manager.cfg.maxFailover)
+		alternateSelectionCandidates := s.filterCandidatesByTunerAvailability(limited)
 		if candidate, ok := sourceByID(limited, currentSource.SourceID); ok {
 			currentCandidate = candidate
 		}
 		alternateCount, startupEligibleAlternateCount := failoverAlternateCandidateCounts(
-			limited,
+			alternateSelectionCandidates,
 			currentSource.SourceID,
 			now,
 		)
@@ -3047,8 +3131,18 @@ func (s *sharedRuntimeSession) startRecoverySource(
 		}
 
 		recoverDeadline := recoveryDeadline(ctx, failoverTTL)
-		if alternate, ok := firstAlternateCandidate(limited, currentSource.SourceID, now); ok {
-			if settleErr := s.waitForRecoveryFailoverSettle(ctx, recoverDeadline, recoveryCycle, recoveryReason); settleErr != nil {
+		if alternate, ok := firstAlternateCandidate(
+			alternateSelectionCandidates,
+			currentSource.SourceID,
+			now,
+		); ok {
+			if settleErr := s.waitForRecoveryFailoverSettle(
+				ctx,
+				recoverDeadline,
+				alternate.PlaylistSourceID,
+				recoveryCycle,
+				recoveryReason,
+			); settleErr != nil {
 				return nil, channels.Source{}, settleErr
 			}
 			if err := s.abortRecoveryIfIdle(recoveryCycle, recoveryReason, "post_failover_settle"); err != nil {
@@ -3258,6 +3352,10 @@ func (s *sharedRuntimeSession) startSourceWithCandidates(
 			if err := s.abortRecoveryIfIdle(recoveryCycle, recoveryReason, "candidate_iteration"); err != nil {
 				return nil, channels.Source{}, err
 			}
+			if !s.sourceHasAvailableTunerSlot(source.PlaylistSourceID) {
+				lastErr = ErrNoTunersAvailable
+				continue
+			}
 
 			if cooldownAt, cooling := sourceCooldownDeadline(source); cooling {
 				if !forceCoolingAttempt || source.SourceID != forcedCoolingSourceID {
@@ -3296,6 +3394,43 @@ func (s *sharedRuntimeSession) startSourceWithCandidates(
 				recoveryReason,
 			); err != nil {
 				return nil, channels.Source{}, err
+			}
+			remaining = time.Until(deadline)
+			if remaining <= 0 {
+				break
+			}
+			if leaseErr := s.ensureLeaseForSource(ctx, source); leaseErr != nil {
+				lastErr = leaseErr
+				if ctx.Err() != nil && (errors.Is(leaseErr, context.Canceled) || errors.Is(leaseErr, context.DeadlineExceeded)) {
+					return nil, channels.Source{}, leaseErr
+				}
+				if guardErr := s.abortRecoveryIfIdle(recoveryCycle, recoveryReason, "candidate_lease_failure"); guardErr != nil {
+					return nil, channels.Source{}, guardErr
+				}
+				fields := []any{
+					"channel_id", s.channel.ChannelID,
+					"guide_number", s.channel.GuideNumber,
+					"source_id", source.SourceID,
+					"source_item_key", source.ItemKey,
+					"playlist_source_id", source.PlaylistSourceID,
+					"error", leaseErr,
+				}
+				if recoveryCycle > 0 {
+					fields = append(fields, "recovery_cycle", recoveryCycle, "recovery_reason", recoveryReason)
+				}
+				s.manager.logger.Warn("shared session source lease acquire failed", fields...)
+				if i < len(passCandidates)-1 {
+					if settleErr := s.waitForFailoverRetrySettle(
+						ctx,
+						deadline,
+						source.PlaylistSourceID,
+						recoveryCycle,
+						recoveryReason,
+					); settleErr != nil {
+						return nil, channels.Source{}, settleErr
+					}
+				}
+				continue
 			}
 			remaining = time.Until(deadline)
 			if remaining <= 0 {
@@ -3359,7 +3494,13 @@ func (s *sharedRuntimeSession) startSourceWithCandidates(
 				}
 				s.manager.logger.Warn("shared session source startup failed", fields...)
 				if i < len(passCandidates)-1 {
-					if settleErr := s.waitForFailoverRetrySettle(ctx, deadline, recoveryCycle, recoveryReason); settleErr != nil {
+					if settleErr := s.waitForFailoverRetrySettle(
+						ctx,
+						deadline,
+						source.PlaylistSourceID,
+						recoveryCycle,
+						recoveryReason,
+					); settleErr != nil {
 						return nil, channels.Source{}, settleErr
 					}
 				}
@@ -3419,6 +3560,99 @@ func (s *sharedRuntimeSession) startSourceWithCandidates(
 		lastErr = errors.New("all source attempts exhausted")
 	}
 	return nil, channels.Source{}, lastErr
+}
+
+func (s *sharedRuntimeSession) sourceHasAvailableTunerSlot(sourceID int64) bool {
+	if s == nil || s.manager == nil {
+		return false
+	}
+	currentLeaseSourceID, hasCurrentLease := s.currentLeaseSourceID()
+	return sourceHasAvailableTunerSlot(
+		s.manager.tuners,
+		sourceID,
+		currentLeaseSourceID,
+		hasCurrentLease,
+	)
+}
+
+func (s *sharedRuntimeSession) currentLeaseSourceID() (int64, bool) {
+	if s == nil {
+		return 0, false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.lease == nil {
+		return 0, false
+	}
+	return s.lease.PlaylistSourceID, true
+}
+
+func (s *sharedRuntimeSession) filterCandidatesByTunerAvailability(candidates []channels.Source) []channels.Source {
+	if len(candidates) == 0 {
+		return nil
+	}
+	out := make([]channels.Source, 0, len(candidates))
+	for _, source := range candidates {
+		if !s.sourceHasAvailableTunerSlot(source.PlaylistSourceID) {
+			continue
+		}
+		out = append(out, source)
+	}
+	return out
+}
+
+func sourceHasAvailableTunerSlot(
+	tuners tunerUsage,
+	sourceID int64,
+	currentLeaseSourceID int64,
+	hasCurrentLease bool,
+) bool {
+	if tuners == nil {
+		return false
+	}
+	if hasCurrentLease {
+		if sameTunerSelectionPool(sourceID, currentLeaseSourceID) {
+			return true
+		}
+		if tunerSelectionUsesSharedPool(tuners, sourceID, currentLeaseSourceID) {
+			return true
+		}
+	}
+	if virtualTuners, ok := tuners.(*VirtualTunerManager); ok {
+		return virtualTuners.hasAcquirableClientSlotForSource(sourceID)
+	}
+	capacity := tuners.CapacityForSource(sourceID)
+	if capacity <= 0 {
+		return false
+	}
+	inUseCount := tuners.InUseCountForSource(sourceID)
+	if inUseCount < capacity {
+		return true
+	}
+	if inUseCount > capacity {
+		return false
+	}
+	return tuners.hasPreemptibleLeaseForSource(sourceID)
+}
+
+func sameTunerSelectionPool(a, b int64) bool {
+	return normalizeSessionLeasePlaylistSourceID(a) == normalizeSessionLeasePlaylistSourceID(b)
+}
+
+func tunerSelectionUsesSharedPool(tuners tunerUsage, sourceID int64, currentLeaseSourceID int64) bool {
+	if tuners == nil {
+		return false
+	}
+	total := tuners.Capacity()
+	if total <= 0 {
+		return false
+	}
+	desiredCapacity := tuners.CapacityForSource(sourceID)
+	currentCapacity := tuners.CapacityForSource(currentLeaseSourceID)
+	return desiredCapacity > 0 &&
+		currentCapacity > 0 &&
+		desiredCapacity == total &&
+		currentCapacity == total
 }
 
 func (s *sharedRuntimeSession) shouldRequireStartupRandomAccess(recoveryCycle int64) bool {
@@ -4599,6 +4833,29 @@ func (s *sharedRuntimeSession) startCurrentSourceWithBackoff(
 		); err != nil {
 			return nil, channels.Source{}, err
 		}
+		if leaseErr := s.ensureLeaseForSource(ctx, source); leaseErr != nil {
+			lastErr = leaseErr
+			if ctx.Err() != nil && (errors.Is(leaseErr, context.Canceled) || errors.Is(leaseErr, context.DeadlineExceeded)) {
+				return nil, channels.Source{}, leaseErr
+			}
+			if guardErr := s.abortRecoveryIfIdle(recoveryCycle, recoveryReason, "restart_same_lease_failure"); guardErr != nil {
+				return nil, channels.Source{}, guardErr
+			}
+			s.manager.logger.Warn(
+				"shared session source lease acquire failed",
+				"channel_id", s.channel.ChannelID,
+				"guide_number", s.channel.GuideNumber,
+				"source_id", source.SourceID,
+				"source_item_key", source.ItemKey,
+				"playlist_source_id", source.PlaylistSourceID,
+				"recovery_cycle", recoveryCycle,
+				"recovery_reason", recoveryReason,
+				"recovery_attempt", attempt,
+				"recovery_max_attempts", maxAttempts,
+				"error", leaseErr,
+			)
+			continue
+		}
 		remaining = time.Until(deadline)
 		if remaining <= 0 {
 			break
@@ -4691,6 +4948,135 @@ func (s *sharedRuntimeSession) startCurrentSourceWithBackoff(
 	return nil, channels.Source{}, lastErr
 }
 
+func normalizeSessionLeasePlaylistSourceID(sourceID int64) int64 {
+	if sourceID <= 0 {
+		return defaultPlaylistSourceID
+	}
+	return sourceID
+}
+
+func normalizeSessionLeasePlaylistSourceName(sourceID int64, sourceName string) string {
+	sourceName = strings.TrimSpace(sourceName)
+	if sourceName != "" {
+		return sourceName
+	}
+	if sourceID == defaultPlaylistSourceID {
+		return defaultPlaylistSourceName
+	}
+	return "Source " + strconv.FormatInt(sourceID, 10)
+}
+
+func (s *sharedRuntimeSession) ensureLeaseForSource(ctx context.Context, source channels.Source) error {
+	if s == nil || s.manager == nil || s.manager.tuners == nil {
+		return ErrNoTunersAvailable
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	desiredSourceID := normalizeSessionLeasePlaylistSourceID(source.PlaylistSourceID)
+	desiredSourceName := normalizeSessionLeasePlaylistSourceName(desiredSourceID, source.PlaylistSourceName)
+
+	var previousLease *Lease
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		return errSharedSessionClosed
+	}
+	if s.ctx != nil && s.ctx.Err() != nil {
+		s.mu.Unlock()
+		return s.ctx.Err()
+	}
+	if s.lease != nil {
+		currentSourceID := normalizeSessionLeasePlaylistSourceID(s.lease.PlaylistSourceID)
+		reuseLease := currentSourceID == desiredSourceID
+		if !reuseLease {
+			reuseLease = tunerSelectionUsesSharedPool(
+				s.manager.tuners,
+				desiredSourceID,
+				currentSourceID,
+			)
+		}
+		if reuseLease {
+			s.lease.PlaylistSourceID = desiredSourceID
+			s.lease.PlaylistSourceName = desiredSourceName
+			if s.lease.VirtualTunerSlot < 0 {
+				s.lease.VirtualTunerSlot = s.lease.ID
+			}
+			s.mu.Unlock()
+			return nil
+		}
+		previousLease = s.lease
+		s.lease = nil
+	}
+	s.mu.Unlock()
+
+	if previousLease != nil {
+		if previousLease.token != 0 {
+			s.manager.tuners.clearClientPreemptible(previousLease.ID, previousLease.token)
+		}
+		previousLease.Release()
+	}
+
+	newLease, err := s.manager.tuners.AcquireClientForSource(
+		ctx,
+		desiredSourceID,
+		s.channel.GuideNumber,
+		"shared:"+s.channel.GuideNumber,
+	)
+	if err != nil {
+		return err
+	}
+	if newLease.PlaylistSourceID <= 0 {
+		newLease.PlaylistSourceID = desiredSourceID
+	}
+	if strings.TrimSpace(newLease.PlaylistSourceName) == "" {
+		newLease.PlaylistSourceName = desiredSourceName
+	}
+	if newLease.VirtualTunerSlot < 0 {
+		newLease.VirtualTunerSlot = newLease.ID
+	}
+
+	assignedTunerID := newLease.ID
+	s.mu.Lock()
+	if s.closed {
+		s.mu.Unlock()
+		newLease.Release()
+		return errSharedSessionClosed
+	}
+	if s.ctx != nil && s.ctx.Err() != nil {
+		err := s.ctx.Err()
+		s.mu.Unlock()
+		newLease.Release()
+		return err
+	}
+	s.lease = newLease
+	s.mu.Unlock()
+
+	if s.manager != nil && s.manager.logger != nil {
+		fields := []any{
+			"channel_id", s.channel.ChannelID,
+			"guide_number", s.channel.GuideNumber,
+			"source_id", source.SourceID,
+			"playlist_source_id", desiredSourceID,
+			"playlist_source_name", desiredSourceName,
+			"tuner_id", assignedTunerID,
+		}
+		if previousLease != nil {
+			fields = append(fields,
+				"previous_tuner_id", previousLease.ID,
+				"previous_playlist_source_id", normalizeSessionLeasePlaylistSourceID(previousLease.PlaylistSourceID),
+				"previous_playlist_source_name", normalizeSessionLeasePlaylistSourceName(
+					normalizeSessionLeasePlaylistSourceID(previousLease.PlaylistSourceID),
+					previousLease.PlaylistSourceName,
+				),
+			)
+		}
+		s.manager.logger.Info("shared session lease acquired for source pool", fields...)
+	}
+	return nil
+}
+
 func (s *sharedRuntimeSession) waitForProviderOverlimitCooldown(
 	ctx context.Context,
 	deadline time.Time,
@@ -4739,6 +5125,7 @@ func (s *sharedRuntimeSession) waitForProviderOverlimitCooldown(
 func (s *sharedRuntimeSession) waitForRecoveryFailoverSettle(
 	ctx context.Context,
 	deadline time.Time,
+	playlistSourceID int64,
 	recoveryCycle int64,
 	recoveryReason string,
 ) error {
@@ -4748,7 +5135,7 @@ func (s *sharedRuntimeSession) waitForRecoveryFailoverSettle(
 
 	wait := recoveryAlternateSettleDelay(s.manager.cfg.startupWait, s.manager.cfg.stallDetect)
 	if s.manager.tuners != nil {
-		if poolWait := s.manager.tuners.failoverSettleDelayWhenFull(); poolWait > wait {
+		if poolWait := s.manager.tuners.failoverSettleDelayWhenFullForSource(playlistSourceID); poolWait > wait {
 			wait = poolWait
 		}
 	}
@@ -4775,6 +5162,7 @@ func (s *sharedRuntimeSession) waitForRecoveryFailoverSettle(
 func (s *sharedRuntimeSession) waitForFailoverRetrySettle(
 	ctx context.Context,
 	deadline time.Time,
+	playlistSourceID int64,
 	recoveryCycle int64,
 	recoveryReason string,
 ) error {
@@ -4782,7 +5170,7 @@ func (s *sharedRuntimeSession) waitForFailoverRetrySettle(
 		return nil
 	}
 
-	wait := s.manager.tuners.failoverSettleDelayWhenFull()
+	wait := s.manager.tuners.failoverSettleDelayWhenFullForSource(playlistSourceID)
 	if wait <= 0 {
 		return nil
 	}
@@ -5162,14 +5550,13 @@ func (s *sharedRuntimeSession) addSubscriber(clientAddr string) (uint64, uint64,
 		return 0, 0, errors.New("shared session is not configured")
 	}
 
+	s.mu.Lock()
 	tunerID := -1
 	tunerLeaseToken := uint64(0)
 	if s.lease != nil {
 		tunerID = s.lease.ID
 		tunerLeaseToken = s.lease.token
 	}
-
-	s.mu.Lock()
 	if s.closed || (s.ctx != nil && s.ctx.Err() != nil) {
 		s.mu.Unlock()
 		if s.lastErr != nil {
@@ -5410,7 +5797,10 @@ func (s *sharedRuntimeSession) recordSubscriberWritePressure(sample subscriberWr
 	if s == nil {
 		return
 	}
-	recordStreamSubscriberWriteTelemetry(sample)
+	recordStreamSubscriberWriteTelemetry(s.currentPlaylistSourceMetricLabel(), sample)
+	if sample.DeadlineUnsupported {
+		atomic.AddUint64(&s.subscriberWriteDeadlineUnsupported, 1)
+	}
 	if sample.DeadlineTimeout {
 		atomic.AddUint64(&s.subscriberWriteDeadlineTimeouts, 1)
 	}
@@ -5423,16 +5813,18 @@ func (s *sharedRuntimeSession) recordSubscriberWritePressure(sample subscriberWr
 }
 
 func (s *sharedRuntimeSession) subscriberWritePressureSnapshot() (
+	deadlineUnsupported uint64,
 	deadlineTimeouts uint64,
 	shortWrites uint64,
 	blockedDurationUS uint64,
 	blockedDurationMS uint64,
 ) {
 	if s == nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0, 0, 0
 	}
 	blockedDurationUS = atomic.LoadUint64(&s.subscriberWriteBlockedDurationUS)
-	return atomic.LoadUint64(&s.subscriberWriteDeadlineTimeouts),
+	return atomic.LoadUint64(&s.subscriberWriteDeadlineUnsupported),
+		atomic.LoadUint64(&s.subscriberWriteDeadlineTimeouts),
 		atomic.LoadUint64(&s.subscriberWriteShortWrites),
 		blockedDurationUS,
 		blockedDurationUS / 1000
@@ -6647,6 +7039,27 @@ func (s *sharedRuntimeSession) currentSourceID() int64 {
 	return s.sourceID
 }
 
+func (s *sharedRuntimeSession) currentPlaylistSourceMetricLabel() string {
+	sourceID, sourceName := s.currentPlaylistSourceMetricParts()
+	return playlistSourceMetricLabel(sourceID, sourceName)
+}
+
+func (s *sharedRuntimeSession) currentPlaylistSourceMetricParts() (int64, string) {
+	if s == nil {
+		return 0, ""
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sourceID := int64(0)
+	sourceName := ""
+	if s.lease != nil {
+		sourceID = normalizeSessionLeasePlaylistSourceID(s.lease.PlaylistSourceID)
+		sourceName = normalizeSessionLeasePlaylistSourceName(sourceID, s.lease.PlaylistSourceName)
+	}
+	return sourceID, sourceName
+}
+
 func (s *sharedRuntimeSession) setManualRecoveryPending(pending bool) {
 	if s == nil {
 		return
@@ -7224,7 +7637,8 @@ func (s *sharedRuntimeSession) closeSlateAVRecoveryReaderWithTimeoutWithLifecycl
 		closeWithTimeoutFinishWorker(reader)
 		return err
 	case <-timer.C:
-		closeWithTimeoutRecordTimedOut()
+		playlistSourceID, playlistSourceName := s.currentPlaylistSourceMetricParts()
+		closeWithTimeoutRecordTimedOutForSource(playlistSourceID, playlistSourceName)
 		timeoutErr := fmt.Errorf("timed out waiting for slate AV recovery filler shutdown after %s", timeout)
 		if s != nil && s.manager != nil && s.manager.logger != nil {
 			// Timeouts intentionally bypass non-timeout warn coalescing so each
@@ -7253,7 +7667,7 @@ func (s *sharedRuntimeSession) closeSlateAVRecoveryReaderWithTimeoutWithLifecycl
 		}
 		go func() {
 			_ = <-done
-			closeWithTimeoutRecordLateCompletion()
+			closeWithTimeoutRecordLateCompletionForSource(playlistSourceID, playlistSourceName)
 			closeWithTimeoutFinishWorker(reader)
 		}()
 		return timeoutErr
@@ -7383,42 +7797,43 @@ func (s *sharedRuntimeSession) historySnapshotLocked() SharedSessionHistory {
 	if s.lease != nil {
 		tunerID = s.lease.ID
 	}
-	subscriberWriteDeadlineTimeouts, subscriberWriteShortWrites, subscriberWriteBlockedDurationUS, subscriberWriteBlockedDurationMS := s.subscriberWritePressureSnapshot()
+	subscriberWriteDeadlineUnsupported, subscriberWriteDeadlineTimeouts, subscriberWriteShortWrites, subscriberWriteBlockedDurationUS, subscriberWriteBlockedDurationMS := s.subscriberWritePressureSnapshot()
 	return SharedSessionHistory{
-		SessionID:                            s.historySessionID,
-		ChannelID:                            s.channel.ChannelID,
-		GuideNumber:                          strings.TrimSpace(s.channel.GuideNumber),
-		GuideName:                            strings.TrimSpace(s.channel.GuideName),
-		TunerID:                              tunerID,
-		OpenedAt:                             s.startedAt,
-		ClosedAt:                             s.closedAt,
-		Active:                               !s.closed,
-		TerminalStatus:                       classifySharedSessionTerminalStatus(s.lastErr),
-		TerminalError:                        lastErr,
-		PeakSubscribers:                      s.historyPeakSubscribers,
-		TotalSubscribers:                     s.historyTotalSubscribers,
-		CompletedSubscribers:                 s.historyCompletedSubscribers,
-		SlowSkipEventsTotal:                  s.slowSkipEventsTotal,
-		SlowSkipLagChunksTotal:               s.slowSkipLagChunksTotal,
-		SlowSkipLagBytesTotal:                s.slowSkipLagBytesTotal,
-		SlowSkipMaxLagChunks:                 s.slowSkipMaxLagChunks,
-		SubscriberWriteDeadlineTimeoutsTotal: subscriberWriteDeadlineTimeouts,
-		SubscriberWriteShortWritesTotal:      subscriberWriteShortWrites,
-		SubscriberWriteBlockedDurationUS:     subscriberWriteBlockedDurationUS,
-		SubscriberWriteBlockedDurationMS:     subscriberWriteBlockedDurationMS,
-		RecoveryCycleCount:                   s.recoveryCycle,
-		LastRecoveryReason:                   strings.TrimSpace(s.recoveryReason),
-		SourceSelectCount:                    s.sourceSelects,
-		SameSourceReselectCount:              s.sameSourceReselectCount,
-		LastSourceSelectedAt:                 s.lastSourceSelectedAt,
-		LastSourceSelectReason:               strings.TrimSpace(s.lastSourceSelectReason),
-		LastError:                            lastErr,
-		Sources:                              append([]SharedSessionSourceHistory(nil), s.historySources...),
-		Subscribers:                          append([]SharedSessionSubscriberHistory(nil), s.historySubscribers...),
-		SourceHistoryLimit:                   s.sourceHistoryLimitLocked(),
-		SourceHistoryTruncated:               s.historySourcesTruncated,
-		SubscriberHistoryLimit:               s.subscriberHistoryLimitLocked(),
-		SubscriberHistoryTruncated:           s.historySubscribersTruncated,
+		SessionID:                               s.historySessionID,
+		ChannelID:                               s.channel.ChannelID,
+		GuideNumber:                             strings.TrimSpace(s.channel.GuideNumber),
+		GuideName:                               strings.TrimSpace(s.channel.GuideName),
+		TunerID:                                 tunerID,
+		OpenedAt:                                s.startedAt,
+		ClosedAt:                                s.closedAt,
+		Active:                                  !s.closed,
+		TerminalStatus:                          classifySharedSessionTerminalStatus(s.lastErr),
+		TerminalError:                           lastErr,
+		PeakSubscribers:                         s.historyPeakSubscribers,
+		TotalSubscribers:                        s.historyTotalSubscribers,
+		CompletedSubscribers:                    s.historyCompletedSubscribers,
+		SlowSkipEventsTotal:                     s.slowSkipEventsTotal,
+		SlowSkipLagChunksTotal:                  s.slowSkipLagChunksTotal,
+		SlowSkipLagBytesTotal:                   s.slowSkipLagBytesTotal,
+		SlowSkipMaxLagChunks:                    s.slowSkipMaxLagChunks,
+		SubscriberWriteDeadlineUnsupportedTotal: subscriberWriteDeadlineUnsupported,
+		SubscriberWriteDeadlineTimeoutsTotal:    subscriberWriteDeadlineTimeouts,
+		SubscriberWriteShortWritesTotal:         subscriberWriteShortWrites,
+		SubscriberWriteBlockedDurationUS:        subscriberWriteBlockedDurationUS,
+		SubscriberWriteBlockedDurationMS:        subscriberWriteBlockedDurationMS,
+		RecoveryCycleCount:                      s.recoveryCycle,
+		LastRecoveryReason:                      strings.TrimSpace(s.recoveryReason),
+		SourceSelectCount:                       s.sourceSelects,
+		SameSourceReselectCount:                 s.sameSourceReselectCount,
+		LastSourceSelectedAt:                    s.lastSourceSelectedAt,
+		LastSourceSelectReason:                  strings.TrimSpace(s.lastSourceSelectReason),
+		LastError:                               lastErr,
+		Sources:                                 append([]SharedSessionSourceHistory(nil), s.historySources...),
+		Subscribers:                             append([]SharedSessionSubscriberHistory(nil), s.historySubscribers...),
+		SourceHistoryLimit:                      s.sourceHistoryLimitLocked(),
+		SourceHistoryTruncated:                  s.historySourcesTruncated,
+		SubscriberHistoryLimit:                  s.subscriberHistoryLimitLocked(),
+		SubscriberHistoryTruncated:              s.historySubscribersTruncated,
 	}
 }
 
@@ -7537,7 +7952,7 @@ func (s *sharedRuntimeSession) stats() SharedSessionStats {
 	}
 	now := time.Now().UTC()
 	coalescedTotal, droppedTotal, coalescedBySource, droppedBySource := s.sourceHealthPersistBackpressureSnapshot()
-	subscriberWriteDeadlineTimeouts, subscriberWriteShortWrites, subscriberWriteBlockedDurationUS, subscriberWriteBlockedDurationMS := s.subscriberWritePressureSnapshot()
+	subscriberWriteDeadlineUnsupported, subscriberWriteDeadlineTimeouts, subscriberWriteShortWrites, subscriberWriteBlockedDurationUS, subscriberWriteBlockedDurationMS := s.subscriberWritePressureSnapshot()
 
 	pumpStats := PumpStats{}
 	if s.pump != nil {
@@ -7564,8 +7979,20 @@ func (s *sharedRuntimeSession) stats() SharedSessionStats {
 	})
 
 	tunerID := -1
+	playlistSourceID := defaultPlaylistSourceID
+	playlistSourceName := defaultPlaylistSourceName
+	virtualTunerSlot := -1
 	if s.lease != nil {
 		tunerID = s.lease.ID
+		playlistSourceID = normalizeSessionLeasePlaylistSourceID(s.lease.PlaylistSourceID)
+		playlistSourceName = normalizeSessionLeasePlaylistSourceName(
+			playlistSourceID,
+			s.lease.PlaylistSourceName,
+		)
+		virtualTunerSlot = s.lease.VirtualTunerSlot
+		if virtualTunerSlot < 0 {
+			virtualTunerSlot = tunerID
+		}
 	}
 	sinceLastSourceSelect := ""
 	if !s.lastSourceSelectedAt.IsZero() {
@@ -7593,84 +8020,88 @@ func (s *sharedRuntimeSession) stats() SharedSessionStats {
 	}
 
 	return SharedSessionStats{
-		TunerID:                              tunerID,
-		ChannelID:                            s.channel.ChannelID,
-		GuideNumber:                          s.channel.GuideNumber,
-		GuideName:                            s.channel.GuideName,
-		SourceID:                             s.sourceID,
-		SourceItemKey:                        s.sourceItemKey,
-		SourceStreamURL:                      s.sourceStreamURL,
-		SourceStartupProbeRawBytes:           s.sourceStartupProbeRawBytes,
-		SourceStartupProbeTrimmedBytes:       s.sourceStartupProbeTrimmedBytes,
-		SourceStartupProbeCutoverOffset:      s.sourceStartupProbeCutoverOffset,
-		SourceStartupProbeDroppedBytes:       s.sourceStartupProbeDroppedBytes,
-		SourceStartupProbeBytes:              s.sourceStartupProbeBytes,
-		SourceStartupRandomAccessReady:       s.sourceStartupRandomAccessReady,
-		SourceStartupRandomAccessCodec:       s.sourceStartupRandomAccessCodec,
-		SourceStartupInventoryMethod:         s.sourceStartupInventoryMethod,
-		SourceStartupVideoStreams:            s.sourceStartupVideoStreams,
-		SourceStartupAudioStreams:            s.sourceStartupAudioStreams,
-		SourceStartupVideoCodecs:             s.sourceStartupVideoCodecs,
-		SourceStartupAudioCodecs:             s.sourceStartupAudioCodecs,
-		SourceStartupComponentState:          s.sourceStartupComponentState,
-		SourceStartupRetryRelaxedProbe:       s.sourceStartupRetryRelaxedProbe,
-		SourceStartupRetryRelaxedProbeReason: s.sourceStartupRetryReason,
-		Resolution:                           resolution,
-		FrameRate:                            frameRate,
-		VideoCodec:                           videoCodec,
-		AudioCodec:                           audioCodec,
-		CurrentBitrateBPS:                    currentBitrateBPS,
-		ProfileBitrateBPS:                    profileBitrateBPS,
-		Producer:                             s.producer,
-		StartedAt:                            s.startedAt,
-		LastByteAt:                           pumpStats.LastByteReadAt,
-		LastPushAt:                           pumpStats.LastPublishAt,
-		BytesRead:                            pumpStats.BytesRead,
-		BytesPushed:                          pumpStats.BytesPublished,
-		ChunksPushed:                         pumpStats.ChunksPublished,
-		Subscribers:                          len(s.subscribers),
-		SubscriberInfo:                       subscriberInfo,
-		SlowSkipEventsTotal:                  s.slowSkipEventsTotal,
-		SlowSkipLagChunksTotal:               s.slowSkipLagChunksTotal,
-		SlowSkipLagBytesTotal:                s.slowSkipLagBytesTotal,
-		SlowSkipMaxLagChunks:                 s.slowSkipMaxLagChunks,
-		SubscriberWriteDeadlineTimeoutsTotal: subscriberWriteDeadlineTimeouts,
-		SubscriberWriteShortWritesTotal:      subscriberWriteShortWrites,
-		SubscriberWriteBlockedDurationUS:     subscriberWriteBlockedDurationUS,
-		SubscriberWriteBlockedDurationMS:     subscriberWriteBlockedDurationMS,
-		StallCount:                           s.stallCount,
-		RecoveryCycle:                        s.recoveryCycle,
-		RecoveryReason:                       s.recoveryReason,
-		RecoveryTransitionMode:               s.recoveryTransitionMode,
-		RecoveryTransitionEffectiveMode:      s.recoveryTransitionEffective,
-		RecoveryTransitionSignalsApplied:     s.recoveryTransitionSignalsApplied,
-		RecoveryTransitionSignalSkips:        s.recoveryTransitionSignalSkips,
-		RecoveryTransitionFallbackCount:      s.recoveryTransitionFallbacks,
-		RecoveryTransitionFallbackReason:     s.recoveryTransitionLastFallback,
-		RecoveryTransitionStitchApplied:      s.recoveryTransitionStitchApplied,
-		RecoveryKeepaliveMode:                s.recoveryKeepaliveMode,
-		RecoveryKeepaliveFallbackCount:       s.recoveryKeepaliveFallbacks,
-		RecoveryKeepaliveFallbackReason:      s.recoveryKeepaliveLastFallback,
-		RecoveryKeepaliveStartedAt:           keepaliveSnapshot.StartedAt,
-		RecoveryKeepaliveStoppedAt:           keepaliveSnapshot.StoppedAt,
-		RecoveryKeepaliveDuration:            keepaliveDuration,
-		RecoveryKeepaliveBytes:               keepaliveSnapshot.Bytes,
-		RecoveryKeepaliveChunks:              keepaliveSnapshot.Chunks,
-		RecoveryKeepaliveRateBytesPerSecond:  keepaliveSnapshot.RateBytesPerSecond,
-		RecoveryKeepaliveExpectedRate:        keepaliveSnapshot.ExpectedRate,
-		RecoveryKeepaliveRealtimeMultiplier:  keepaliveSnapshot.RealtimeMultiplier,
-		RecoveryKeepaliveGuardrailCount:      keepaliveSnapshot.GuardrailCount,
-		RecoveryKeepaliveGuardrailReason:     keepaliveSnapshot.GuardrailReason,
-		SourceSelectCount:                    s.sourceSelects,
-		SameSourceReselectCount:              s.sameSourceReselectCount,
-		LastSourceSelectedAt:                 s.lastSourceSelectedAt,
-		LastSourceSelectReason:               s.lastSourceSelectReason,
-		SinceLastSourceSelect:                sinceLastSourceSelect,
-		LastError:                            lastErr,
-		SourceHealthPersistCoalescedTotal:    coalescedTotal,
-		SourceHealthPersistDroppedTotal:      droppedTotal,
-		SourceHealthPersistCoalescedBySource: coalescedBySource,
-		SourceHealthPersistDroppedBySource:   droppedBySource,
+		TunerID:                                 tunerID,
+		PlaylistSourceID:                        playlistSourceID,
+		PlaylistSourceName:                      playlistSourceName,
+		VirtualTunerSlot:                        virtualTunerSlot,
+		ChannelID:                               s.channel.ChannelID,
+		GuideNumber:                             s.channel.GuideNumber,
+		GuideName:                               s.channel.GuideName,
+		SourceID:                                s.sourceID,
+		SourceItemKey:                           s.sourceItemKey,
+		SourceStreamURL:                         s.sourceStreamURL,
+		SourceStartupProbeRawBytes:              s.sourceStartupProbeRawBytes,
+		SourceStartupProbeTrimmedBytes:          s.sourceStartupProbeTrimmedBytes,
+		SourceStartupProbeCutoverOffset:         s.sourceStartupProbeCutoverOffset,
+		SourceStartupProbeDroppedBytes:          s.sourceStartupProbeDroppedBytes,
+		SourceStartupProbeBytes:                 s.sourceStartupProbeBytes,
+		SourceStartupRandomAccessReady:          s.sourceStartupRandomAccessReady,
+		SourceStartupRandomAccessCodec:          s.sourceStartupRandomAccessCodec,
+		SourceStartupInventoryMethod:            s.sourceStartupInventoryMethod,
+		SourceStartupVideoStreams:               s.sourceStartupVideoStreams,
+		SourceStartupAudioStreams:               s.sourceStartupAudioStreams,
+		SourceStartupVideoCodecs:                s.sourceStartupVideoCodecs,
+		SourceStartupAudioCodecs:                s.sourceStartupAudioCodecs,
+		SourceStartupComponentState:             s.sourceStartupComponentState,
+		SourceStartupRetryRelaxedProbe:          s.sourceStartupRetryRelaxedProbe,
+		SourceStartupRetryRelaxedProbeReason:    s.sourceStartupRetryReason,
+		Resolution:                              resolution,
+		FrameRate:                               frameRate,
+		VideoCodec:                              videoCodec,
+		AudioCodec:                              audioCodec,
+		CurrentBitrateBPS:                       currentBitrateBPS,
+		ProfileBitrateBPS:                       profileBitrateBPS,
+		Producer:                                s.producer,
+		StartedAt:                               s.startedAt,
+		LastByteAt:                              pumpStats.LastByteReadAt,
+		LastPushAt:                              pumpStats.LastPublishAt,
+		BytesRead:                               pumpStats.BytesRead,
+		BytesPushed:                             pumpStats.BytesPublished,
+		ChunksPushed:                            pumpStats.ChunksPublished,
+		Subscribers:                             len(s.subscribers),
+		SubscriberInfo:                          subscriberInfo,
+		SlowSkipEventsTotal:                     s.slowSkipEventsTotal,
+		SlowSkipLagChunksTotal:                  s.slowSkipLagChunksTotal,
+		SlowSkipLagBytesTotal:                   s.slowSkipLagBytesTotal,
+		SlowSkipMaxLagChunks:                    s.slowSkipMaxLagChunks,
+		SubscriberWriteDeadlineUnsupportedTotal: subscriberWriteDeadlineUnsupported,
+		SubscriberWriteDeadlineTimeoutsTotal:    subscriberWriteDeadlineTimeouts,
+		SubscriberWriteShortWritesTotal:         subscriberWriteShortWrites,
+		SubscriberWriteBlockedDurationUS:        subscriberWriteBlockedDurationUS,
+		SubscriberWriteBlockedDurationMS:        subscriberWriteBlockedDurationMS,
+		StallCount:                              s.stallCount,
+		RecoveryCycle:                           s.recoveryCycle,
+		RecoveryReason:                          s.recoveryReason,
+		RecoveryTransitionMode:                  s.recoveryTransitionMode,
+		RecoveryTransitionEffectiveMode:         s.recoveryTransitionEffective,
+		RecoveryTransitionSignalsApplied:        s.recoveryTransitionSignalsApplied,
+		RecoveryTransitionSignalSkips:           s.recoveryTransitionSignalSkips,
+		RecoveryTransitionFallbackCount:         s.recoveryTransitionFallbacks,
+		RecoveryTransitionFallbackReason:        s.recoveryTransitionLastFallback,
+		RecoveryTransitionStitchApplied:         s.recoveryTransitionStitchApplied,
+		RecoveryKeepaliveMode:                   s.recoveryKeepaliveMode,
+		RecoveryKeepaliveFallbackCount:          s.recoveryKeepaliveFallbacks,
+		RecoveryKeepaliveFallbackReason:         s.recoveryKeepaliveLastFallback,
+		RecoveryKeepaliveStartedAt:              keepaliveSnapshot.StartedAt,
+		RecoveryKeepaliveStoppedAt:              keepaliveSnapshot.StoppedAt,
+		RecoveryKeepaliveDuration:               keepaliveDuration,
+		RecoveryKeepaliveBytes:                  keepaliveSnapshot.Bytes,
+		RecoveryKeepaliveChunks:                 keepaliveSnapshot.Chunks,
+		RecoveryKeepaliveRateBytesPerSecond:     keepaliveSnapshot.RateBytesPerSecond,
+		RecoveryKeepaliveExpectedRate:           keepaliveSnapshot.ExpectedRate,
+		RecoveryKeepaliveRealtimeMultiplier:     keepaliveSnapshot.RealtimeMultiplier,
+		RecoveryKeepaliveGuardrailCount:         keepaliveSnapshot.GuardrailCount,
+		RecoveryKeepaliveGuardrailReason:        keepaliveSnapshot.GuardrailReason,
+		SourceSelectCount:                       s.sourceSelects,
+		SameSourceReselectCount:                 s.sameSourceReselectCount,
+		LastSourceSelectedAt:                    s.lastSourceSelectedAt,
+		LastSourceSelectReason:                  s.lastSourceSelectReason,
+		SinceLastSourceSelect:                   sinceLastSourceSelect,
+		LastError:                               lastErr,
+		SourceHealthPersistCoalescedTotal:       coalescedTotal,
+		SourceHealthPersistDroppedTotal:         droppedTotal,
+		SourceHealthPersistCoalescedBySource:    coalescedBySource,
+		SourceHealthPersistDroppedBySource:      droppedBySource,
 	}
 }
 
@@ -7821,12 +8252,17 @@ func writeChunk(
 
 	if maxBlockedWrite > 0 && controller != nil {
 		if err := controller.SetWriteDeadline(time.Now().Add(maxBlockedWrite)); err != nil {
-			sample.BlockedDuration = elapsedDurationUS(startedAt)
-			return sample, fmt.Errorf("set response write deadline: %w", err)
+			if errors.Is(err, http.ErrNotSupported) {
+				sample.DeadlineUnsupported = true
+			} else {
+				sample.BlockedDuration = elapsedDurationUS(startedAt)
+				return sample, fmt.Errorf("set response write deadline: %w", err)
+			}
+		} else {
+			defer func() {
+				_ = controller.SetWriteDeadline(time.Time{})
+			}()
 		}
-		defer func() {
-			_ = controller.SetWriteDeadline(time.Time{})
-		}()
 	}
 
 	n, err := w.Write(data)

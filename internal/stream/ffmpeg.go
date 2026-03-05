@@ -88,9 +88,12 @@ const (
 	ffmpegStreamStderrCaptureMax          = 64 * 1024
 	startupProbeReadBufferSize            = 32 * 1024
 	startupRandomAccessProbeMaxBytes      = 2 * 1024 * 1024
-	previewCancelFlushWait                = 10 * time.Millisecond
-	previewRetryInitialBackoff            = 1 * time.Millisecond
-	previewRetryMaxBackoff                = 50 * time.Millisecond
+	// startupProbeReadWorkerBudget caps concurrent detached startup-probe read
+	// workers used to shield probe loops from blocking Read calls.
+	startupProbeReadWorkerBudget = 16
+	previewCancelFlushWait       = 10 * time.Millisecond
+	previewRetryInitialBackoff   = 1 * time.Millisecond
+	previewRetryMaxBackoff       = 50 * time.Millisecond
 
 	startupRetryReasonIncomplete = "startup_detection_incomplete"
 
@@ -158,45 +161,56 @@ var (
 	closeWithTimeoutLateAbandoned       uint64
 	closeWithTimeoutReleaseUnderflow    uint64
 
-	closeWithTimeoutStartedMetric = promauto.NewCounter(prometheus.CounterOpts{
+	startupProbeReadWorkerWaits           uint64
+	startupProbeReadWorkerAcquireTimeouts uint64
+
+	closeWithTimeoutStartedMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_started_total",
 		Help: "Total number of bounded close workers started immediately.",
-	})
-	closeWithTimeoutRetriedMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutRetriedMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_retried_total",
 		Help: "Total number of deferred bounded close attempts started from the retry queue.",
-	})
-	closeWithTimeoutSuppressedMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutSuppressedMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_suppressed_total",
 		Help: "Total number of bounded close attempts suppressed due to dedupe or budget pressure.",
-	})
-	closeWithTimeoutSuppressedDuplicateMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutSuppressedDuplicateMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_suppressed_duplicate_total",
 		Help: "Total number of bounded close attempts suppressed because the closer is already in-flight.",
-	})
-	closeWithTimeoutSuppressedBudgetMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutSuppressedBudgetMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_suppressed_budget_total",
 		Help: "Total number of bounded close attempts suppressed because the worker budget is exhausted.",
-	})
-	closeWithTimeoutDroppedMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutDroppedMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_dropped_total",
 		Help: "Total number of bounded close retry requests dropped because the retry queue is full.",
-	})
-	closeWithTimeoutTimedOutMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutTimedOutMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_timeouts_total",
 		Help: "Total number of bounded close workers that exceeded their timeout budget.",
-	})
-	closeWithTimeoutLateCompletionsMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutLateCompletionsMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_late_completions_total",
 		Help: "Total number of bounded close operations that completed after timeout in detached waiters.",
-	})
-	closeWithTimeoutLateAbandonedMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutLateAbandonedMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_late_abandoned_total",
 		Help: "Total number of bounded close waiters abandoned after exceeding the late-abandon timeout.",
-	})
-	closeWithTimeoutReleaseUnderflowMetric = promauto.NewCounter(prometheus.CounterOpts{
+	}, []string{"playlist_source"})
+	closeWithTimeoutReleaseUnderflowMetric = promauto.NewCounterVec(prometheus.CounterOpts{
 		Name: "stream_close_with_timeout_release_underflow_total",
 		Help: "Total number of bounded close worker-slot release attempts that underflowed the worker budget.",
+	}, []string{"playlist_source"})
+	startupProbeReadWorkerWaitsMetric = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "stream_startup_probe_read_worker_waits_total",
+		Help: "Total number of startup-probe read attempts that had to wait for detached read-worker budget.",
+	})
+	startupProbeReadWorkerAcquireTimeoutsMetric = promauto.NewCounter(prometheus.CounterOpts{
+		Name: "stream_startup_probe_read_worker_acquire_timeouts_total",
+		Help: "Total number of startup-probe read attempts that timed out/canceled while waiting for detached read-worker budget.",
 	})
 )
 
@@ -214,6 +228,15 @@ type closeWithTimeoutStats struct {
 	ReleaseUnderflow    uint64
 }
 
+var startupProbeReadWorkers = make(chan struct{}, startupProbeReadWorkerBudget)
+
+type startupProbeReadWorkerStats struct {
+	Waits           uint64
+	AcquireTimeouts uint64
+	InFlight        int
+	Budget          int
+}
+
 type closeWithTimeoutStartResult uint8
 
 const (
@@ -229,53 +252,93 @@ type closeWithTimeoutRetryRequest struct {
 }
 
 func closeWithTimeoutRecordStarted() {
+	closeWithTimeoutRecordStartedForSource(0, "")
+}
+
+func closeWithTimeoutRecordStartedForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutStarted, 1)
-	closeWithTimeoutStartedMetric.Inc()
+	closeWithTimeoutStartedMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordRetried() {
+	closeWithTimeoutRecordRetriedForSource(0, "")
+}
+
+func closeWithTimeoutRecordRetriedForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutRetried, 1)
-	closeWithTimeoutRetriedMetric.Inc()
+	closeWithTimeoutRetriedMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordSuppressed() {
+	closeWithTimeoutRecordSuppressedForSource(0, "")
+}
+
+func closeWithTimeoutRecordSuppressedForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutSuppressed, 1)
-	closeWithTimeoutSuppressedMetric.Inc()
+	closeWithTimeoutSuppressedMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordSuppressedDuplicate() {
+	closeWithTimeoutRecordSuppressedDuplicateForSource(0, "")
+}
+
+func closeWithTimeoutRecordSuppressedDuplicateForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutSuppressedDuplicate, 1)
-	closeWithTimeoutSuppressedDuplicateMetric.Inc()
+	closeWithTimeoutSuppressedDuplicateMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordSuppressedBudget() {
+	closeWithTimeoutRecordSuppressedBudgetForSource(0, "")
+}
+
+func closeWithTimeoutRecordSuppressedBudgetForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutSuppressedBudget, 1)
-	closeWithTimeoutSuppressedBudgetMetric.Inc()
+	closeWithTimeoutSuppressedBudgetMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordDropped() {
+	closeWithTimeoutRecordDroppedForSource(0, "")
+}
+
+func closeWithTimeoutRecordDroppedForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutDropped, 1)
-	closeWithTimeoutDroppedMetric.Inc()
+	closeWithTimeoutDroppedMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordTimedOut() {
+	closeWithTimeoutRecordTimedOutForSource(0, "")
+}
+
+func closeWithTimeoutRecordTimedOutForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutTimedOut, 1)
-	closeWithTimeoutTimedOutMetric.Inc()
+	closeWithTimeoutTimedOutMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordLateCompletion() {
+	closeWithTimeoutRecordLateCompletionForSource(0, "")
+}
+
+func closeWithTimeoutRecordLateCompletionForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutLateCompletions, 1)
-	closeWithTimeoutLateCompletionsMetric.Inc()
+	closeWithTimeoutLateCompletionsMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordLateAbandoned() {
+	closeWithTimeoutRecordLateAbandonedForSource(0, "")
+}
+
+func closeWithTimeoutRecordLateAbandonedForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutLateAbandoned, 1)
-	closeWithTimeoutLateAbandonedMetric.Inc()
+	closeWithTimeoutLateAbandonedMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func closeWithTimeoutRecordReleaseUnderflow() {
+	closeWithTimeoutRecordReleaseUnderflowForSource(0, "")
+}
+
+func closeWithTimeoutRecordReleaseUnderflowForSource(sourceID int64, sourceName string) {
 	atomic.AddUint64(&closeWithTimeoutReleaseUnderflow, 1)
-	closeWithTimeoutReleaseUnderflowMetric.Inc()
+	closeWithTimeoutReleaseUnderflowMetric.WithLabelValues(playlistSourceMetricLabel(sourceID, sourceName)).Inc()
 }
 
 func parseCloseWithTimeoutWorkerBudget(raw string) (int, error) {
@@ -797,6 +860,40 @@ drainRetrySignals:
 	}
 }
 
+func acquireStartupProbeReadWorker(ctx context.Context) (func(), bool) {
+	select {
+	case startupProbeReadWorkers <- struct{}{}:
+		return func() { <-startupProbeReadWorkers }, true
+	default:
+	}
+
+	atomic.AddUint64(&startupProbeReadWorkerWaits, 1)
+	startupProbeReadWorkerWaitsMetric.Inc()
+
+	select {
+	case startupProbeReadWorkers <- struct{}{}:
+		return func() { <-startupProbeReadWorkers }, true
+	case <-ctx.Done():
+		atomic.AddUint64(&startupProbeReadWorkerAcquireTimeouts, 1)
+		startupProbeReadWorkerAcquireTimeoutsMetric.Inc()
+		return nil, false
+	}
+}
+
+func startupProbeReadWorkerStatsSnapshot() startupProbeReadWorkerStats {
+	return startupProbeReadWorkerStats{
+		Waits:           atomic.LoadUint64(&startupProbeReadWorkerWaits),
+		AcquireTimeouts: atomic.LoadUint64(&startupProbeReadWorkerAcquireTimeouts),
+		InFlight:        len(startupProbeReadWorkers),
+		Budget:          cap(startupProbeReadWorkers),
+	}
+}
+
+func resetStartupProbeReadWorkerStatsForTest() {
+	atomic.StoreUint64(&startupProbeReadWorkerWaits, 0)
+	atomic.StoreUint64(&startupProbeReadWorkerAcquireTimeouts, 0)
+}
+
 func nextPreviewRetryBackoff(delay time.Duration) time.Duration {
 	if delay < previewRetryInitialBackoff {
 		return previewRetryInitialBackoff
@@ -927,7 +1024,7 @@ func (s startupStreamInventory) componentState() string {
 func startupInventoryRequiresVideoAudio(inventory startupStreamInventory) error {
 	inventory = inventory.normalized()
 	componentState := inventory.componentState()
-	if componentState == "video_audio" || componentState == "undetected" {
+	if componentState == "video_audio" {
 		return nil
 	}
 	return &sourceStartupError{
@@ -2177,12 +2274,20 @@ func readStartupProbeWithRandomAccess(
 
 			// Run Read in a sub-goroutine so the probe goroutine can exit
 			// promptly when probeCtx is canceled, even if Read blocks
-			// (e.g. unresponsive upstream or misbehaving transport).
+			// (e.g. unresponsive upstream or misbehaving transport). Detached
+			// reader workers are globally budgeted so blocked transports cannot
+			// grow goroutines without bound across repeated startup attempts.
+			releaseReadWorker, acquired := acquireStartupProbeReadWorker(probeCtx)
+			if !acquired {
+				resultCh <- startupProbeOutcome{buf: buf, err: probeCtx.Err()}
+				return
+			}
 			readDone := make(chan struct {
 				n   int
 				err error
 			}, 1)
 			go func() {
+				defer releaseReadWorker()
 				n, err := reader.Read(tmp[:readSize])
 				readDone <- struct {
 					n   int

@@ -48,14 +48,14 @@ http://example.com/sports.m3u8
 	}
 }
 
-func TestItemKeyStripsQueryAndFragment(t *testing.T) {
+func TestItemKeyIgnoresVolatileQueryAndFragment(t *testing.T) {
 	inputA := `#EXTM3U
 #EXTINF:-1 tvg-id="bbc.news" group-title="News",BBC News
-http://example.com/stream.ts?token=abc#frag
+http://example.com/stream.ts?token=abc&auth=123#frag
 `
 	inputB := `#EXTM3U
 #EXTINF:-1 tvg-id="bbc.news" group-title="News",BBC News
-http://example.com/stream.ts?token=def
+http://example.com/stream.ts?token=def&auth=456
 `
 
 	a, err := Parse(strings.NewReader(inputA))
@@ -74,6 +74,58 @@ http://example.com/stream.ts?token=def
 	}
 	if a[0].ChannelKey != b[0].ChannelKey {
 		t.Fatalf("channel keys differ: %q vs %q", a[0].ChannelKey, b[0].ChannelKey)
+	}
+}
+
+func TestItemKeyKeepsNonVolatileQueryParameters(t *testing.T) {
+	inputA := `#EXTM3U
+#EXTINF:-1 tvg-id="bbc.news" group-title="News",BBC News HD
+http://example.com/stream.ts?variant=hd
+`
+	inputB := `#EXTM3U
+#EXTINF:-1 tvg-id="bbc.news" group-title="News",BBC News SD
+http://example.com/stream.ts?variant=sd
+`
+
+	a, err := Parse(strings.NewReader(inputA))
+	if err != nil {
+		t.Fatalf("Parse(A) error = %v", err)
+	}
+	b, err := Parse(strings.NewReader(inputB))
+	if err != nil {
+		t.Fatalf("Parse(B) error = %v", err)
+	}
+	if len(a) != 1 || len(b) != 1 {
+		t.Fatalf("unexpected item counts: %d vs %d", len(a), len(b))
+	}
+	if a[0].ItemKey == b[0].ItemKey {
+		t.Fatalf("distinct variant query values collapsed to one item_key: %q", a[0].ItemKey)
+	}
+}
+
+func TestItemKeyNormalizesNonVolatileQueryOrdering(t *testing.T) {
+	inputA := `#EXTM3U
+#EXTINF:-1 tvg-id="bbc.news" group-title="News",BBC News
+http://example.com/stream.ts?variant=hd&lang=en
+`
+	inputB := `#EXTM3U
+#EXTINF:-1 tvg-id="bbc.news" group-title="News",BBC News
+http://example.com/stream.ts?lang=en&variant=hd
+`
+
+	a, err := Parse(strings.NewReader(inputA))
+	if err != nil {
+		t.Fatalf("Parse(A) error = %v", err)
+	}
+	b, err := Parse(strings.NewReader(inputB))
+	if err != nil {
+		t.Fatalf("Parse(B) error = %v", err)
+	}
+	if len(a) != 1 || len(b) != 1 {
+		t.Fatalf("unexpected item counts: %d vs %d", len(a), len(b))
+	}
+	if a[0].ItemKey != b[0].ItemKey {
+		t.Fatalf("query ordering changed item_key: %q vs %q", a[0].ItemKey, b[0].ItemKey)
 	}
 }
 

@@ -114,6 +114,51 @@ func TestServerRespondsToDiscoverRequest(t *testing.T) {
 	}
 }
 
+func TestNewServerCapsLargeTunerCountForDiscoveryEncoding(t *testing.T) {
+	srv, err := NewServer(Config{
+		ListenAddr: "127.0.0.1:0",
+		DeviceID:   "1234ABCD",
+		TunerCount: 512,
+		HTTPAddr:   ":5004",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v, want nil with capped discovery count", err)
+	}
+	defer srv.Close()
+
+	if got := srv.tunerCount.Load(); got != 255 {
+		t.Fatalf("server tunerCount = %d, want 255 cap for discovery encoding", got)
+	}
+}
+
+func TestServerSetDiscoveryAdvertisedTunerCountCapsAndStores(t *testing.T) {
+	srv, err := NewServer(Config{
+		ListenAddr: "127.0.0.1:0",
+		DeviceID:   "1234ABCD",
+		TunerCount: 2,
+		HTTPAddr:   ":5004",
+	})
+	if err != nil {
+		t.Fatalf("NewServer() error = %v", err)
+	}
+	defer srv.Close()
+
+	srv.SetDiscoveryAdvertisedTunerCount(370)
+	if got := srv.tunerCount.Load(); got != 255 {
+		t.Fatalf("tunerCount after large runtime update = %d, want 255 cap", got)
+	}
+
+	srv.SetDiscoveryAdvertisedTunerCount(0)
+	if got := srv.tunerCount.Load(); got != 1 {
+		t.Fatalf("tunerCount after zero runtime update = %d, want floor 1", got)
+	}
+
+	srv.SetDiscoveryAdvertisedTunerCount(17)
+	if got := srv.tunerCount.Load(); got != 17 {
+		t.Fatalf("tunerCount after nominal runtime update = %d, want 17", got)
+	}
+}
+
 func TestServerIgnoresMismatchedDeviceIDRequest(t *testing.T) {
 	srv, err := NewServer(Config{
 		ListenAddr: "127.0.0.1:0",

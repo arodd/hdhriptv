@@ -165,6 +165,103 @@ func TestSchedulerTimezoneFallbackToUTC(t *testing.T) {
 	}
 }
 
+func TestSchedulerUpdateTimezoneRejectsInvalidIANAValue(t *testing.T) {
+	store := newMemorySettingsStore(nil)
+	svc, err := New(store, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	if err := svc.UpdateTimezone(context.Background(), "Not/A_Real_Timezone"); err == nil {
+		t.Fatal("UpdateTimezone(invalid) error = nil, want non-nil")
+	}
+	if _, err := store.GetSetting(context.Background(), settingJobsTimezone); err != sql.ErrNoRows {
+		t.Fatalf("jobs.timezone persisted err = %v, want sql.ErrNoRows", err)
+	}
+}
+
+func TestSchedulerLoadFromSettingsCancelsCallbackContextDuringReload(t *testing.T) {
+	store := newMemorySettingsStore(map[string]string{
+		settingJobsTimezone:         "UTC",
+		settingPlaylistSyncEnabled:  "true",
+		settingPlaylistSyncCron:     "*/1 * * * * *",
+		settingAutoPrioritizeEnable: "false",
+		settingAutoPrioritizeCron:   "30 3 * * *",
+		settingDVRLineupSyncEnable:  "false",
+		settingDVRLineupSyncCron:    "*/30 * * * *",
+	})
+
+	svc, err := New(store, nil)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	callbackStarted := make(chan struct{}, 1)
+	callbackCanceled := make(chan struct{}, 1)
+	if err := svc.RegisterJob(jobs.JobPlaylistSync, func(ctx context.Context, _ string) error {
+		select {
+		case callbackStarted <- struct{}{}:
+		default:
+		}
+		<-ctx.Done()
+		select {
+		case callbackCanceled <- struct{}{}:
+		default:
+		}
+		return ctx.Err()
+	}); err != nil {
+		t.Fatalf("RegisterJob(playlist_sync) error = %v", err)
+	}
+	if err := svc.RegisterJob(jobs.JobAutoPrioritize, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatalf("RegisterJob(auto_prioritize) error = %v", err)
+	}
+	if err := svc.RegisterJob(jobs.JobDVRLineupSync, func(context.Context, string) error { return nil }); err != nil {
+		t.Fatalf("RegisterJob(dvr_lineup_sync) error = %v", err)
+	}
+
+	if err := svc.LoadFromSettings(context.Background()); err != nil {
+		t.Fatalf("LoadFromSettings() error = %v", err)
+	}
+	svc.Start()
+	defer func() { <-svc.Stop().Done() }()
+
+	select {
+	case <-callbackStarted:
+	case <-time.After(2200 * time.Millisecond):
+		t.Fatal("expected playlist callback to fire within 2.2s")
+	}
+
+	if err := store.SetSettings(context.Background(), map[string]string{
+		settingPlaylistSyncEnabled: "false",
+	}); err != nil {
+		t.Fatalf("SetSettings(disable playlist) error = %v", err)
+	}
+
+	reloadDone := make(chan error, 1)
+	go func() {
+		reloadDone <- svc.LoadFromSettings(context.Background())
+	}()
+
+	select {
+	case <-callbackCanceled:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected callback context cancellation during scheduler reload")
+	}
+
+	select {
+	case err := <-reloadDone:
+		if err != nil {
+			t.Fatalf("LoadFromSettings() reload error = %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected scheduler reload completion after callback cancellation")
+	}
+
+	if _, ok := svc.NextRun(jobs.JobPlaylistSync); ok {
+		t.Fatal("NextRun(playlist_sync) reported scheduled entry after disable")
+	}
+}
+
 func TestSchedulerCanFireSecondGranularityJobs(t *testing.T) {
 	store := newMemorySettingsStore(map[string]string{
 		settingJobsTimezone:         "UTC",

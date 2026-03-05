@@ -21,7 +21,8 @@ BINFMT_IMAGE ?= tonistiigi/binfmt:qemu-v10.0.4
 .PHONY: production-build release-local docs-check publish-github release-github-sync-tag
 
 production-build:
-	go build -o hdhriptv ./cmd/hdhriptv
+	BUILD_LDFLAGS="$$(./scripts/build/ldflags.sh)"; \
+	go build -ldflags "$$BUILD_LDFLAGS" -o hdhriptv ./cmd/hdhriptv
 	sudo setcap 'cap_net_bind_service=+ep' ./hdhriptv
 	sudo cp hdhriptv /Datastore/bin/.
 
@@ -29,8 +30,9 @@ release-local:
 	test -n "$(REGISTRY_IMAGE)" || (echo "REGISTRY_IMAGE is required (example: registry.example.com/org/hdhriptv)" && exit 1)
 	go mod download
 	mkdir -p dist
-	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="-s -w" -o dist/hdhriptv-linux-amd64 ./cmd/hdhriptv
-	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="-s -w" -o dist/hdhriptv-linux-arm64 ./cmd/hdhriptv
+	BUILD_LDFLAGS="$$(./scripts/build/ldflags.sh)"; \
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$$BUILD_LDFLAGS" -o dist/hdhriptv-linux-amd64 ./cmd/hdhriptv; \
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags "$$BUILD_LDFLAGS" -o dist/hdhriptv-linux-arm64 ./cmd/hdhriptv
 	test -f dist/hdhriptv-linux-amd64
 	test -f dist/hdhriptv-linux-arm64
 	docker version

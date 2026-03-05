@@ -32,12 +32,34 @@ var fastStreamTestTiming = streamTestTimingProfile{
 	thirdClientAttemptsFFmpeg:  10,
 }
 
+// testVideoAudioStartupFixtureChunk prepends a valid MPEG-TS startup probe
+// containing both video and audio PMT entries so strict startup validation
+// accepts legacy plain-text stream fixtures.
+func testVideoAudioStartupFixtureChunk(payload []byte) []byte {
+	if len(payload) == 0 {
+		payload = mpegTSNullPacketChunk(1)
+	}
+	probe := startupTestProbeWithPMTStreams(0x1B, 0x0F)
+	chunk := make([]byte, 0, len(probe)+len(payload))
+	chunk = append(chunk, probe...)
+	chunk = append(chunk, payload...)
+	return chunk
+}
+
+func testVideoAudioStartupFixtureText(payload string) []byte {
+	return testVideoAudioStartupFixtureChunk([]byte(payload))
+}
+
+func testVideoAudioStartupMinProbeBytes() int {
+	return len(startupTestProbeWithPMTStreams(0x1B, 0x0F))
+}
+
 func (p streamTestTimingProfile) handlerConfig(mode string) Config {
 	return Config{
 		Mode:                       mode,
 		StartupTimeout:             p.startupTimeout,
 		FailoverTotalTimeout:       p.failoverTotalTimeout,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: p.bufferPublishFlushInterval,
 		SessionIdleTimeout:         p.sessionIdleTimeout,
@@ -52,7 +74,7 @@ func (p streamTestTimingProfile) sessionManagerConfig(mode string) SessionManage
 		Mode:                       mode,
 		StartupTimeout:             p.startupTimeout,
 		FailoverTotalTimeout:       p.failoverTotalTimeout,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: p.bufferPublishFlushInterval,
 		SessionIdleTimeout:         p.sessionIdleTimeout,

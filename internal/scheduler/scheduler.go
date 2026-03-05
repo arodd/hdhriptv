@@ -245,17 +245,24 @@ func (s *Service) LoadFromSettings(ctx context.Context) error {
 
 	s.mu.Lock()
 	oldEngine := s.engine
+	oldRunCancel := s.runCancel
 	wasStarted := s.started
 	s.mu.Unlock()
 
+	if oldRunCancel != nil {
+		oldRunCancel()
+	}
 	if oldEngine != nil {
 		<-oldEngine.Stop().Done()
 	}
+	newRunCtx, newRunCancel := context.WithCancel(context.Background())
 
 	s.mu.Lock()
 	s.engine = newEngine
 	s.entries = newEntries
 	s.timezone = normalizedLocation
+	s.runCtx = newRunCtx
+	s.runCancel = newRunCancel
 	if wasStarted {
 		s.engine.Start()
 	}
@@ -365,19 +372,19 @@ func (s *Service) callbackContext() context.Context {
 
 // UpdateTimezone persists timezone and reloads schedule entries.
 func (s *Service) UpdateTimezone(ctx context.Context, timezone string) error {
-	timezone = strings.TrimSpace(timezone)
-	if timezone == "" {
-		return fmt.Errorf("timezone is required")
+	normalizedTimezone, err := ValidateTimezone(timezone)
+	if err != nil {
+		return err
 	}
 	if err := s.store.SetSettings(ctx, map[string]string{
-		settingJobsTimezone: timezone,
+		settingJobsTimezone: normalizedTimezone,
 	}); err != nil {
 		return fmt.Errorf("persist timezone: %w", err)
 	}
 	if err := s.LoadFromSettings(ctx); err != nil {
 		return err
 	}
-	s.logInfo("scheduler timezone updated", "timezone", timezone)
+	s.logInfo("scheduler timezone updated", "timezone", normalizedTimezone)
 	return nil
 }
 
@@ -507,16 +514,33 @@ func parseBool(raw string, def bool) bool {
 	}
 }
 
+// ValidateTimezone validates a non-empty IANA timezone identifier and returns
+// its trimmed canonical input value.
+func ValidateTimezone(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return "", fmt.Errorf("timezone is required")
+	}
+	if _, err := time.LoadLocation(name); err != nil {
+		return "", fmt.Errorf("invalid timezone %q: %w", name, err)
+	}
+	return name, nil
+}
+
 func resolveLocation(name string) (*time.Location, string, error) {
 	name = strings.TrimSpace(name)
 	if name == "" {
 		name = defaultTimezone
 	}
-	location, err := time.LoadLocation(name)
+	normalized, err := ValidateTimezone(name)
 	if err != nil {
 		return time.UTC, "UTC", err
 	}
-	return location, name, nil
+	location, err := time.LoadLocation(normalized)
+	if err != nil {
+		return time.UTC, "UTC", err
+	}
+	return location, normalized, nil
 }
 
 func canceledContext() context.Context {

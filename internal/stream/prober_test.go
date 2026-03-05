@@ -93,6 +93,34 @@ func (p *fakeProbeProvider) MarkSourceFailure(_ context.Context, sourceID int64,
 	return nil
 }
 
+type capturingProbeTunerUsage struct {
+	mu             sync.Mutex
+	sourceIDCalls  []int64
+	legacyCallSeen bool
+}
+
+func (c *capturingProbeTunerUsage) AcquireProbe(_ context.Context, _ string, _ context.CancelCauseFunc) (*Lease, error) {
+	c.mu.Lock()
+	c.legacyCallSeen = true
+	c.mu.Unlock()
+	return &Lease{}, nil
+}
+
+func (c *capturingProbeTunerUsage) AcquireProbeForSource(_ context.Context, sourceID int64, _ string, _ context.CancelCauseFunc) (*Lease, error) {
+	c.mu.Lock()
+	c.sourceIDCalls = append(c.sourceIDCalls, sourceID)
+	c.mu.Unlock()
+	return &Lease{}, nil
+}
+
+func (c *capturingProbeTunerUsage) snapshot() (calls []int64, legacySeen bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]int64, len(c.sourceIDCalls))
+	copy(out, c.sourceIDCalls)
+	return out, c.legacyCallSeen
+}
+
 func (p *fakeProbeProvider) MarkSourceSuccess(_ context.Context, sourceID int64, _ time.Time) error {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -104,7 +132,7 @@ func (p *fakeProbeProvider) MarkSourceSuccess(_ context.Context, sourceID int64,
 func TestBackgroundProberProbeOnceMarksSuccess(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("probe-bytes"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes"))
 	}))
 	defer upstream.Close()
 
@@ -128,7 +156,7 @@ func TestBackgroundProberProbeOnceMarksSuccess(t *testing.T) {
 
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  2 * time.Second,
 	}, provider)
 
@@ -141,6 +169,53 @@ func TestBackgroundProberProbeOnceMarksSuccess(t *testing.T) {
 	}
 	if len(provider.failures) != 0 {
 		t.Fatalf("failures = %#v, want none", provider.failures)
+	}
+}
+
+func TestBackgroundProberProbeOnceAcquiresSourceScopedProbeLease(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes"))
+	}))
+	defer upstream.Close()
+
+	tunerUsage := &capturingProbeTunerUsage{}
+	provider := &fakeProbeProvider{
+		enabledChannels: []channels.Channel{
+			{ChannelID: 1, GuideNumber: "101", GuideName: "News", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:         10,
+					ChannelID:        1,
+					ItemKey:          "src:news:source-scoped",
+					StreamURL:        upstream.URL,
+					PriorityIndex:    0,
+					Enabled:          true,
+					PlaylistSourceID: 22,
+				},
+			},
+		},
+	}
+
+	prober := newBackgroundProberForTest(t, ProberConfig{
+		Mode:          "direct",
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
+		ProbeTimeout:  2 * time.Second,
+		TunerUsage:    tunerUsage,
+	}, provider)
+
+	if err := prober.ProbeOnce(context.Background()); err != nil {
+		t.Fatalf("ProbeOnce() error = %v", err)
+	}
+
+	sourceCalls, legacySeen := tunerUsage.snapshot()
+	if legacySeen {
+		t.Fatal("AcquireProbe() legacy path called, want source-scoped AcquireProbeForSource() only")
+	}
+	if len(sourceCalls) != 1 || sourceCalls[0] != 22 {
+		t.Fatalf("AcquireProbeForSource source IDs = %v, want [22]", sourceCalls)
 	}
 }
 
@@ -167,7 +242,7 @@ func TestBackgroundProberSkipsAllCoolingSources(t *testing.T) {
 
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 	}, provider)
 
@@ -187,7 +262,7 @@ func TestBackgroundProberProbeOnceSkipsWhenNoProbeTunerSlot(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requestCount.Add(1)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("probe-bytes"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes"))
 	}))
 	defer upstream.Close()
 
@@ -218,7 +293,7 @@ func TestBackgroundProberProbeOnceSkipsWhenNoProbeTunerSlot(t *testing.T) {
 
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 		TunerUsage:    pool,
 	}, provider)
@@ -240,7 +315,7 @@ func TestBackgroundProberProbeOnceSkipsWhenNoProbeTunerSlot(t *testing.T) {
 func TestBackgroundProberProbeOnceWaitsForGlobalRefillSettleGate(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("probe-bytes"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes"))
 	}))
 	defer upstream.Close()
 
@@ -279,7 +354,7 @@ func TestBackgroundProberProbeOnceWaitsForGlobalRefillSettleGate(t *testing.T) {
 
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 		TunerUsage:    pool,
 	}, provider)
@@ -332,7 +407,7 @@ func (b *blockingCloseBody) Close() error {
 func TestBackgroundProberSkipsStaleSuccessAfterProbeTimeout(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("probe-bytes-data"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes-data"))
 	}))
 	defer upstream.Close()
 
@@ -365,7 +440,7 @@ func TestBackgroundProberSkipsStaleSuccessAfterProbeTimeout(t *testing.T) {
 	// returns promptly and the timeout does not expire during close.
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  50 * time.Millisecond,
 		HTTPClient: &http.Client{
 			Transport: &blockingCloseTransport{
@@ -411,7 +486,7 @@ func TestBackgroundProberProbeOnceBlocksOnSessionCloseAndPinsTunerLease(t *testi
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requestReceived.Add(1)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("probe-bytes-data"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes-data"))
 	}))
 	defer upstream.Close()
 
@@ -440,7 +515,7 @@ func TestBackgroundProberProbeOnceBlocksOnSessionCloseAndPinsTunerLease(t *testi
 
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  5 * time.Second, // Long timeout so probe succeeds before it expires.
 		TunerUsage:    pool,
 		HTTPClient: &http.Client{
@@ -480,7 +555,7 @@ func TestBackgroundProberProbeOnceBlocksOnSessionCloseAndPinsTunerLease(t *testi
 
 func TestBackgroundProberProbeOnceCloseDispatchIsBoundedUnderBlockedClose(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_, _ = w.Write([]byte("probe-bytes"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("probe-bytes"))
 	}))
 	defer upstream.Close()
 
@@ -510,7 +585,7 @@ func TestBackgroundProberProbeOnceCloseDispatchIsBoundedUnderBlockedClose(t *tes
 
 	prober := newBackgroundProberForTest(t, ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 		HTTPClient: &http.Client{
 			Transport: &blockingCloseTransport{
@@ -571,7 +646,7 @@ func TestBackgroundProberProbeOnceCloseDispatchIsBoundedUnderBlockedClose(t *tes
 func TestBackgroundProberCloseStopsSessionCloseWorker(t *testing.T) {
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  time.Second,
 	}, &fakeProbeProvider{})
 
@@ -612,7 +687,7 @@ func TestBackgroundProberCloseOnDisabledProberConverges(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prober := NewBackgroundProber(ProberConfig{
 				Mode:          "direct",
-				MinProbeBytes: 1,
+				MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 				ProbeInterval: tc.interval,
 				ProbeTimeout:  time.Second,
 			}, tc.provider)
@@ -637,7 +712,7 @@ func TestBackgroundProberCloseOnDisabledProberConverges(t *testing.T) {
 func TestBackgroundProberRunCancellationThenCloseConverges(t *testing.T) {
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeInterval: time.Hour,
 		ProbeTimeout:  time.Second,
 	}, &fakeProbeProvider{})
@@ -696,7 +771,7 @@ func TestBackgroundProberCloseQueueDepthDefaultAndOverride(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			prober := NewBackgroundProber(ProberConfig{
 				Mode:                 "direct",
-				MinProbeBytes:        1,
+				MinProbeBytes:        testVideoAudioStartupMinProbeBytes(),
 				ProbeTimeout:         time.Second,
 				ProbeCloseQueueDepth: tc.cfgDepth,
 			}, &fakeProbeProvider{})
@@ -748,7 +823,7 @@ func TestBackgroundProberCopyTimestampRegenerationDefaultsAndOverride(t *testing
 			prober := NewBackgroundProber(ProberConfig{
 				Mode:                           tc.mode,
 				FFmpegCopyRegenerateTimestamps: tc.configured,
-				MinProbeBytes:                  1,
+				MinProbeBytes:                  testVideoAudioStartupMinProbeBytes(),
 				ProbeTimeout:                   time.Second,
 			}, &fakeProbeProvider{})
 			t.Cleanup(func() {
@@ -765,7 +840,7 @@ func TestBackgroundProberCopyTimestampRegenerationDefaultsAndOverride(t *testing
 func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T) {
 	defaults := NewBackgroundProber(ProberConfig{
 		Mode:          "ffmpeg-copy",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  time.Second,
 	}, &fakeProbeProvider{})
 	t.Cleanup(func() {
@@ -786,7 +861,7 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 		FFmpegInputBufferSize: 262144,
 		FFmpegRWTimeout:       2500 * time.Millisecond,
 		FFmpegDiscardCorrupt:  true,
-		MinProbeBytes:         1,
+		MinProbeBytes:         testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:          time.Second,
 	}, &fakeProbeProvider{})
 	t.Cleanup(func() {
@@ -806,7 +881,7 @@ func TestBackgroundProberInputBufferAndDiscardCorruptNormalization(t *testing.T)
 		Mode:                  "ffmpeg-copy",
 		FFmpegInputBufferSize: -1,
 		FFmpegRWTimeout:       -1 * time.Millisecond,
-		MinProbeBytes:         1,
+		MinProbeBytes:         testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:          time.Second,
 	}, &fakeProbeProvider{})
 	t.Cleanup(func() {
@@ -825,7 +900,7 @@ func TestBackgroundProberNormalizesProducerReadRateCatchup(t *testing.T) {
 		Mode:                    "ffmpeg-copy",
 		ProducerReadRate:        1.25,
 		ProducerReadRateCatchup: 2.0,
-		MinProbeBytes:           1,
+		MinProbeBytes:           testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:            time.Second,
 	}, &fakeProbeProvider{})
 	t.Cleanup(func() {
@@ -842,7 +917,7 @@ func TestBackgroundProberNormalizesProducerReadRateCatchup(t *testing.T) {
 		Mode:                    "ffmpeg-copy",
 		ProducerReadRate:        1.5,
 		ProducerReadRateCatchup: 1.25,
-		MinProbeBytes:           1,
+		MinProbeBytes:           testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:            time.Second,
 	}, &fakeProbeProvider{})
 	t.Cleanup(func() {
@@ -860,7 +935,7 @@ func TestBackgroundProberNormalizesProducerReadRateCatchup(t *testing.T) {
 func TestBackgroundProberCloseWaitsForQueuedSessionDrain(t *testing.T) {
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 	}, &fakeProbeProvider{})
 
@@ -905,7 +980,7 @@ func TestBackgroundProberEnqueueProbeSessionCloseQueueFullClosesInline(t *testin
 
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 	}, &fakeProbeProvider{})
 
@@ -970,7 +1045,7 @@ func TestBackgroundProberEnqueueProbeSessionCloseAfterCloseClosesInline(t *testi
 
 	prober := NewBackgroundProber(ProberConfig{
 		Mode:          "direct",
-		MinProbeBytes: 1,
+		MinProbeBytes: testVideoAudioStartupMinProbeBytes(),
 		ProbeTimeout:  1 * time.Second,
 	}, &fakeProbeProvider{})
 	prober.Close()

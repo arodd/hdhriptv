@@ -269,9 +269,13 @@ The composite key is `(channel_id, dvr_instance_id)`. Updates go through `Servic
    - `ReloadDeviceLineup`
    - `RefreshGuideStations`
    - `RedownloadGuideLineup` for configured/discovered lineup IDs
+5. Provider-local build/reload errors are aggregated and do **not** abort fan-out:
+   - healthy providers still run in the same pass
+   - failed providers are recorded in provider-scoped failure metadata
 
 `ReloadLineupForPlaylistSyncOutcome()` returns `ReloadOutcome` with
-`reloaded`, `skipped`, `status`, and provider-scoped skip metadata.
+`reloaded`, `skipped`, `failed`, `status`, provider-scoped skip metadata,
+and provider-scoped failure metadata.
 
 ## Config Persistence
 

@@ -345,12 +345,15 @@ fi
 log "Building release binaries from ${internal_tip}"
 mkdir -p "$RELEASE_DIST_DIR"
 go mod download
+release_build_time="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+release_build_ldflags="$(BUILD_VERSION="$RELEASE_TAG" BUILD_COMMIT="$internal_tip" BUILD_TIME="$release_build_time" ./scripts/build/ldflags.sh)"
+log "Release build metadata: version=${RELEASE_TAG} commit=${internal_tip} build_time=${release_build_time}"
 
 build_target() {
   goos="$1"
   goarch="$2"
   output="$3"
-  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="-s -w" -o "${RELEASE_DIST_DIR}/${output}" ./cmd/hdhriptv
+  CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" go build -trimpath -ldflags="$release_build_ldflags" -o "${RELEASE_DIST_DIR}/${output}" ./cmd/hdhriptv
   test -f "${RELEASE_DIST_DIR}/${output}"
 }
 

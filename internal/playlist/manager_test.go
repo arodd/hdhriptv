@@ -97,3 +97,29 @@ http://example.com/news-1.ts
 		t.Fatalf("FetchAndParseEach() error = %v, want %v", err, wantErr)
 	}
 }
+
+func TestManagerParsePreservesMeaningfulQueryVariants(t *testing.T) {
+	t.Parallel()
+
+	manager := NewManager(nil)
+	input := `#EXTM3U
+#EXTINF:-1 tvg-id="cnn.us" group-title="News",CNN HD
+http://example.com/cnn.ts?variant=hd&token=abc
+#EXTINF:-1 tvg-id="cnn.us" group-title="News",CNN SD
+http://example.com/cnn.ts?variant=sd&token=def
+`
+
+	items, err := manager.Parse(strings.NewReader(input))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("len(items) = %d, want 2", len(items))
+	}
+	if items[0].ChannelKey != "tvg:cnn.us" || items[1].ChannelKey != "tvg:cnn.us" {
+		t.Fatalf("channel keys = %q and %q, want tvg:cnn.us", items[0].ChannelKey, items[1].ChannelKey)
+	}
+	if items[0].ItemKey == items[1].ItemKey {
+		t.Fatalf("query variants collapsed to one item_key: %q", items[0].ItemKey)
+	}
+}

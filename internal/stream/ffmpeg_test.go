@@ -394,9 +394,14 @@ func TestNextPreviewRetryBackoff(t *testing.T) {
 
 func TestHandlerFailsOverToSecondSourceOnFFmpeg404(t *testing.T) {
 	tmp := t.TempDir()
-	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-404-failover.sh", `#!/usr/bin/env bash
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-404-failover.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 
+video_audio=%q
 input=""
 prev=""
 for arg in "$@"; do
@@ -413,6 +418,7 @@ case "$input" in
     exit 1
     ;;
   *"/srcok")
+    cat "$video_audio"
     for _ in {1..200}; do
       printf "good-stream"
       sleep 0.01
@@ -424,7 +430,7 @@ case "$input" in
     exit 1
     ;;
 esac
-`)
+`, videoAudioPath))
 
 	provider := &fakeChannelsProvider{
 		channelsByGuide: map[string]channels.Channel{
@@ -458,7 +464,7 @@ esac
 			FFmpegPath:                 ffmpegPath,
 			StartupTimeout:             500 * time.Millisecond,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 10 * time.Millisecond,
 			SessionIdleTimeout:         20 * time.Millisecond,
@@ -532,7 +538,7 @@ done
 		FFmpegPath:                 ffmpegPath,
 		StartupTimeout:             120 * time.Millisecond,
 		FailoverTotalTimeout:       400 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         20 * time.Millisecond,
@@ -563,9 +569,14 @@ done
 
 func TestHandlerFailsOverWhenFirstFFmpegSourceTimesOutOnStartup(t *testing.T) {
 	tmp := t.TempDir()
-	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-timeout-failover.sh", `#!/usr/bin/env bash
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-timeout-failover.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 
+video_audio=%q
 input=""
 prev=""
 for arg in "$@"; do
@@ -583,6 +594,7 @@ case "$input" in
     done
     ;;
   *"/srcok")
+    cat "$video_audio"
     for _ in {1..120}; do
       printf "good-stream"
       sleep 0.01
@@ -594,7 +606,7 @@ case "$input" in
     exit 1
     ;;
 esac
-`)
+`, videoAudioPath))
 
 	provider := &fakeChannelsProvider{
 		channelsByGuide: map[string]channels.Channel{
@@ -628,7 +640,7 @@ esac
 			FFmpegPath:                 ffmpegPath,
 			StartupTimeout:             120 * time.Millisecond,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 10 * time.Millisecond,
 			SessionIdleTimeout:         20 * time.Millisecond,
@@ -671,9 +683,14 @@ esac
 
 func TestHandlerFailsOverWhenFFmpegSourceClosesBeforeStartupBytes(t *testing.T) {
 	tmp := t.TempDir()
-	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-source-closed-failover.sh", `#!/usr/bin/env bash
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-source-closed-failover.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 
+video_audio=%q
 input=""
 prev=""
 for arg in "$@"; do
@@ -690,6 +707,7 @@ case "$input" in
     exit 8
     ;;
   *"/srcok")
+    cat "$video_audio"
     for _ in {1..120}; do
       printf "good-stream"
       sleep 0.01
@@ -701,7 +719,7 @@ case "$input" in
     exit 1
     ;;
 esac
-`)
+`, videoAudioPath))
 
 	provider := &fakeChannelsProvider{
 		channelsByGuide: map[string]channels.Channel{
@@ -735,7 +753,7 @@ esac
 			FFmpegPath:                 ffmpegPath,
 			StartupTimeout:             250 * time.Millisecond,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 10 * time.Millisecond,
 			SessionIdleTimeout:         20 * time.Millisecond,
@@ -836,7 +854,7 @@ exit 8
 		FFmpegPath:                 ffmpegPath,
 		StartupTimeout:             300 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         20 * time.Millisecond,
@@ -1002,7 +1020,7 @@ func TestHandlerFailsOverWhenFirstDirectSourceStallsBeforeResponseHeaders(t *tes
 			w.WriteHeader(http.StatusOK)
 			flusher, _ := w.(http.Flusher)
 			for i := 0; i < 120; i++ {
-				if _, err := w.Write([]byte("good-stream")); err != nil {
+				if _, err := w.Write(testVideoAudioStartupFixtureText("good-stream")); err != nil {
 					return
 				}
 				if flusher != nil {
@@ -1047,7 +1065,7 @@ func TestHandlerFailsOverWhenFirstDirectSourceStallsBeforeResponseHeaders(t *tes
 			Mode:                       "direct",
 			StartupTimeout:             120 * time.Millisecond,
 			FailoverTotalTimeout:       2 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 10 * time.Millisecond,
 			SessionIdleTimeout:         20 * time.Millisecond,
@@ -1094,7 +1112,7 @@ func TestHandlerClientContextCancelReturnsHTTP200(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 400; i++ {
-			if _, err := w.Write([]byte("x")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("x")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -1128,7 +1146,7 @@ func TestHandlerClientContextCancelReturnsHTTP200(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             2 * time.Second,
 			FailoverTotalTimeout:       5 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 10 * time.Millisecond,
 			SessionIdleTimeout:         20 * time.Millisecond,
@@ -1209,9 +1227,14 @@ exit 8
 func TestStartFFmpegFallsBackWhenReadrateInitialBurstUnsupported(t *testing.T) {
 	tmp := t.TempDir()
 	argsLogPath := filepath.Join(tmp, "args.log")
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
 	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-readrate-initial-burst-unsupported.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 args_log=%q
+video_audio=%q
 printf '%%s\n' "$*" >> "$args_log"
 for arg in "$@"; do
   if [[ "$arg" == "-readrate_initial_burst" ]]; then
@@ -1220,9 +1243,9 @@ for arg in "$@"; do
     exit 1
   fi
 done
-printf '\x47'
+cat "$video_audio"
 sleep 1
-`, argsLogPath))
+`, argsLogPath, videoAudioPath))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1233,7 +1256,7 @@ sleep 1
 		"https://example.test/live/stream.m3u8",
 		"ffmpeg-copy",
 		500*time.Millisecond,
-		1,
+		testVideoAudioStartupMinProbeBytes(),
 		1,
 		1,
 		32*1024,
@@ -1272,9 +1295,14 @@ sleep 1
 func TestStartFFmpegFallsBackWhenReadrateCatchupUnsupported(t *testing.T) {
 	tmp := t.TempDir()
 	argsLogPath := filepath.Join(tmp, "args.log")
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
 	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-readrate-catchup-unsupported.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 args_log=%q
+video_audio=%q
 printf '%%s\n' "$*" >> "$args_log"
 for arg in "$@"; do
   if [[ "$arg" == "-readrate_catchup" ]]; then
@@ -1283,9 +1311,9 @@ for arg in "$@"; do
     exit 1
   fi
 done
-printf '\x47'
+cat "$video_audio"
 sleep 1
-`, argsLogPath))
+`, argsLogPath, videoAudioPath))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1296,7 +1324,7 @@ sleep 1
 		"https://example.test/live/stream.m3u8",
 		"ffmpeg-copy",
 		500*time.Millisecond,
-		1,
+		testVideoAudioStartupMinProbeBytes(),
 		1,
 		1,
 		32*1024,
@@ -1335,9 +1363,14 @@ sleep 1
 func TestStartSourceSessionFallsBackWhenInputBufferSizeUnsupported(t *testing.T) {
 	tmp := t.TempDir()
 	argsLogPath := filepath.Join(tmp, "args.log")
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
 	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-input-buffer-size-unsupported.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
 args_log=%q
+video_audio=%q
 printf '%%s\n' "$*" >> "$args_log"
 for arg in "$@"; do
   if [[ "$arg" == "-buffer_size" ]]; then
@@ -1346,9 +1379,9 @@ for arg in "$@"; do
     exit 1
   fi
 done
-printf '\x47'
+cat "$video_audio"
 sleep 1
-`, argsLogPath))
+`, argsLogPath, videoAudioPath))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -1361,7 +1394,7 @@ sleep 1
 		ffmpegPath,
 		"https://example.test/live/stream.m3u8",
 		500*time.Millisecond,
-		1,
+		testVideoAudioStartupMinProbeBytes(),
 		1,
 		1,
 		1,
@@ -1630,6 +1663,77 @@ func TestStartupProbeStreamInventoryFromPMT(t *testing.T) {
 	}
 }
 
+func TestStartupInventoryRequiresVideoAudioStrict(t *testing.T) {
+	tests := []struct {
+		name      string
+		inventory startupStreamInventory
+		wantErr   bool
+		wantState string
+	}{
+		{
+			name: "video_audio accepted",
+			inventory: startupStreamInventory{
+				detectionMethod:  "pmt",
+				videoStreamCount: 1,
+				audioStreamCount: 1,
+			},
+			wantErr: false,
+		},
+		{
+			name: "video_only rejected",
+			inventory: startupStreamInventory{
+				detectionMethod:  "pmt",
+				videoStreamCount: 1,
+				audioStreamCount: 0,
+			},
+			wantErr:   true,
+			wantState: "video_only",
+		},
+		{
+			name: "audio_only rejected",
+			inventory: startupStreamInventory{
+				detectionMethod:  "pmt",
+				videoStreamCount: 0,
+				audioStreamCount: 1,
+			},
+			wantErr:   true,
+			wantState: "audio_only",
+		},
+		{
+			name: "undetected rejected",
+			inventory: startupStreamInventory{
+				detectionMethod:  "pmt",
+				videoStreamCount: 0,
+				audioStreamCount: 0,
+			},
+			wantErr:   true,
+			wantState: "undetected",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			err := startupInventoryRequiresVideoAudio(tc.inventory)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("startupInventoryRequiresVideoAudio() error = nil, want non-nil")
+				}
+				if !strings.Contains(err.Error(), "missing required audio+video components") {
+					t.Fatalf("startupInventoryRequiresVideoAudio() error = %q, want strict component requirement detail", err.Error())
+				}
+				if tc.wantState != "" && !strings.Contains(err.Error(), "state="+tc.wantState) {
+					t.Fatalf("startupInventoryRequiresVideoAudio() error = %q, want state=%s detail", err.Error(), tc.wantState)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("startupInventoryRequiresVideoAudio() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestStartFFmpegRetriesWithRelaxedStartupDetectionWhenInventoryIncomplete(t *testing.T) {
 	tmp := t.TempDir()
 	statePath := filepath.Join(tmp, "attempt.txt")
@@ -1708,6 +1812,185 @@ sleep 1
 	}
 	if session.startupInventory.componentState() != "video_audio" {
 		t.Fatalf("startupInventory.componentState = %q, want video_audio", session.startupInventory.componentState())
+	}
+
+	argsRaw, err := os.ReadFile(argsLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(argsLogPath) error = %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(argsRaw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("len(argsLogLines) = %d, want 2; lines=%q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "-probesize 128000") {
+		t.Fatalf("first attempt args = %q, want -probesize 128000", lines[0])
+	}
+	if !strings.Contains(lines[0], "-analyzeduration 1000000") {
+		t.Fatalf("first attempt args = %q, want -analyzeduration 1000000", lines[0])
+	}
+	if !strings.Contains(lines[1], "-probesize 2000000") {
+		t.Fatalf("retry attempt args = %q, want -probesize 2000000", lines[1])
+	}
+	if !strings.Contains(lines[1], "-analyzeduration 3000000") {
+		t.Fatalf("retry attempt args = %q, want -analyzeduration 3000000", lines[1])
+	}
+}
+
+func TestStartFFmpegRetriesWithRelaxedStartupDetectionWhenInventoryUndetected(t *testing.T) {
+	tmp := t.TempDir()
+	statePath := filepath.Join(tmp, "attempt.txt")
+	argsLogPath := filepath.Join(tmp, "args.log")
+	undetectedPath := filepath.Join(tmp, "undetected.ts")
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+
+	undetectedProbe := startupTestProbeWithPMTStreams()
+	videoAudioProbe := startupTestProbeWithPMTStreams(0x1B, 0x0F)
+
+	if err := os.WriteFile(undetectedPath, undetectedProbe, 0o644); err != nil {
+		t.Fatalf("WriteFile(undetectedPath) error = %v", err)
+	}
+	if err := os.WriteFile(videoAudioPath, videoAudioProbe, 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
+
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-startup-retry-undetected.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+
+state=%q
+args_log=%q
+undetected=%q
+video_audio=%q
+
+attempt=0
+if [[ -f "$state" ]]; then
+  attempt=$(cat "$state")
+fi
+attempt=$((attempt+1))
+echo "$attempt" > "$state"
+printf 'attempt=%%s args=%%s\n' "$attempt" "$*" >> "$args_log"
+if [[ "$attempt" -eq 1 ]]; then
+  cat "$undetected"
+else
+  cat "$video_audio"
+fi
+
+sleep 1
+`, statePath, argsLogPath, undetectedPath, videoAudioPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	session, err := startFFmpeg(
+		ctx,
+		ffmpegPath,
+		"https://example.test/live/stream.m3u8",
+		"ffmpeg-copy",
+		2*time.Second,
+		len(videoAudioProbe),
+		1,
+		1,
+		16*1024,
+		100*time.Millisecond,
+		false,
+		0,
+		-1,
+		"",
+		false,
+	)
+	if err != nil {
+		t.Fatalf("startFFmpeg() error = %v", err)
+	}
+	defer session.close()
+
+	if !session.startupRetryRelaxedProbe {
+		t.Fatal("startupRetryRelaxedProbe = false, want true")
+	}
+	if session.startupRetryRelaxedProbeToken != startupRetryReasonIncomplete {
+		t.Fatalf("startupRetryRelaxedProbeToken = %q, want %q", session.startupRetryRelaxedProbeToken, startupRetryReasonIncomplete)
+	}
+	if got := session.startupInventory.componentState(); got != "video_audio" {
+		t.Fatalf("startupInventory.componentState = %q, want video_audio", got)
+	}
+
+	argsRaw, err := os.ReadFile(argsLogPath)
+	if err != nil {
+		t.Fatalf("ReadFile(argsLogPath) error = %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(argsRaw)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("len(argsLogLines) = %d, want 2; lines=%q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "-probesize 128000") {
+		t.Fatalf("first attempt args = %q, want -probesize 128000", lines[0])
+	}
+	if !strings.Contains(lines[0], "-analyzeduration 1000000") {
+		t.Fatalf("first attempt args = %q, want -analyzeduration 1000000", lines[0])
+	}
+	if !strings.Contains(lines[1], "-probesize 2000000") {
+		t.Fatalf("retry attempt args = %q, want -probesize 2000000", lines[1])
+	}
+	if !strings.Contains(lines[1], "-analyzeduration 3000000") {
+		t.Fatalf("retry attempt args = %q, want -analyzeduration 3000000", lines[1])
+	}
+}
+
+func TestStartFFmpegFailsWhenRelaxedRetryRemainsUndetected(t *testing.T) {
+	tmp := t.TempDir()
+	statePath := filepath.Join(tmp, "attempt.txt")
+	argsLogPath := filepath.Join(tmp, "args.log")
+	undetectedPath := filepath.Join(tmp, "undetected.ts")
+
+	undetectedProbe := startupTestProbeWithPMTStreams()
+	if err := os.WriteFile(undetectedPath, undetectedProbe, 0o644); err != nil {
+		t.Fatalf("WriteFile(undetectedPath) error = %v", err)
+	}
+
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-startup-retry-undetected-fail.sh", fmt.Sprintf(`#!/usr/bin/env bash
+set -euo pipefail
+
+state=%q
+args_log=%q
+undetected=%q
+
+attempt=0
+if [[ -f "$state" ]]; then
+  attempt=$(cat "$state")
+fi
+attempt=$((attempt+1))
+echo "$attempt" > "$state"
+printf 'attempt=%%s args=%%s\n' "$attempt" "$*" >> "$args_log"
+cat "$undetected"
+sleep 1
+`, statePath, argsLogPath, undetectedPath))
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	_, err := startFFmpeg(
+		ctx,
+		ffmpegPath,
+		"https://example.test/live/stream.m3u8",
+		"ffmpeg-copy",
+		2*time.Second,
+		len(undetectedProbe),
+		1,
+		1,
+		16*1024,
+		100*time.Millisecond,
+		false,
+		0,
+		-1,
+		"",
+		false,
+	)
+	if err == nil {
+		t.Fatal("startFFmpeg() error = nil, want startup failure for undetected inventory")
+	}
+	if !strings.Contains(err.Error(), "missing required audio+video components") {
+		t.Fatalf("startFFmpeg() error = %q, want strict component requirement detail", err.Error())
+	}
+	if !strings.Contains(err.Error(), "state=undetected") {
+		t.Fatalf("startFFmpeg() error = %q, want undetected state detail", err.Error())
 	}
 
 	argsRaw, err := os.ReadFile(argsLogPath)
@@ -2879,12 +3162,12 @@ func TestCloseWithTimeoutLateReleaseAbandonClearsInFlightForStuckClose(t *testin
 	})
 
 	blockedKey := closeWithTimeoutCloserKey(blocked)
-	closeWithTimeoutInFlightMu.Lock()
-	_, inFlight := closeWithTimeoutInFlightByCloser[blockedKey]
-	closeWithTimeoutInFlightMu.Unlock()
-	if inFlight {
-		t.Fatal("blocked closer should not remain deduped after late completion abandon timeout")
-	}
+	waitFor(t, time.Second, func() bool {
+		closeWithTimeoutInFlightMu.Lock()
+		_, inFlight := closeWithTimeoutInFlightByCloser[blockedKey]
+		closeWithTimeoutInFlightMu.Unlock()
+		return !inFlight
+	})
 
 	stats := closeWithTimeoutStatsSnapshot()
 	if stats.LateCompletions != 0 {
@@ -3044,62 +3327,82 @@ func TestCloseWithTimeoutRecordFunctionsIncrementPrometheusCounters(t *testing.T
 		wantDelta float64
 	}{
 		{
-			name:      "started",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutStartedMetric) },
+			name: "started",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutStartedMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordStarted,
 			wantDelta: 1,
 		},
 		{
-			name:      "retried",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutRetriedMetric) },
+			name: "retried",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutRetriedMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordRetried,
 			wantDelta: 1,
 		},
 		{
-			name:      "suppressed_total",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutSuppressedMetric) },
+			name: "suppressed_total",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutSuppressedMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordSuppressed,
 			wantDelta: 1,
 		},
 		{
-			name:      "suppressed_duplicate",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutSuppressedDuplicateMetric) },
+			name: "suppressed_duplicate",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutSuppressedDuplicateMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordSuppressedDuplicate,
 			wantDelta: 1,
 		},
 		{
-			name:      "suppressed_budget",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutSuppressedBudgetMetric) },
+			name: "suppressed_budget",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutSuppressedBudgetMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordSuppressedBudget,
 			wantDelta: 1,
 		},
 		{
-			name:      "dropped",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutDroppedMetric) },
+			name: "dropped",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutDroppedMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordDropped,
 			wantDelta: 1,
 		},
 		{
-			name:      "timed_out",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutTimedOutMetric) },
+			name: "timed_out",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutTimedOutMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordTimedOut,
 			wantDelta: 1,
 		},
 		{
-			name:      "late_completion",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutLateCompletionsMetric) },
+			name: "late_completion",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutLateCompletionsMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordLateCompletion,
 			wantDelta: 1,
 		},
 		{
-			name:      "late_abandoned",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutLateAbandonedMetric) },
+			name: "late_abandoned",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutLateAbandonedMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordLateAbandoned,
 			wantDelta: 1,
 		},
 		{
-			name:      "release_underflow",
-			metric:    func() float64 { return testutil.ToFloat64(closeWithTimeoutReleaseUnderflowMetric) },
+			name: "release_underflow",
+			metric: func() float64 {
+				return testutil.ToFloat64(closeWithTimeoutReleaseUnderflowMetric.WithLabelValues(playlistSourceMetricUnknown))
+			},
 			record:    closeWithTimeoutRecordReleaseUnderflow,
 			wantDelta: 1,
 		},
@@ -3789,50 +4092,27 @@ func TestCloseWithTimeoutRetryQueueOverflowTracksDroppedAndBoundedDepth(t *testi
 	resetCloseWithTimeoutStatsForTest()
 	t.Cleanup(resetCloseWithTimeoutStatsForTest)
 
-	blockers := make([]*startupAbortBlockingBody, 0, boundedCloseWorkerBudget)
 	queued := make([]*startupAbortBlockingBody, 0, closeWithTimeoutRetryQueueCap+16)
 	t.Cleanup(func() {
 		for _, body := range queued {
 			body.release()
 		}
-		for _, blocker := range blockers {
-			closeWithTimeoutFinishWorker(blocker)
-			blocker.release()
-		}
 	})
-
-	for i := 0; i < boundedCloseWorkerBudget; i++ {
-		blocker := newStartupAbortBlockingBody()
-		blockers = append(blockers, blocker)
-		if got := closeWithTimeoutStartWorker(blocker); got != closeWithTimeoutStartSuccess {
-			t.Fatalf("closeWithTimeoutStartWorker blocker %d = %v, want %v", i, got, closeWithTimeoutStartSuccess)
-		}
-	}
 
 	const overflow = 11
 	attempts := closeWithTimeoutRetryQueueCap + overflow
 	for i := 0; i < attempts; i++ {
 		body := newStartupAbortBlockingBody()
 		queued = append(queued, body)
-		closeWithTimeout(body, 750*time.Millisecond)
+		closeWithTimeoutQueueRetryWithSignal(body, 750*time.Millisecond, false)
 	}
 
 	stats := closeWithTimeoutStatsSnapshot()
-	if stats.Started != boundedCloseWorkerBudget {
-		t.Fatalf("stats.Started = %d, want %d", stats.Started, boundedCloseWorkerBudget)
-	}
-	if stats.Suppressed != uint64(attempts) {
-		t.Fatalf("stats.Suppressed = %d, want %d", stats.Suppressed, attempts)
-	}
 	if stats.Queued != uint64(closeWithTimeoutRetryQueueCap) {
 		t.Fatalf("stats.Queued = %d, want %d", stats.Queued, closeWithTimeoutRetryQueueCap)
 	}
-	wantDropped := uint64(overflow)
-	if stats.Dropped != wantDropped {
-		t.Fatalf("stats.Dropped = %d, want %d", stats.Dropped, wantDropped)
-	}
-	if stats.Retried != 0 {
-		t.Fatalf("stats.Retried = %d, want 0 while workers remain saturated", stats.Retried)
+	if stats.Dropped != uint64(overflow) {
+		t.Fatalf("stats.Dropped = %d, want %d", stats.Dropped, overflow)
 	}
 }
 
@@ -3840,34 +4120,15 @@ func TestCloseWithTimeoutRetryQueueDeduplicatesRepeatedCloser(t *testing.T) {
 	resetCloseWithTimeoutStatsForTest()
 	t.Cleanup(resetCloseWithTimeoutStatsForTest)
 
-	blockers := make([]*startupAbortBlockingBody, 0, boundedCloseWorkerBudget)
-	t.Cleanup(func() {
-		for _, blocker := range blockers {
-			closeWithTimeoutFinishWorker(blocker)
-			blocker.release()
-		}
-	})
-
-	for i := 0; i < boundedCloseWorkerBudget; i++ {
-		blocker := newStartupAbortBlockingBody()
-		blockers = append(blockers, blocker)
-		if got := closeWithTimeoutStartWorker(blocker); got != closeWithTimeoutStartSuccess {
-			t.Fatalf("closeWithTimeoutStartWorker blocker %d = %v, want %v", i, got, closeWithTimeoutStartSuccess)
-		}
-	}
-
 	body := newStartupAbortBlockingBody()
 	t.Cleanup(body.release)
 
 	const attempts = 9
 	for i := 0; i < attempts; i++ {
-		closeWithTimeout(body, 500*time.Millisecond)
+		closeWithTimeoutQueueRetryWithSignal(body, 500*time.Millisecond, false)
 	}
 
 	stats := closeWithTimeoutStatsSnapshot()
-	if stats.Suppressed == 0 {
-		t.Fatal("stats.Suppressed = 0, want suppression activity while workers are saturated")
-	}
 	if stats.Queued != 1 {
 		t.Fatalf("stats.Queued = %d, want 1 (deduplicated queued closer)", stats.Queued)
 	}
@@ -4931,9 +5192,13 @@ func TestStartDirectProbePhaseBlockedBodyDoesNotCreateUnboundedGoroutines(t *tes
 	}
 	resetCloseWithTimeoutStatsForTest()
 	t.Cleanup(resetCloseWithTimeoutStatsForTest)
+	resetStartupProbeReadWorkerStatsForTest()
+	t.Cleanup(resetStartupProbeReadWorkerStatsForTest)
 
 	goroutinesBefore := waitForStableGoroutines()
 	closeWorkerBudget := cap(closeWithTimeoutWorkers)
+	startupProbeWorkerStatsBefore := startupProbeReadWorkerStatsSnapshot()
+	startupProbeReadWorkerBudget := startupProbeWorkerStatsBefore.Budget
 
 	const attempts = 24
 	const startupTimeout = 40 * time.Millisecond
@@ -4961,16 +5226,40 @@ func TestStartDirectProbePhaseBlockedBodyDoesNotCreateUnboundedGoroutines(t *tes
 	}
 
 	goroutinesAfterAttempts := waitForStableGoroutines()
-	// Bound expected growth as one blocked probe-read goroutine per attempt plus
-	// two goroutines per in-flight bounded close worker (blocked Close +
-	// late-completion waiter).
-	maxExpectedGrowth := attempts + (2 * closeWorkerBudget) + 8 // +8 for runtime jitter.
+	// Bound expected growth as one blocked probe-read goroutine per detached
+	// read-worker budget slot plus two goroutines per in-flight bounded close
+	// worker (blocked Close + late-completion waiter).
+	maxExpectedGrowth := startupProbeReadWorkerBudget + (2 * closeWorkerBudget) + 8 // +8 for runtime jitter.
 	if goroutinesAfterAttempts > goroutinesBefore+maxExpectedGrowth {
 		t.Fatalf(
 			"probe-phase churn exceeded bounded goroutine ceiling: before=%d after=%d maxGrowth=%d",
 			goroutinesBefore,
 			goroutinesAfterAttempts,
 			maxExpectedGrowth,
+		)
+	}
+	startupProbeWorkerStatsAfterAttempts := startupProbeReadWorkerStatsSnapshot()
+	inFlightDelta := startupProbeWorkerStatsAfterAttempts.InFlight - startupProbeWorkerStatsBefore.InFlight
+	if inFlightDelta > startupProbeReadWorkerBudget {
+		t.Fatalf(
+			"startup probe detached read workers exceeded budget: before=%d after=%d budget=%d",
+			startupProbeWorkerStatsBefore.InFlight,
+			startupProbeWorkerStatsAfterAttempts.InFlight,
+			startupProbeReadWorkerBudget,
+		)
+	}
+	if startupProbeWorkerStatsAfterAttempts.Waits <= startupProbeWorkerStatsBefore.Waits {
+		t.Fatalf(
+			"startup probe detached read-worker waits did not increase under saturation: before=%d after=%d",
+			startupProbeWorkerStatsBefore.Waits,
+			startupProbeWorkerStatsAfterAttempts.Waits,
+		)
+	}
+	if startupProbeWorkerStatsAfterAttempts.AcquireTimeouts <= startupProbeWorkerStatsBefore.AcquireTimeouts {
+		t.Fatalf(
+			"startup probe detached read-worker acquire timeouts did not increase under saturation: before=%d after=%d",
+			startupProbeWorkerStatsBefore.AcquireTimeouts,
+			startupProbeWorkerStatsAfterAttempts.AcquireTimeouts,
 		)
 	}
 
@@ -5001,6 +5290,14 @@ func TestStartDirectProbePhaseBlockedBodyDoesNotCreateUnboundedGoroutines(t *tes
 			"probe-phase cleanup goroutines remained after release: before=%d after=%d",
 			goroutinesBefore,
 			goroutinesAfterRelease,
+		)
+	}
+	startupProbeWorkerStatsAfterRelease := startupProbeReadWorkerStatsSnapshot()
+	if startupProbeWorkerStatsAfterRelease.InFlight > startupProbeWorkerStatsBefore.InFlight {
+		t.Fatalf(
+			"startup probe detached read workers remained after release: before=%d after=%d",
+			startupProbeWorkerStatsBefore.InFlight,
+			startupProbeWorkerStatsAfterRelease.InFlight,
 		)
 	}
 }

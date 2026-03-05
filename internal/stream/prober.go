@@ -43,6 +43,7 @@ type ProbeChannelsProvider interface {
 // ProbeTunerUsage exposes probe-slot acquisition for background probing.
 type ProbeTunerUsage interface {
 	AcquireProbe(ctx context.Context, label string, cancel context.CancelCauseFunc) (*Lease, error)
+	AcquireProbeForSource(ctx context.Context, sourceID int64, label string, cancel context.CancelCauseFunc) (*Lease, error)
 }
 
 // ProberConfig controls optional background source probing.
@@ -328,7 +329,12 @@ func (p *BackgroundProber) ProbeOnce(ctx context.Context) error {
 		if p.tunerUsage != nil {
 			probeCtx, probeCancel = context.WithCancelCause(ctx)
 			var acquireErr error
-			probeLease, acquireErr = p.tunerUsage.AcquireProbe(probeCtx, strings.TrimSpace(source.ItemKey), probeCancel)
+			probeLease, acquireErr = p.tunerUsage.AcquireProbeForSource(
+				probeCtx,
+				source.PlaylistSourceID,
+				strings.TrimSpace(source.ItemKey),
+				probeCancel,
+			)
 			if acquireErr != nil {
 				probeCancel(nil)
 				if ctx.Err() != nil {

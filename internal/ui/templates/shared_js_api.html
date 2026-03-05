@@ -1,0 +1,49 @@
+{{define "shared-js-api"}}
+async function api(path, options = {}) {
+  const resp = await fetch(path, {
+    headers: { "Content-Type": "application/json" },
+    ...options,
+  });
+  const contentType = String(resp.headers.get("Content-Type") || "").toLowerCase();
+  const rawBody = resp.status === 204 ? "" : await resp.text();
+  let payload = null;
+  if (rawBody && contentType.includes("application/json")) {
+    try {
+      payload = JSON.parse(rawBody);
+    } catch (err) {
+      payload = null;
+    }
+  }
+
+  if (!resp.ok) {
+    let message = "";
+    if (payload && typeof payload === "object") {
+      if (typeof payload.message === "string" && payload.message.trim()) {
+        message = payload.message.trim();
+      } else if (typeof payload.error === "string" && payload.error.trim()) {
+        message = payload.error.trim();
+      }
+    }
+    if (!message) {
+      message = rawBody.trim();
+    }
+    if (!message) {
+      message = `request failed (${resp.status})`;
+    }
+    const err = new Error(message);
+    err.status = resp.status;
+    err.path = path;
+    if (payload && typeof payload === "object") {
+      err.payload = payload;
+    }
+    throw err;
+  }
+  if (resp.status === 204 || rawBody === "") {
+    return null;
+  }
+  if (payload !== null) {
+    return payload;
+  }
+  return rawBody;
+}
+{{end}}

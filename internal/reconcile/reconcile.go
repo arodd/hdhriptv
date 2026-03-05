@@ -20,6 +20,14 @@ type catalogFilterIterator interface {
 	IterateActiveItemKeysByCatalogFilter(ctx context.Context, groupNames []string, searchQuery string, searchRegex bool, pageSize int, visit func(itemKey string) error) (int, error)
 }
 
+type sourceScopedCatalogFilterLister interface {
+	ListActiveItemKeysByCatalogFilterBySourceIDs(ctx context.Context, sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool) ([]string, error)
+}
+
+type sourceScopedCatalogFilterIterator interface {
+	IterateActiveItemKeysByCatalogFilterBySourceIDs(ctx context.Context, sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool, pageSize int, visit func(itemKey string) error) (int, error)
+}
+
 // ChannelsService provides channel and source operations needed for reconciliation.
 type ChannelsService interface {
 	List(ctx context.Context) ([]channels.Channel, error)
@@ -33,6 +41,10 @@ type ChannelsService interface {
 
 type catalogFilterDynamicSourceSyncer interface {
 	SyncDynamicSourcesByCatalogFilter(ctx context.Context, channelID int64, groupNames []string, searchQuery string, searchRegex bool, pageSize int, maxMatches int) (channels.DynamicSourceSyncResult, int, error)
+}
+
+type sourceScopedCatalogFilterDynamicSourceSyncer interface {
+	SyncDynamicSourcesByCatalogFilterWithSourceIDs(ctx context.Context, channelID int64, sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool, pageSize int, maxMatches int) (channels.DynamicSourceSyncResult, int, error)
 }
 
 // Result summarizes one reconciliation run.
@@ -65,6 +77,7 @@ type Service struct {
 }
 
 type dynamicCatalogFilterKey struct {
+	SourceIDs   string
 	GroupNames  string
 	SearchQuery string
 	SearchRegex bool
@@ -188,7 +201,8 @@ func (s *Service) Reconcile(ctx context.Context, onProgress func(cur, max int) e
 			continue
 		}
 		groupNames := channels.NormalizeGroupNames(channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames)
-		ruleKey := newDynamicCatalogFilterKey(groupNames, channel.DynamicRule.SearchQuery, channel.DynamicRule.SearchRegex)
+		sourceIDs := channels.NormalizeSourceIDs(channel.DynamicRule.SourceIDs)
+		ruleKey := newDynamicCatalogFilterKey(sourceIDs, groupNames, channel.DynamicRule.SearchQuery, channel.DynamicRule.SearchRegex)
 		dynamicRuleUsage[ruleKey]++
 	}
 	dynamicLookupCache := make(map[dynamicCatalogFilterKey][]string, len(dynamicRuleUsage))
@@ -222,12 +236,36 @@ func (s *Service) reconcileOneChannel(
 ) error {
 	if channel.DynamicRule.Enabled {
 		groupNames := channels.NormalizeGroupNames(channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames)
-		ruleKey := newDynamicCatalogFilterKey(groupNames, channel.DynamicRule.SearchQuery, channel.DynamicRule.SearchRegex)
+		sourceIDs := channels.NormalizeSourceIDs(channel.DynamicRule.SourceIDs)
+		ruleKey := newDynamicCatalogFilterKey(sourceIDs, groupNames, channel.DynamicRule.SearchQuery, channel.DynamicRule.SearchRegex)
 
 		// Keep shared-rule cache mode for multi-channel rules to avoid repeated
 		// full filter scans for each channel using the same dynamic rule.
 		if s.dynamicRulePagedMode && dynamicRuleUsage[ruleKey] <= 1 {
-			if _, catalogSupportsIterator := s.catalog.(catalogFilterIterator); catalogSupportsIterator {
+			if len(sourceIDs) > 0 {
+				if _, catalogSupportsIterator := s.catalog.(sourceScopedCatalogFilterIterator); catalogSupportsIterator {
+					if pagedSyncer, ok := s.channels.(sourceScopedCatalogFilterDynamicSourceSyncer); ok {
+						syncResult, matchedCount, err := pagedSyncer.SyncDynamicSourcesByCatalogFilterWithSourceIDs(
+							ctx,
+							channel.ChannelID,
+							sourceIDs,
+							groupNames,
+							ruleKey.SearchQuery,
+							ruleKey.SearchRegex,
+							dynamicCatalogFilterPageSize,
+							s.dynamicRuleMatchLimit,
+						)
+						if err != nil {
+							return err
+						}
+						if err := s.enforceDynamicRuleMatchLimit(channel, ruleKey, matchedCount); err != nil {
+							return err
+						}
+						s.recordDynamicSyncResult(channel, result, sourceIDs, groupNames, ruleKey, syncResult, matchedCount)
+						return nil
+					}
+				}
+			} else if _, catalogSupportsIterator := s.catalog.(catalogFilterIterator); catalogSupportsIterator {
 				if pagedSyncer, ok := s.channels.(catalogFilterDynamicSourceSyncer); ok {
 					syncResult, matchedCount, err := pagedSyncer.SyncDynamicSourcesByCatalogFilter(
 						ctx,
@@ -244,7 +282,7 @@ func (s *Service) reconcileOneChannel(
 					if err := s.enforceDynamicRuleMatchLimit(channel, ruleKey, matchedCount); err != nil {
 						return err
 					}
-					s.recordDynamicSyncResult(channel, result, groupNames, ruleKey, syncResult, matchedCount)
+					s.recordDynamicSyncResult(channel, result, sourceIDs, groupNames, ruleKey, syncResult, matchedCount)
 					return nil
 				}
 			}
@@ -257,11 +295,23 @@ func (s *Service) reconcileOneChannel(
 			}
 		}
 		if itemKeys == nil {
-			lookupKeys, err := s.catalog.ListActiveItemKeysByCatalogFilter(ctx, groupNames, ruleKey.SearchQuery, ruleKey.SearchRegex)
-			if err != nil {
-				return err
+			if len(sourceIDs) > 0 {
+				if scopedCatalog, ok := s.catalog.(sourceScopedCatalogFilterLister); ok {
+					lookupKeys, err := scopedCatalog.ListActiveItemKeysByCatalogFilterBySourceIDs(ctx, sourceIDs, groupNames, ruleKey.SearchQuery, ruleKey.SearchRegex)
+					if err != nil {
+						return err
+					}
+					itemKeys = lookupKeys
+				} else {
+					return fmt.Errorf("catalog store does not support source-scoped dynamic filtering")
+				}
+			} else {
+				lookupKeys, err := s.catalog.ListActiveItemKeysByCatalogFilter(ctx, groupNames, ruleKey.SearchQuery, ruleKey.SearchRegex)
+				if err != nil {
+					return err
+				}
+				itemKeys = lookupKeys
 			}
-			itemKeys = lookupKeys
 			if err := s.enforceDynamicRuleMatchLimit(channel, ruleKey, len(itemKeys)); err != nil {
 				return err
 			}
@@ -276,7 +326,7 @@ func (s *Service) reconcileOneChannel(
 		if err != nil {
 			return err
 		}
-		s.recordDynamicSyncResult(channel, result, groupNames, ruleKey, syncResult, len(itemKeys))
+		s.recordDynamicSyncResult(channel, result, sourceIDs, groupNames, ruleKey, syncResult, len(itemKeys))
 		return nil
 	}
 
@@ -304,6 +354,7 @@ func (s *Service) enforceDynamicRuleMatchLimit(channel channels.Channel, ruleKey
 func (s *Service) recordDynamicSyncResult(
 	channel channels.Channel,
 	result *Result,
+	sourceIDs []int64,
 	groupNames []string,
 	ruleKey dynamicCatalogFilterKey,
 	syncResult channels.DynamicSourceSyncResult,
@@ -314,6 +365,7 @@ func (s *Service) recordDynamicSyncResult(
 		"channel_id", channel.ChannelID,
 		"guide_number", channel.GuideNumber,
 		"guide_name", channel.GuideName,
+		"source_ids", sourceIDs,
 		"groups", groupNames,
 		"query", ruleKey.SearchQuery,
 		"query_regex", ruleKey.SearchRegex,
@@ -329,8 +381,13 @@ func (s *Service) recordDynamicSyncResult(
 	result.SourcesAlreadySeen += syncResult.Retained
 }
 
-func newDynamicCatalogFilterKey(groupNames []string, searchQuery string, searchRegex bool) dynamicCatalogFilterKey {
+func newDynamicCatalogFilterKey(sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool) dynamicCatalogFilterKey {
+	sourceParts := make([]string, 0, len(sourceIDs))
+	for _, sourceID := range sourceIDs {
+		sourceParts = append(sourceParts, fmt.Sprintf("%d", sourceID))
+	}
 	return dynamicCatalogFilterKey{
+		SourceIDs:   strings.Join(sourceParts, ","),
 		GroupNames:  strings.Join(groupNames, "\x1f"),
 		SearchQuery: strings.TrimSpace(searchQuery),
 		SearchRegex: searchRegex,

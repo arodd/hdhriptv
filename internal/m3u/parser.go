@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/url"
 	"regexp"
+	"sort"
 	"strings"
 )
 
@@ -136,9 +137,74 @@ func normalizedURLForKey(raw string) string {
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return normalize(raw)
 	}
-	u.RawQuery = ""
 	u.Fragment = ""
-	return u.Scheme + "://" + u.Host + u.Path
+
+	base := u.Scheme + "://" + u.Host + u.Path
+	query := u.Query()
+	if len(query) == 0 {
+		return base
+	}
+
+	filtered := make(url.Values, len(query))
+	for key, values := range query {
+		key = strings.TrimSpace(key)
+		if key == "" || isVolatileQueryKey(key) {
+			continue
+		}
+		copied := make([]string, 0, len(values))
+		for _, value := range values {
+			copied = append(copied, strings.TrimSpace(value))
+		}
+		sort.Strings(copied)
+		filtered[key] = copied
+	}
+
+	if len(filtered) == 0 {
+		return base
+	}
+	return base + "?" + filtered.Encode()
+}
+
+func isVolatileQueryKey(raw string) bool {
+	normalized := normalizeQueryKey(raw)
+	if normalized == "" {
+		return false
+	}
+
+	switch normalized {
+	case "token",
+		"authtoken",
+		"signature",
+		"sig",
+		"expires",
+		"expire",
+		"exp",
+		"e",
+		"session",
+		"sessionid",
+		"sid",
+		"hdnts",
+		"wmsauthsign",
+		"jwt":
+		return true
+	}
+
+	// Playlist providers commonly rotate auth/session-style query keys with
+	// different prefixes. Treat those families as volatile identity noise.
+	return strings.Contains(normalized, "token") ||
+		strings.Contains(normalized, "auth") ||
+		strings.Contains(normalized, "signature") ||
+		strings.Contains(normalized, "session") ||
+		strings.Contains(normalized, "expires")
+}
+
+func normalizeQueryKey(raw string) string {
+	raw = strings.TrimSpace(strings.ToLower(raw))
+	if raw == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer("-", "", "_", "", ".", "")
+	return replacer.Replace(raw)
 }
 
 func normalizeName(v string) string {

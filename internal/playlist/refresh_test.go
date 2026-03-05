@@ -3,6 +3,7 @@ package playlist
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,93 @@ func TestRefresherRefreshStreamingError(t *testing.T) {
 	}
 }
 
+func TestRefresherRefreshForSourceUsesStreamingNamespacedKeys(t *testing.T) {
+	t.Parallel()
+
+	items := []Item{
+		{ItemKey: "src:alpha", Name: "Alpha", Group: "News", StreamURL: "http://example.com/a.ts"},
+		{ItemKey: "src:beta", Name: "Beta", Group: "News", StreamURL: "http://example.com/b.ts"},
+	}
+	source := PlaylistSource{
+		SourceID:    2,
+		SourceKey:   "a1b2c3d4",
+		Name:        "Backup",
+		PlaylistURL: "http://example.com/playlist.m3u",
+	}
+	fetcher := &fakeStreamingFetcher{items: items}
+	store := &fakeStreamingStore{}
+
+	refresher := NewRefresher(fetcher, store)
+	count, err := refresher.RefreshForSource(context.Background(), source)
+	if err != nil {
+		t.Fatalf("RefreshForSource() error = %v", err)
+	}
+	if count != len(items) {
+		t.Fatalf("RefreshForSource() count = %d, want %d", count, len(items))
+	}
+	if store.streamSourceCalls != 1 {
+		t.Fatalf("UpsertPlaylistItemsStreamForSource calls = %d, want 1", store.streamSourceCalls)
+	}
+	if store.streamSourceID != source.SourceID {
+		t.Fatalf("stream source_id = %d, want %d", store.streamSourceID, source.SourceID)
+	}
+	if got, want := store.seen[0].ItemKey, "ps:a1b2c3d4:src:alpha"; got != want {
+		t.Fatalf("first namespaced item_key = %q, want %q", got, want)
+	}
+	if got, want := store.seen[1].ItemKey, "ps:a1b2c3d4:src:beta"; got != want {
+		t.Fatalf("second namespaced item_key = %q, want %q", got, want)
+	}
+}
+
+func TestRefresherRefreshForSourcePrimaryPreservesLegacyItemKeys(t *testing.T) {
+	t.Parallel()
+
+	items := []Item{
+		{ItemKey: "src:legacy", Name: "Legacy", Group: "News", StreamURL: "http://example.com/legacy.ts"},
+	}
+	source := PlaylistSource{
+		SourceID:    1,
+		SourceKey:   "primary",
+		Name:        "Primary",
+		PlaylistURL: "http://example.com/playlist.m3u",
+	}
+	fetcher := &fakeFetcher{items: items}
+	store := &fakeStore{}
+
+	refresher := NewRefresher(fetcher, store)
+	count, err := refresher.RefreshForSource(context.Background(), source)
+	if err != nil {
+		t.Fatalf("RefreshForSource() error = %v", err)
+	}
+	if count != len(items) {
+		t.Fatalf("RefreshForSource() count = %d, want %d", count, len(items))
+	}
+	if len(store.seen) != 1 {
+		t.Fatalf("stored item count = %d, want 1", len(store.seen))
+	}
+	if got, want := store.seen[0].ItemKey, "src:legacy"; got != want {
+		t.Fatalf("stored primary item_key = %q, want %q", got, want)
+	}
+}
+
+func TestRefresherRefreshForSourceRejectsMissingSourceKey(t *testing.T) {
+	t.Parallel()
+
+	refresher := NewRefresher(
+		&fakeFetcher{items: []Item{{ItemKey: "src:legacy", StreamURL: "http://example.com/legacy.ts"}}},
+		&fakeStore{},
+	)
+	_, err := refresher.RefreshForSource(context.Background(), PlaylistSource{
+		SourceID:    2,
+		SourceKey:   "",
+		Name:        "Backup",
+		PlaylistURL: "http://example.com/playlist.m3u",
+	})
+	if err == nil || !strings.Contains(err.Error(), "key is required") {
+		t.Fatalf("RefreshForSource() error = %v, want missing source key validation", err)
+	}
+}
+
 type fakeFetcher struct {
 	items []Item
 	err   error
@@ -100,10 +188,23 @@ type fakeStore struct {
 	err   error
 	calls int
 	seen  []Item
+
+	sourceCalls int
+	sourceID    int64
 }
 
 func (s *fakeStore) UpsertPlaylistItems(_ context.Context, items []Item) error {
 	s.calls++
+	if s.err != nil {
+		return s.err
+	}
+	s.seen = append(s.seen[:0], items...)
+	return nil
+}
+
+func (s *fakeStore) UpsertPlaylistItemsForSource(_ context.Context, sourceID int64, items []Item) error {
+	s.sourceCalls++
+	s.sourceID = sourceID
 	if s.err != nil {
 		return s.err
 	}
@@ -154,6 +255,9 @@ type fakeStreamingStore struct {
 	legacyErr   error
 	streamCalls int
 	legacyCalls int
+
+	streamSourceCalls int
+	streamSourceID    int64
 }
 
 func (s *fakeStreamingStore) UpsertPlaylistItems(_ context.Context, _ []Item) error {
@@ -163,6 +267,24 @@ func (s *fakeStreamingStore) UpsertPlaylistItems(_ context.Context, _ []Item) er
 
 func (s *fakeStreamingStore) UpsertPlaylistItemsStream(_ context.Context, stream ItemStream) (int, error) {
 	s.streamCalls++
+	if s.streamErr != nil {
+		return 0, s.streamErr
+	}
+	s.seen = s.seen[:0]
+	count := 0
+	if err := stream(func(item Item) error {
+		s.seen = append(s.seen, item)
+		count++
+		return nil
+	}); err != nil {
+		return count, err
+	}
+	return count, nil
+}
+
+func (s *fakeStreamingStore) UpsertPlaylistItemsStreamForSource(_ context.Context, sourceID int64, stream ItemStream) (int, error) {
+	s.streamSourceCalls++
+	s.streamSourceID = sourceID
 	if s.streamErr != nil {
 		return 0, s.streamErr
 	}

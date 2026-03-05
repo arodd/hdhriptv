@@ -467,10 +467,21 @@
       width: 100%;
     }
 
+    .source-pools-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.82rem;
+    }
+
+    .source-pools-table td {
+      font-variant-numeric: tabular-nums;
+    }
+
     .active-sessions-table col.col-tuner { width: 8rem; }
     .active-sessions-table col.col-state { width: 9.5rem; }
+    .active-sessions-table col.col-pool { width: 9rem; }
     .active-sessions-table col.col-channel { width: 16rem; }
-    .active-sessions-table col.col-source { width: 22rem; }
+    .active-sessions-table col.col-source { width: 20rem; }
     .active-sessions-table col.col-throughput { width: 12rem; }
     .active-sessions-table col.col-subs { width: 4.5rem; }
     .active-sessions-table col.col-last-push { width: 11rem; }
@@ -966,14 +977,14 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog">Catalog</a>
       <a href="/ui/channels">Channels</a>
       <a href="/ui/merge">Merge Suggestions</a>
       <a href="/ui/tuners" class="active">Tuners</a>
-      <a href="/ui/dvr">DVR</a>
-      <a href="/ui/automation">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation">Automation</a>{{end}}
     </nav>
   </header>
 
@@ -1022,6 +1033,7 @@
               <select id="active-sort-key">
                 <option value="tuner">Tuner</option>
                 <option value="state">State</option>
+                <option value="pool">Pool</option>
                 <option value="channel">Channel</option>
                 <option value="source">Source</option>
                 <option value="subscribers">Subscribers</option>
@@ -1113,6 +1125,27 @@
       </article>
     </section>
 
+    <section id="source-pools-section" class="panel" aria-labelledby="source-pools-title" hidden>
+      <h2 id="source-pools-title">Source Pools</h2>
+      <div class="panel-body">
+        <div id="source-pools-empty" class="empty" hidden>No per-source pool data available.</div>
+        <div class="table-wrap">
+          <table id="source-pools-table" class="source-pools-table">
+            <thead>
+              <tr>
+                <th>Source</th>
+                <th>Configured</th>
+                <th>In Use</th>
+                <th>Idle</th>
+                <th>Active Sessions</th>
+              </tr>
+            </thead>
+            <tbody id="source-pools-body"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
     <section class="grid-primary">
       <section class="panel span-12" aria-labelledby="active-sessions-title">
         <h2 id="active-sessions-title">Active Sessions</h2>
@@ -1127,6 +1160,7 @@
               <colgroup>
                 <col class="col-tuner">
                 <col class="col-state">
+                <col class="col-pool">
                 <col class="col-channel">
                 <col class="col-source">
                 <col class="col-throughput">
@@ -1138,6 +1172,7 @@
                 <tr>
                   <th>Tuner</th>
                   <th>State</th>
+                  <th>Pool</th>
                   <th>Channel</th>
                   <th>Source</th>
                   <th>Throughput</th>
@@ -1269,6 +1304,10 @@
     const activeFilterNoteEl = document.getElementById("active-filter-note");
     const selectedSessionDetailEl = document.getElementById("selected-session-detail");
 
+    const sourcePoolsSectionEl = document.getElementById("source-pools-section");
+    const sourcePoolsBodyEl = document.getElementById("source-pools-body");
+    const sourcePoolsEmptyEl = document.getElementById("source-pools-empty");
+
     const summaryConfiguredEl = document.getElementById("summary-configured");
     const summaryInUseEl = document.getElementById("summary-inuse");
     const summaryIdleEl = document.getElementById("summary-idle");
@@ -1330,15 +1369,7 @@
     let refreshAppliedSeq = 0;
     let refreshAppliedGeneratedAtMs = 0;
 
-    function showStatus(message, isError = false) {
-      statusEl.hidden = false;
-      statusEl.classList.toggle("error", isError);
-      statusEl.textContent = message;
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 4500);
-    }
+    {{template "shared-js-show-status"}}
 
     function formatTS(raw) {
       if (!raw) {
@@ -1647,6 +1678,7 @@
         tuner.tuner_id,
         tuner.kind,
         tuner.state,
+        tuner.playlist_source_name,
         tuner.guide_number,
         tuner.guide_name,
         tuner.channel_id,
@@ -1724,6 +1756,10 @@
           case "state":
             a = tunerStateLabel(left.state);
             b = tunerStateLabel(right.state);
+            break;
+          case "pool":
+            a = normalizeText(left.playlist_source_name);
+            b = normalizeText(right.playlist_source_name);
             break;
           case "channel":
             a = `${left.guide_number || ""} ${left.guide_name || ""}`;
@@ -2164,12 +2200,18 @@
           ? `<button type="button" class="warn" data-action="trigger-recovery" data-channel-id="${escapeHTML(tuner.channel_id)}" data-tuner-key="${escapeHTML(tunerKey)}">Trigger Recovery</button>`
           : `<span class="muted">-</span>`;
 
+        const poolName = String(tuner.playlist_source_name || "").trim();
+        const poolCell = poolName
+          ? `<span class="tag info">${escapeHTML(poolName)}</span>`
+          : `<span class="muted">-</span>`;
+
         tr.innerHTML = `
           <td class="tuner-cell">
             <div><strong>#${escapeHTML(tuner.tuner_id)}</strong></div>
             <div class="muted"><span class="tag ${typeClass}">${escapeHTML(tuner.kind || "unknown")}</span></div>
           </td>
           <td class="state-cell"><span class="tag ${stateClass}">${escapeHTML(stateLabel)}</span></td>
+          <td class="pool-cell">${poolCell}</td>
           <td class="channel-cell">${channelText}</td>
           <td class="source-cell">
             <div>${sourceText}</div>
@@ -2606,6 +2648,38 @@
       `;
     }
 
+    function renderSourcePools(payload) {
+      const pools = Array.isArray(payload?.virtual_tuners) ? payload.virtual_tuners : [];
+      sourcePoolsSectionEl.hidden = pools.length === 0;
+      sourcePoolsEmptyEl.hidden = pools.length > 0;
+      sourcePoolsBodyEl.innerHTML = "";
+
+      const sorted = pools.slice().sort((a, b) => toNumber(a.playlist_source_order) - toNumber(b.playlist_source_order));
+      for (const pool of sorted) {
+        const tr = document.createElement("tr");
+        const name = String(pool.playlist_source_name || "").trim() || `Source #${toNumber(pool.playlist_source_id)}`;
+        const configured = toNumber(pool.tuner_count);
+        const inUse = toNumber(pool.in_use_count);
+        const idle = toNumber(pool.idle_count);
+        const sessions = toNumber(pool.active_session_count);
+
+        const utilRatio = configured > 0 ? inUse / configured : 0;
+        const rowClass = utilRatio >= 0.95 ? "severity-danger" : utilRatio >= 0.75 ? "severity-warn" : "";
+        if (rowClass) {
+          tr.className = rowClass;
+        }
+
+        tr.innerHTML = `
+          <td><strong>${escapeHTML(name)}</strong></td>
+          <td>${configured}</td>
+          <td>${inUse}</td>
+          <td>${idle}</td>
+          <td>${sessions}</td>
+        `;
+        sourcePoolsBodyEl.appendChild(tr);
+      }
+    }
+
     function render(payload) {
       if (!payload) {
         return;
@@ -2613,6 +2687,7 @@
 
       const model = buildViewModel(payload);
       renderSummary(payload);
+      renderSourcePools(payload);
       renderTuners(model);
       renderClients(model);
       renderHistoryMaster(model, payload);

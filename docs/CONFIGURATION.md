@@ -12,13 +12,63 @@ as env-only or internal-only. Flag values override environment variables.
 | `--log-dir` | `LOG_DIR` | current working directory | No | Directory for startup timestamped log files (`hdhriptv-YYYYMMDD-HHMMSS.log`). |
 | `--http-addr` | `HTTP_ADDR` | `:5004` | No | Primary HTTP listener. |
 | `--http-addr-legacy` | `HTTP_ADDR_LEGACY` | empty | No | Optional second HTTP listener, often `:80`. |
-| `--tuner-count` | `TUNER_COUNT` | `2` | No | Max concurrent stream sessions. Must be `>= 1`. |
+| `--tuner-count` | `TUNER_COUNT` | `2` | No | Primary source tuner count. When additional playlist sources are configured, the effective internal tuner count is the sum of all enabled source tuner counts. Must be `>= 1`. |
+| `--playlist-source` | `PLAYLIST_SOURCES` | empty | No | Additional playlist sources (repeatable flag, semicolon-separated env). Spec format: `url=<playlist_url>,tuners=<count>[,name=<label>][,enabled=<bool>]`. See **Multi-Source Playlist Configuration** below. |
 | `--traditional-guide-start` | `TRADITIONAL_GUIDE_START` | `100` | No | First guide number assigned to traditional channels. Must be `>= 1` and `< 10000`. Existing traditional channels are migrated to this base during startup when drift is detected. |
 | `--friendly-name` | `FRIENDLY_NAME` | `HDHR IPTV` | No | Displayed in discover payloads and DVR UIs. Persisted in DB and reused across restarts unless explicitly set at startup. |
 | `--device-id` | `DEVICE_ID` | random 8 hex chars | No | Auto-generated once and persisted in DB when unset; reused across restarts while DB persists. |
 | `--device-auth` | `DEVICE_AUTH` | random token | No | Auto-generated once and persisted in DB when unset; reused across restarts while DB persists. |
 | `--admin-auth` | `ADMIN_AUTH` | empty | No | Format must be `user:pass`. If empty, no auth on `/ui/*` and `/api/*`. |
 | `--log-level` | `LOG_LEVEL` | `info` | No | `trace`, `debug`, `info`, `warn`, `error`. |
+
+## Multi-Source Playlist Configuration
+
+Multiple playlist sources allow the system to ingest channels from several M3U playlists simultaneously, each with its own tuner capacity.
+
+### CLI Syntax
+
+The `--playlist-source` flag is repeatable. Each value is a comma-delimited key-value spec:
+
+```
+--playlist-source "url=https://backup.example/playlist.m3u,tuners=2,name=Backup,enabled=true"
+```
+
+Accepted keys:
+
+| Key | Aliases | Required | Default | Description |
+|-----|---------|----------|---------|-------------|
+| `url` | `playlist_url` | Yes | — | M3U playlist URL |
+| `tuners` | `tuner_count` | Yes | — | Per-source virtual tuner capacity (`>= 1`) |
+| `name` | — | No | Auto-generated (`Source 2`, `Source 3`, ...) | Operator label (must be unique across all sources) |
+| `enabled` | — | No | `true` | Whether source is active (`1/true/yes/on` or `0/false/no/off`) |
+
+### Environment Variable Syntax
+
+`PLAYLIST_SOURCES` uses semicolons to separate multiple source specs:
+
+```
+PLAYLIST_SOURCES="url=https://a.example/a.m3u,tuners=2,name=Source A;url=https://b.example/b.m3u,tuners=1,name=Source B"
+```
+
+### Legacy Compatibility
+
+- `--playlist-url` / `PLAYLIST_URL` maps to the primary source (name `"Primary"`, `source_id=1`).
+- `--tuner-count` / `TUNER_COUNT` sets the primary source tuner count.
+- When no `--playlist-source` is specified, the system operates in single-source mode with unchanged behavior.
+
+### Validation Rules
+
+- Each source must have `tuner_count >= 1`.
+- Source names must be unique across all sources (case-insensitive comparison).
+- Playlist URLs must be unique across all sources (duplicate URLs are rejected at startup).
+- The primary source defaults to name `"Primary"` if unnamed.
+
+### Tuner Count Behavior
+
+- Internal tuner capacity is the sum of all enabled source tuner counts.
+- Client-facing tuner count (UDP discovery and `/discover.json`) is capped at `min(sum_enabled_tuners, 255)` for DVR client compatibility.
+- The real uncapped per-source and aggregate tuner counts are exposed via `/api/admin/tuners`.
+- When discovery capping is active, a startup log message reports the cap.
 
 ## UPnP/SSDP
 
@@ -35,6 +85,7 @@ as env-only or internal-only. Flag values override environment variables.
 | Flag | Environment Variable | Default | Required | Notes |
 | --- | --- | --- | --- | --- |
 | `--refresh-schedule` | `REFRESH_SCHEDULE` | empty | No | Cron expression for playlist sync (`5-field` or optional-seconds `6-field`). When set, it updates persisted `jobs.playlist_sync.cron` and enables playlist sync scheduling. |
+| `--playlist-sync-source-concurrency` | `PLAYLIST_SYNC_SOURCE_CONCURRENCY` | `1` | No | Bounded worker count for source refreshes during all-source playlist sync runs. `1` keeps sequential behavior. Higher values enable opt-in concurrent source refresh (max `16`) to reduce wall-clock sync duration under many sources. |
 | `--refresh-interval` | `REFRESH_INTERVAL` | empty | No | Deprecated compatibility flag/env. Duration is converted to `--refresh-schedule` when representable (for example `30m` -> `*/30 * * * *`). |
 
 ## Stream Mode

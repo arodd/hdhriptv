@@ -17,6 +17,7 @@ type dynamicQueryRow struct {
 	Enabled        bool
 	GroupName      string
 	GroupNames     []string
+	SourceIDs      []int64
 	SearchQuery    string
 	SearchRegex    bool
 	NextSlotCursor int
@@ -42,6 +43,12 @@ type generatedChannelRow struct {
 }
 
 const maxCatalogFilterItemKeyBatch = 900
+
+// SupportsSourceScopedDynamicChannelBlocks reports whether dynamic channel
+// block synchronization supports source-scoped filtering semantics.
+func (s *Store) SupportsSourceScopedDynamicChannelBlocks() bool {
+	return true
+}
 
 func (s *Store) SyncDynamicChannelBlocks(ctx context.Context) (channels.DynamicChannelSyncResult, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -182,6 +189,7 @@ func listDynamicQueryRowsTx(ctx context.Context, tx *sql.Tx) ([]dynamicQueryRow,
 			enabled,
 			COALESCE(group_name, ''),
 			COALESCE(group_names_json, '[]'),
+			COALESCE(source_ids_json, '[]'),
 			COALESCE(search_query, ''),
 			COALESCE(search_regex, 0),
 			COALESCE(next_slot_cursor, 0),
@@ -201,12 +209,14 @@ func listDynamicQueryRowsTx(ctx context.Context, tx *sql.Tx) ([]dynamicQueryRow,
 			enabledInt     int
 			searchRegexInt int
 			groupNamesJSON string
+			sourceIDsJSON  string
 		)
 		if err := rows.Scan(
 			&row.QueryID,
 			&enabledInt,
 			&row.GroupName,
 			&groupNamesJSON,
+			&sourceIDsJSON,
 			&row.SearchQuery,
 			&searchRegexInt,
 			&row.NextSlotCursor,
@@ -217,6 +227,7 @@ func listDynamicQueryRowsTx(ctx context.Context, tx *sql.Tx) ([]dynamicQueryRow,
 		row.Enabled = enabledInt != 0
 		row.SearchRegex = searchRegexInt != 0
 		row.GroupName, row.GroupNames = normalizeStoredGroupNames(row.GroupName, groupNamesJSON)
+		row.SourceIDs = normalizeStoredSourceIDs(sourceIDsJSON)
 		row.SearchQuery = strings.TrimSpace(row.SearchQuery)
 		row.NextSlotCursor = normalizeDynamicSlotCursor(row.NextSlotCursor)
 		out = append(out, row)
@@ -233,7 +244,7 @@ func syncOneDynamicQueryBlockTx(ctx context.Context, tx *sql.Tx, query dynamicQu
 		return channels.DynamicChannelSyncResult{}, query.NextSlotCursor, err
 	}
 
-	spec, err := buildCatalogFilterQuerySpec(query.GroupNames, query.SearchQuery, query.SearchRegex)
+	spec, err := buildCatalogFilterQuerySpecWithSourceIDs(query.SourceIDs, query.GroupNames, query.SearchQuery, query.SearchRegex)
 	if err != nil {
 		return channels.DynamicChannelSyncResult{}, query.NextSlotCursor, err
 	}

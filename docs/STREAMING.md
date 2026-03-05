@@ -45,6 +45,7 @@ Key components:
 |-----------|------|------|
 | `Handler` | `handler.go` | HTTP endpoint; resolves guide number → channel → session |
 | `Pool` | `tuners.go` | Finite tuner slot pool; acquire/release/preempt |
+| `VirtualTunerManager` | `virtual_tuners.go` | Per-source pool routing; aggregate stats |
 | `SessionManager` | `shared_session.go` | Per-channel session lifecycle coordinator |
 | `sharedRuntimeSession` | `shared_session.go` | Active session: source, pump, ring, subscribers |
 | `Pump` | `pump.go` | Reads producer output, publishes sized/timed chunks |
@@ -97,6 +98,80 @@ Two settle mechanisms exist:
 
 Both are enforced by `waitForSlotSettle` and `waitForCapacityRefillSettle`
 during acquire.
+
+---
+
+## Virtual Tuner Manager (Multi-Source)
+
+When multiple playlist sources are configured, a `VirtualTunerManager`
+(`virtual_tuners.go`) replaces the single global `Pool` to provide
+per-source tuner capacity isolation.
+
+### Architecture
+
+Each enabled playlist source with `tuner_count > 0` gets its own `Pool`
+instance. The `VirtualTunerManager` wraps all per-source pools and presents
+a unified `tunerUsage` interface to the stream handler:
+
+```
+VirtualTunerManager
+├── Pool (Source 1: "Primary", 4 tuners, baseID=0)
+├── Pool (Source 2: "Backup A", 2 tuners, baseID=4)
+└── Pool (Source 3: "Backup B", 2 tuners, baseID=6)
+```
+
+Global tuner IDs are assigned contiguously across pools via `baseID` offsets
+so each tuner has a unique global identifier.
+
+### Source-Aware Lease Acquisition
+
+- `AcquireClientForSource(ctx, sourceID, guideNumber, clientAddr)` routes
+  the lease request to the correct per-source pool. Returns a `Lease` with
+  `PlaylistSourceID`, `PlaylistSourceName`, and `VirtualTunerSlot`.
+  - At exact source-pool capacity, client acquires are still attempted when
+    the pool has reclaimable preemptible leases (probe or idle-client). This
+    preserves the configured per-source cap while allowing like-for-like
+    replacement via pool-local preemption.
+- `AcquireProbeForSource(ctx, sourceID, label, cancel)` routes probe leases
+  to the source's pool.
+- When `sourceID=0`, leases are routed to the default source (source_id=1 if
+  present, otherwise the first entry).
+
+### Cross-Source Failover
+
+During session recovery, when a failover candidate comes from a different
+playlist source than the current session:
+
+1. The current source's tuner lease is released.
+2. A new lease is acquired from the failover target's source pool.
+3. The session continues with the new source and pool assignment.
+
+This implements virtual tuner migration without exposing new consumer
+endpoints.
+
+### Preemption Scope
+
+Preemption rules are pool-local:
+
+- Probe preemption only targets probes within the **same source pool**.
+- Idle-client preemption only targets idle clients within the **same source
+  pool**.
+- Capacity from unrelated source pools is never stolen.
+- During source candidate evaluation, a full pool with reclaimable
+  preemptible leases is treated as startup-eligible for that source; a full
+  pool without reclaimable preemptible leases is treated as unavailable.
+
+### Metrics
+
+`stream_virtual_tuner_utilization_ratio` (Prometheus gauge, label
+`playlist_source`): tracks the in-use/capacity ratio per source pool.
+Updated on every lease acquisition and release.
+
+### Lifecycle
+
+`VirtualTunerManager.Close()` drains all per-source pools. It is called
+during shutdown **after** `streamHandler.CloseWithContext()` has drained
+all active sessions and released their leases.
 
 ---
 
@@ -195,8 +270,8 @@ When a client tunes to `/auto/v{guideNumber}`:
     │       │   │   └─ trim probe to cutover offset
     │       │   │
     │       │   └─ startupInventoryRequiresVideoAudio()
-    │       │       accept video_audio or undetected;
-    │       │       reject explicit video_only/audio_only
+    │       │       accept only video_audio;
+    │       │       reject video_only/audio_only/undetected/unknown
     │       │
     │       └─ markReady()   signal waitReady() callers
     │
@@ -226,6 +301,11 @@ reads initial bytes from the upstream and performs MPEG-TS analysis:
 but random-access cutover scanning/trimming is only enforced when
 `requireRandomAccess=true` (recovery startup, and optionally initial startup in
 ffmpeg modes when `STARTUP_RANDOM_ACCESS_RECOVERY_ONLY=false`).
+
+Detached startup-probe `Read(...)` workers are protected by a fixed global
+budget (`16`). When blocked transports saturate this budget, additional startup
+attempts wait for an available slot until their startup timeout/cancel fires,
+which prevents runaway goroutine growth under repeated bad upstream attempts.
 
 ---
 
@@ -359,6 +439,7 @@ Wait-for-drain observability:
   emitted as `slow_skip_max_lag_chunks`.
 - Prometheus exports shared-session subscriber write-pressure metrics to
   separate writer backpressure from ring lag behavior:
+  - `stream_subscriber_write_deadline_unsupported_total`
   - `stream_subscriber_write_deadline_timeouts_total`
   - `stream_subscriber_write_short_writes_total`
   - `stream_subscriber_write_blocked_seconds` (histogram)
@@ -367,6 +448,8 @@ Wait-for-drain observability:
   cache run-down:
   - `stream_source_read_pause_events_total{reason=...}`
   - `stream_source_read_pause_seconds{reason=...}` (histogram)
+  - `stream_startup_probe_read_worker_waits_total`
+  - `stream_startup_probe_read_worker_acquire_timeouts_total`
   - `reason` values:
     - `recovered`: pause ended because source reads resumed.
     - `pump_exit`: cycle ended while a pause was still active.
@@ -505,7 +588,10 @@ After a stall or source error:
 5. **Hard deadline** — `stallHardDeadline` (default 32 s) bounds the total
    time spent recovering.
 6. **Source re-selection** — `startRecoverySource()` reloads and re-orders
-   sources, potentially selecting an alternate source.
+   sources, potentially selecting an alternate source. Candidate eligibility
+   factors include source cooldown, stream URL presence, and source-pool
+   tuner availability (including full-but-reclaimable preemptible capacity in
+   the same source pool).
 7. If recovery succeeds, the new pump cycle begins.
 
 ### Burst pacing
@@ -769,9 +855,10 @@ to `SubscriberMaxBlockedWrite` (default 6 s). If the client cannot accept
 data within this window, the write fails and the subscriber is disconnected.
 
 If the underlying connection does not support `SetWriteDeadline` (e.g.
-certain hijacked connections or non-TCP transports), `writeChunk()` fails
-fast and the subscriber is disconnected immediately rather than allowing
-an unbounded blocking write.
+certain hijacked connections or non-TCP transports), `writeChunk()` falls back
+to a best-effort write without a deadline and records explicit telemetry
+(`stream_subscriber_write_deadline_unsupported_total`) so operators can detect
+this degraded path.
 
 ### Join lag
 
@@ -1063,41 +1150,11 @@ Operator actions:
 
 ---
 
-## Known Limitations / Active Remediation
+## Known Limitations
 
-> Last validated: 2026-02-17
+> Last validated: 2026-03-04
 
-The following open issues are tracked with dedicated TODO files:
-
-- **Tuner acquire error classification + preempt races** — `Pool.acquire(...)` error precedence can misclassify caller cancellation/deadline as `ErrNoTunersAvailable` across no-slot fallthrough paths. (`TODO-stream-tuner-acquire-error-classification-and-preempt-races.md`)
-- **Blocking close + startup abort lifecycle convergence** — Blocked close/read/wait paths can pin tuner/shared-session/recovery lifecycle convergence across direct, ffmpeg, prober, startup, and pump flows. (`TODO-stream-blocking-close-startup-abort-lifecycle-convergence.md`)
-- **Source health persistence + ordering convergence** — Stale/out-of-order persist writes can clobber newer source health state; transient failures have retry gaps. (`TODO-stream-source-health-persistence-ordering-convergence.md`)
-- **Source profile persistence convergence** — Stale `LastProbeAt` clobber and profile persist retry gaps can leave persisted profile diagnostics/history stale until a subsequent successful probe. (`TODO-stream-source-profile-persistence-and-recovery-inference-convergence.md`)
-- **Recovery stale last-publish false stall loop** — Recovery cycles can self-trigger `stall` from stale pump `LastPublishAt` before first publish of the new source cycle. (`TODO-stream-shared-session-recovery-stale-last-publish-false-stall-loop.md`)
-- **Canceled-not-closed session reuse lifecycle hang** — `Subscribe(...)` can attach to canceled-but-not-closed shared-session runtimes, causing subscriber lifecycle hangs. (`TODO-stream-shared-session-canceled-not-closed-reuse-lifecycle-hang.md`)
-- **TriggerRecovery control-plane consistency** — Accepted recovery triggers can route to stale session owners, producing false `not found`, `already pending`, or stale success outcomes. (`TODO-stream-shared-session-trigger-recovery-control-plane-consistency.md`)
-- **Subscribe canceled-context admission bypass** — Canceled caller contexts can attach/succeed on reuse-ready paths and mutate subscriber lifecycle state. (`TODO-stream-shared-session-subscribe-canceled-context-admission-bypass.md`)
-- **Manual recovery lifecycle consistency** — Accepted manual recovery requests can be silently dropped, stale-acked, replayed, or misclassified as `source_eof`. (`TODO-stream-shared-session-manual-recovery-lifecycle-consistency.md`)
-- **Idle-preempt stale callback overwrite race** — Stale late preempt callback registration can overwrite the current tuner slot callback, forcing false no-tuner outcomes. (`TODO-stream-shared-session-idle-preempt-stale-callback-overwrite-race.md`)
-- **Recovery restart_same disabled source retry bypass** — `restart_same` and fallback-to-current recovery paths can retry disabled sources absent from enabled candidate queries. (`TODO-stream-recovery-restart-same-disabled-current-source-retry-bypass.md`)
-- **Recovery keepalive terminal failure false live-transition** — Terminal recovery failure still emits `keepalive_to_live` boundary signaling even when no replacement live source is selected. (`TODO-stream-recovery-keepalive-terminal-failure-false-live-transition-boundary.md`)
-- **Idle-cancel post-validation reattach race** — Stale idle-cancel paths can tear down active reattached subscribers after idle-timeout or idle-preempt post-validation windows. (`TODO-stream-shared-session-idle-cancel-post-validation-reattach-race.md`)
-- **Recovery alternate startup idle-cancel stale penalty** — Idle-guard startup cancellations can record alternate short-lived penalties when subscribers reattach before post-attempt lifecycle guards run. (`TODO-stream-recovery-alternate-startup-idle-cancel-stale-penalty-reattach-race.md`)
-
-### Top 3 Current Risks
-
-**1. Stall false-positive loop** (failure mode: stall)
-Recovery cycles can immediately self-trigger false stalls from stale prior-cycle `LastPublishAt` timestamps, causing rapid recovery churn before any data flows.
-- `TODO-stream-shared-session-recovery-stale-last-publish-false-stall-loop.md`
-
-**2. Lifecycle teardown leaks** (failure mode: teardown)
-Blocked close/read/wait paths, stale idle-cancel execution after subscriber reattach, and canceled-not-closed session reuse can all pin tuner/session resources or hang subscriber lifecycles.
-- `TODO-stream-blocking-close-startup-abort-lifecycle-convergence.md`
-- `TODO-stream-shared-session-idle-cancel-post-validation-reattach-race.md`
-- `TODO-stream-shared-session-canceled-not-closed-reuse-lifecycle-hang.md`
-
-**3. Admission control gaps** (failure mode: control-plane)
-Canceled caller contexts can bypass subscribe admission, stale preempt callbacks can clobber current tuner state, and unsupported write deadlines can bypass slow-client teardown bounds.
-- `TODO-stream-shared-session-subscribe-canceled-context-admission-bypass.md`
-- `TODO-stream-shared-session-idle-preempt-stale-callback-overwrite-race.md`
-- `TODO-stream-shared-session-subscriber-write-deadline-unsupported-max-blocked-bypass.md`
+This document no longer maintains a static "active remediation" backlog.
+Streaming hardening work is tracked in internal coordination TODO artifacts and
+is promoted to `CHANGELOG.md` once shipped. Use the telemetry, log event, and
+operator-action guidance above for current production diagnosis and triage.

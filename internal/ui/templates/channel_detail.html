@@ -228,62 +228,61 @@
       width: 100%;
     }
 
+{{template "shared-css-chips"}}
+
     .group-picker {
-      border: 1px solid #dce5f5;
       border-radius: 8px;
       background: #ffffff;
+    }
+
+    .source-picker {
+      width: 100%;
+      border: 1px solid #c2e0d9;
+      border-radius: 10px;
+      background: #f5fcfa;
       padding: 8px;
       display: grid;
       gap: 8px;
     }
 
-    .group-picker-label {
-      color: var(--muted);
+    .source-picker-label {
+      color: #156b5a;
       font-size: 0.82rem;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.03em;
     }
 
-    .selected-groups {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 6px;
-      min-height: 26px;
-    }
-
-    .group-chip {
-      display: inline-flex;
-      align-items: center;
-      gap: 6px;
-      border: 1px solid #aac5f0;
-      background: #e9f2ff;
-      color: #1f4e92;
-      border-radius: 999px;
-      padding: 2px 8px;
-      font-size: 0.82rem;
-    }
-
-    .group-chip button {
-      border: none;
-      background: transparent;
-      padding: 0;
-      font-size: 0.85rem;
-      line-height: 1;
-      color: #1f4e92;
-      cursor: pointer;
-    }
-
-    .group-picker-controls {
+    .source-picker-controls {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
       align-items: center;
     }
 
-    .group-picker-controls input[type="text"] {
-      min-width: 200px;
-      flex: 1;
+    .source-dropdown {
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: #fff;
+      padding: 6px;
+      display: grid;
+      gap: 2px;
+      max-height: 200px;
+      overflow-y: auto;
+    }
+
+    .source-dropdown label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 6px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.88rem;
+    }
+
+    .source-dropdown label:hover {
+      background: #e6f7f4;
     }
 
     .rule-hint {
@@ -308,14 +307,14 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog">Catalog</a>
       <a href="/ui/channels" class="active">Channels</a>
       <a href="/ui/merge">Merge Suggestions</a>
       <a href="/ui/tuners">Tuners</a>
-      <a href="/ui/dvr">DVR</a>
-      <a href="/ui/automation">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation">Automation</a>{{end}}
     </nav>
   </header>
 
@@ -346,6 +345,16 @@
                 <button id="dynamic-group-add" type="button">Add Group</button>
                 <button id="dynamic-group-clear" type="button">All Groups</button>
               </div>
+            </div>
+
+            <div class="source-picker">
+              <div class="source-picker-label">Playlist Source Filter</div>
+              <div id="dynamic-source-chips" class="selected-groups"></div>
+              <div class="source-picker-controls">
+                <button id="dynamic-source-toggle" type="button">Select Sources</button>
+                <button id="dynamic-source-clear" type="button">All Sources</button>
+              </div>
+              <div id="dynamic-source-dropdown" class="source-dropdown" hidden></div>
             </div>
 
             <input id="dynamic-query" type="text" placeholder="Catalog search query (token mode: |/OR and -term/!term; regex mode: full pattern)">
@@ -396,7 +405,9 @@
       sources: [],
       catalogGroups: [],
       dynamicGroupNames: [],
+      dynamicSourceIds: [],
       dynamicSearchRegex: false,
+      playlistSources: [],
     };
     const channelPageLimit = 200;
     const sourcePageLimit = 200;
@@ -415,39 +426,20 @@
     const dynamicGroupInputEl = document.getElementById("dynamic-group-input");
     const dynamicGroupChipsEl = document.getElementById("dynamic-group-chips");
     const dynamicGroupOptionsEl = document.getElementById("dynamic-group-options");
+    const dynamicSourceChipsEl = document.getElementById("dynamic-source-chips");
+    const dynamicSourceDropdownEl = document.getElementById("dynamic-source-dropdown");
+    const dynamicSourceToggleBtn = document.getElementById("dynamic-source-toggle");
 
-    function showStatus(message, isError = false) {
-      statusEl.hidden = false;
-      statusEl.classList.toggle("error", isError);
-      statusEl.textContent = message;
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 3000);
-    }
-
-    async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `request failed (${resp.status})`);
-      }
-      if (resp.status === 204) {
-        return null;
-      }
-      return resp.json();
-    }
+    {{template "shared-js-show-status"}}
+    {{template "shared-js-api"}}
+    {{template "shared-js-group-helpers"}}
+    {{template "shared-js-load-paged-collection"}}
+    {{template "search-warning-summary-function"}}
 
     function handleError(err) {
       console.error(err);
       showStatus(err.message || "request failed", true);
     }
-
-    {{template "search-warning-summary-function"}}
 
     function renderSearchWarning(searchWarning) {
       const message = formatSearchWarningSummary(searchWarning, "Dynamic rule");
@@ -460,35 +452,15 @@
       dynamicRuleWarningEl.textContent = message;
     }
 
-    function normalizeGroupNameValue(raw) {
-      return String(raw || "").trim();
-    }
-
-    function normalizeGroupNameList(raw) {
-      const deduped = new Map();
-      for (const value of raw || []) {
-        const trimmed = normalizeGroupNameValue(value);
-        if (!trimmed) {
-          continue;
-        }
-        const key = trimmed.toLowerCase();
-        if (deduped.has(key)) {
-          continue;
-        }
-        deduped.set(key, trimmed);
-      }
-      return Array.from(deduped.entries())
-        .sort((a, b) => {
-          if (a[0] === b[0]) {
-            return a[1].localeCompare(b[1]);
-          }
-          return a[0].localeCompare(b[0]);
-        })
-        .map((entry) => entry[1]);
-    }
-
     function groupAlias(groupNames) {
       return groupNames.length > 0 ? groupNames[0] : "";
+    }
+
+    function normalizeSourceIDs(raw) {
+      if (!Array.isArray(raw)) {
+        return [];
+      }
+      return raw.map(Number).filter((v) => Number.isFinite(v) && v > 0);
     }
 
     function normalizeDynamicRule(raw) {
@@ -500,6 +472,7 @@
         enabled: Boolean(rule.enabled),
         group_name: groupAlias(groupNames),
         group_names: groupNames,
+        source_ids: normalizeSourceIDs(rule.source_ids),
         search_query: String(rule.search_query || "").trim(),
         search_regex: Boolean(rule.search_regex),
       };
@@ -511,59 +484,10 @@
         enabled: Boolean(dynamicEnabledEl.checked),
         group_name: groupAlias(groupNames),
         group_names: groupNames,
+        source_ids: normalizeSourceIDs(state.dynamicSourceIds),
         search_query: dynamicQueryEl.value.trim(),
         search_regex: Boolean(dynamicSearchRegexEl.checked),
       };
-    }
-
-    async function loadPagedCollection(path, key, pageLimit) {
-      const items = [];
-      let offset = 0;
-      let total = -1;
-
-      while (true) {
-        const params = new URLSearchParams({
-          limit: String(pageLimit),
-          offset: String(offset),
-        });
-        const separator = path.includes("?") ? "&" : "?";
-        const data = await api(`${path}${separator}${params.toString()}`);
-        const page = Array.isArray(data?.[key]) ? data[key] : [];
-        const reportedTotal = Number(data?.total);
-        if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
-          total = reportedTotal;
-        }
-
-        items.push(...page);
-        if (page.length === 0) {
-          break;
-        }
-
-        const reportedLimit = Number(data?.limit);
-        const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
-        if (step <= 0) {
-          break;
-        }
-        offset += step;
-
-        if (total >= 0 && offset >= total) {
-          break;
-        }
-      }
-
-      return items;
-    }
-
-    function normalizeGroupName(raw) {
-      if (raw && typeof raw === "object") {
-        if (typeof raw.name === "string") {
-          return raw.name.trim();
-        }
-        if (typeof raw.Name === "string") {
-          return raw.Name.trim();
-        }
-      }
-      return "";
     }
 
     function renderDynamicGroupOptions() {
@@ -576,15 +500,118 @@
       }
     }
 
+    function catalogGroupsURL() {
+      const params = new URLSearchParams();
+      params.set("include_counts", "0");
+      if (state.dynamicSourceIds.length > 0) {
+        params.set("source_ids", state.dynamicSourceIds.join(","));
+      }
+      return `/api/groups?${params.toString()}`;
+    }
+
     async function loadCatalogGroups() {
       try {
-        const groups = await loadPagedCollection("/api/groups?include_counts=0", "groups", 200);
+        const groups = await loadPagedCollection(catalogGroupsURL(), "groups", 200);
         state.catalogGroups = groups.map(normalizeGroupName).filter((name) => name.length > 0);
       } catch (err) {
         console.warn("unable to load catalog groups for dynamic rule autocomplete", err);
         state.catalogGroups = [];
       }
       renderDynamicGroupOptions();
+    }
+
+    async function loadPlaylistSources() {
+      try {
+        const data = await api("/api/admin/playlist-sources");
+        state.playlistSources = data.playlist_sources || [];
+      } catch (err) {
+        console.warn("unable to load playlist sources", err);
+        state.playlistSources = [];
+      }
+    }
+
+    function sourceNameByID(sourceID) {
+      const src = state.playlistSources.find((s) => s.source_id === sourceID);
+      return src ? src.name : `Source #${sourceID}`;
+    }
+
+    function renderDynamicSourceChips() {
+      dynamicSourceChipsEl.innerHTML = "";
+      if (state.dynamicSourceIds.length === 0) {
+        const hint = document.createElement("div");
+        hint.className = "empty";
+        hint.textContent = "All sources selected.";
+        dynamicSourceChipsEl.appendChild(hint);
+        return;
+      }
+
+      for (const sourceID of state.dynamicSourceIds) {
+        const chip = document.createElement("div");
+        chip.className = "source-chip";
+
+        const label = document.createElement("span");
+        label.textContent = sourceNameByID(sourceID);
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "x";
+        removeBtn.setAttribute("aria-label", `Remove ${sourceNameByID(sourceID)}`);
+        removeBtn.addEventListener("click", () => {
+          state.dynamicSourceIds = state.dynamicSourceIds.filter((id) => id !== sourceID);
+          renderDynamicSourceChips();
+          renderDynamicSourceDropdown();
+          onSourceFilterChanged();
+        });
+
+        chip.append(label, removeBtn);
+        dynamicSourceChipsEl.appendChild(chip);
+      }
+    }
+
+    function renderDynamicSourceDropdown() {
+      dynamicSourceDropdownEl.innerHTML = "";
+      for (const src of state.playlistSources) {
+        const lbl = document.createElement("label");
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.checked = state.dynamicSourceIds.includes(src.source_id);
+        cb.addEventListener("change", () => {
+          if (cb.checked) {
+            if (!state.dynamicSourceIds.includes(src.source_id)) {
+              state.dynamicSourceIds = normalizeSourceIDs([...state.dynamicSourceIds, src.source_id]);
+            }
+          } else {
+            state.dynamicSourceIds = state.dynamicSourceIds.filter((id) => id !== src.source_id);
+          }
+          renderDynamicSourceChips();
+          onSourceFilterChanged();
+        });
+
+        const span = document.createElement("span");
+        span.textContent = src.name;
+        lbl.append(cb, span);
+        dynamicSourceDropdownEl.appendChild(lbl);
+      }
+
+      dynamicSourceToggleBtn.textContent = state.dynamicSourceIds.length > 0
+        ? `Sources (${state.dynamicSourceIds.length} selected)`
+        : "Select Sources";
+    }
+
+    function toggleSourceDropdown() {
+      dynamicSourceDropdownEl.hidden = !dynamicSourceDropdownEl.hidden;
+    }
+
+    function clearDynamicSources() {
+      state.dynamicSourceIds = [];
+      renderDynamicSourceChips();
+      renderDynamicSourceDropdown();
+      onSourceFilterChanged();
+    }
+
+    function onSourceFilterChanged() {
+      renderDynamicRuleHint(dynamicRuleFromForm());
+      loadCatalogGroups().catch(handleError);
     }
 
     function renderDynamicGroupChips() {
@@ -651,11 +678,14 @@
       const groupSummary = dynamicRule.group_names.length > 0
         ? dynamicRule.group_names.join(", ")
         : "all groups";
+      const sourceSummary = dynamicRule.source_ids.length > 0
+        ? dynamicRule.source_ids.map(sourceNameByID).join(", ")
+        : "all sources";
       if (dynamicRule.search_regex) {
-        dynamicRuleHintEl.textContent = `Dynamic mode enabled. Playlist sync follows groups [${groupSummary}] and regex pattern "${dynamicRule.search_query}" against full item names.`;
+        dynamicRuleHintEl.textContent = `Dynamic mode enabled. Playlist sync follows sources [${sourceSummary}], groups [${groupSummary}] and regex pattern "${dynamicRule.search_query}" against full item names.`;
         return;
       }
-      dynamicRuleHintEl.textContent = `Dynamic mode enabled. Playlist sync follows groups [${groupSummary}] and search "${dynamicRule.search_query}" using token mode (supports |/OR disjuncts plus -term/!term exclusions; no OR keeps legacy AND behavior).`;
+      dynamicRuleHintEl.textContent = `Dynamic mode enabled. Playlist sync follows sources [${sourceSummary}], groups [${groupSummary}] and search "${dynamicRule.search_query}" using token mode (supports |/OR disjuncts plus -term/!term exclusions; no OR keeps legacy AND behavior).`;
     }
 
     function renderDynamicRuleWarning(rule, searchWarning) {
@@ -683,8 +713,11 @@
       dynamicEnabledEl.checked = dynamicRule.enabled;
       state.dynamicSearchRegex = Boolean(dynamicRule.search_regex);
       state.dynamicGroupNames = normalizeGroupNameList(dynamicRule.group_names);
+      state.dynamicSourceIds = normalizeSourceIDs(dynamicRule.source_ids);
       renderDynamicGroupChips();
       renderDynamicGroupOptions();
+      renderDynamicSourceChips();
+      renderDynamicSourceDropdown();
       dynamicQueryEl.value = dynamicRule.search_query;
       dynamicSearchRegexEl.checked = state.dynamicSearchRegex;
       renderDynamicRuleWarning(dynamicRule, state.channel.search_warning);
@@ -747,6 +780,12 @@
         const title = document.createElement("div");
         title.className = "source-title";
         title.textContent = `Source #${src.source_id} | P${src.priority_index} | ${src.item_key}`;
+        if (src.playlist_source_name) {
+          const badge = document.createElement("span");
+          badge.className = "source-badge";
+          badge.textContent = src.playlist_source_name;
+          title.append(" ", badge);
+        }
 
         const meta = document.createElement("div");
         meta.className = "source-meta";
@@ -802,6 +841,7 @@
     }
 
     async function loadAll() {
+      await loadPlaylistSources();
       await Promise.all([loadCatalogGroups(), loadChannel()]);
       await loadSources();
     }
@@ -986,6 +1026,14 @@
 
     document.getElementById("dynamic-group-clear").addEventListener("click", () => {
       clearDynamicGroups();
+    });
+
+    dynamicSourceToggleBtn.addEventListener("click", () => {
+      toggleSourceDropdown();
+    });
+
+    document.getElementById("dynamic-source-clear").addEventListener("click", () => {
+      clearDynamicSources();
     });
 
     loadAll().catch(handleError);

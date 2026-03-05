@@ -265,14 +265,14 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog">Catalog</a>
       <a href="/ui/channels">Channels</a>
       <a href="/ui/merge">Merge Suggestions</a>
       <a href="/ui/tuners">Tuners</a>
-      <a href="/ui/dvr" class="active">DVR</a>
-      <a href="/ui/automation">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr" class="active">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation">Automation</a>{{end}}
     </nav>
   </header>
 
@@ -468,37 +468,8 @@
     const warningsEl = document.getElementById("warnings");
     const patchPreviewEl = document.getElementById("patch-preview");
 
-    function showStatus(message, kind = "info") {
-      statusEl.hidden = false;
-      statusEl.classList.remove("error", "ok");
-      if (kind === "error") {
-        statusEl.classList.add("error");
-      }
-      if (kind === "ok") {
-        statusEl.classList.add("ok");
-      }
-      statusEl.textContent = message;
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 4500);
-    }
-
-    async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `request failed (${resp.status})`);
-      }
-      if (resp.status === 204) {
-        return null;
-      }
-      return resp.json();
-    }
+    {{template "shared-js-show-status"}}
+    {{template "shared-js-api"}}
 
     function toLocalTime(epochSec) {
       if (!Number.isFinite(epochSec) || epochSec <= 0) {

@@ -12,6 +12,7 @@ import (
 
 	"github.com/arodd/hdhriptv/internal/analyzer"
 	"github.com/arodd/hdhriptv/internal/jobs"
+	"github.com/arodd/hdhriptv/internal/playlist"
 	"github.com/arodd/hdhriptv/internal/scheduler"
 	"github.com/arodd/hdhriptv/internal/store/sqlite"
 )
@@ -21,6 +22,12 @@ type AutomationSettingsStore interface {
 	GetSetting(ctx context.Context, key string) (string, error)
 	SetSettings(ctx context.Context, values map[string]string) error
 	DeleteAllStreamMetrics(ctx context.Context) (int64, error)
+	GetPlaylistSource(ctx context.Context, sourceID int64) (playlist.PlaylistSource, error)
+	ListPlaylistSources(ctx context.Context) ([]playlist.PlaylistSource, error)
+	CreatePlaylistSource(ctx context.Context, create playlist.PlaylistSourceCreate) (playlist.PlaylistSource, error)
+	UpdatePlaylistSource(ctx context.Context, sourceID int64, update playlist.PlaylistSourceUpdate) (playlist.PlaylistSource, error)
+	BulkUpdatePlaylistSources(ctx context.Context, updates []playlist.PlaylistSourceBulkUpdate) error
+	DeletePlaylistSource(ctx context.Context, sourceID int64) error
 }
 
 // AutomationScheduler manages schedule state and runtime updates.
@@ -71,11 +78,12 @@ func (d AutomationDeps) validate() error {
 }
 
 type automationStateResponse struct {
-	PlaylistURL    string                     `json:"playlist_url"`
-	Timezone       string                     `json:"timezone"`
-	PlaylistSync   automationScheduleState    `json:"playlist_sync"`
-	AutoPrioritize automationScheduleState    `json:"auto_prioritize"`
-	Analyzer       automationAnalyzerSettings `json:"analyzer"`
+	PlaylistURL     string                     `json:"playlist_url"`
+	PlaylistSources []playlistSourceResponse   `json:"playlist_sources"`
+	Timezone        string                     `json:"timezone"`
+	PlaylistSync    automationScheduleState    `json:"playlist_sync"`
+	AutoPrioritize  automationScheduleState    `json:"auto_prioritize"`
+	Analyzer        automationAnalyzerSettings `json:"analyzer"`
 }
 
 type automationScheduleState struct {
@@ -95,6 +103,56 @@ type automationAnalyzerSettings struct {
 	TopNPerChannel    int    `json:"top_n_per_channel"`
 }
 
+type playlistSourceResponse struct {
+	SourceID    int64  `json:"source_id"`
+	SourceKey   string `json:"source_key"`
+	Name        string `json:"name"`
+	PlaylistURL string `json:"playlist_url"`
+	TunerCount  int    `json:"tuner_count"`
+	Enabled     bool   `json:"enabled"`
+	OrderIndex  int    `json:"order_index"`
+	CreatedAt   int64  `json:"created_at"`
+	UpdatedAt   int64  `json:"updated_at"`
+}
+
+type playlistSourceUpsertRequest struct {
+	SourceID    *int64 `json:"source_id,omitempty"`
+	Name        string `json:"name"`
+	PlaylistURL string `json:"playlist_url"`
+	TunerCount  int    `json:"tuner_count"`
+	Enabled     *bool  `json:"enabled,omitempty"`
+}
+
+type normalizedPlaylistSourceUpsert struct {
+	SourceID    int64
+	Name        string
+	PlaylistURL string
+	TunerCount  int
+	Enabled     bool
+}
+
+func playlistSourceResponseFromModel(source playlist.PlaylistSource) playlistSourceResponse {
+	return playlistSourceResponse{
+		SourceID:    source.SourceID,
+		SourceKey:   source.SourceKey,
+		Name:        source.Name,
+		PlaylistURL: source.PlaylistURL,
+		TunerCount:  source.TunerCount,
+		Enabled:     source.Enabled,
+		OrderIndex:  source.OrderIndex,
+		CreatedAt:   source.CreatedAt,
+		UpdatedAt:   source.UpdatedAt,
+	}
+}
+
+func playlistSourceResponsesFromModels(sources []playlist.PlaylistSource) []playlistSourceResponse {
+	out := make([]playlistSourceResponse, 0, len(sources))
+	for _, source := range sources {
+		out = append(out, playlistSourceResponseFromModel(source))
+	}
+	return out
+}
+
 func (h *AdminHandler) handleGetAutomation(w http.ResponseWriter, r *http.Request) {
 	payload, err := h.automationState(r.Context())
 	if err != nil {
@@ -106,8 +164,9 @@ func (h *AdminHandler) handleGetAutomation(w http.ResponseWriter, r *http.Reques
 
 func (h *AdminHandler) handlePutAutomation(w http.ResponseWriter, r *http.Request) {
 	var req struct {
-		PlaylistURL *string `json:"playlist_url"`
-		Timezone    *string `json:"timezone"`
+		PlaylistURL     *string                        `json:"playlist_url"`
+		PlaylistSources *[]playlistSourceUpsertRequest `json:"playlist_sources"`
+		Timezone        *string                        `json:"timezone"`
 
 		PlaylistSync *struct {
 			Enabled  *bool   `json:"enabled"`
@@ -185,10 +244,21 @@ func (h *AdminHandler) handlePutAutomation(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
-	settingsUpdates := map[string]string{}
-	if req.PlaylistURL != nil {
-		settingsUpdates[sqlite.SettingPlaylistURL] = strings.TrimSpace(*req.PlaylistURL)
+	var playlistSourceUpserts []normalizedPlaylistSourceUpsert
+	playlistSourcesUpdated := false
+	playlistURLUpdated := false
+	if req.PlaylistSources != nil {
+		playlistSourceUpserts, err = h.normalizeAutomationPlaylistSourceUpserts(r.Context(), *req.PlaylistSources, req.PlaylistURL)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		playlistSourcesUpdated = true
+	} else if req.PlaylistURL != nil {
+		playlistURLUpdated = true
 	}
+
+	settingsUpdates := map[string]string{}
 	if req.Analyzer != nil {
 		if req.Analyzer.ProbeTimeoutMS != nil {
 			if *req.Analyzer.ProbeTimeoutMS <= 0 {
@@ -244,10 +314,12 @@ func (h *AdminHandler) handlePutAutomation(w http.ResponseWriter, r *http.Reques
 	timezoneValue := ""
 	if req.Timezone != nil {
 		timezoneValue = strings.TrimSpace(*req.Timezone)
-		if timezoneValue == "" {
-			http.Error(w, "timezone is required", http.StatusBadRequest)
+		normalizedTimezone, timezoneErr := scheduler.ValidateTimezone(timezoneValue)
+		if timezoneErr != nil {
+			http.Error(w, timezoneErr.Error(), http.StatusBadRequest)
 			return
 		}
+		timezoneValue = normalizedTimezone
 		timezoneUpdated = true
 		settingsUpdates[sqlite.SettingJobsTimezone] = timezoneValue
 	}
@@ -262,7 +334,7 @@ func (h *AdminHandler) handlePutAutomation(w http.ResponseWriter, r *http.Reques
 
 	schedulerSettingsUpdated := timezoneUpdated || playlistUpdate.apply || autoUpdate.apply
 	mutationCtx := r.Context()
-	if len(settingsUpdates) > 0 {
+	if len(settingsUpdates) > 0 || playlistSourcesUpdated || playlistURLUpdated {
 		var cancelMutation context.CancelFunc
 		mutationCtx, cancelMutation = h.detachedAutomationMutationContext(r.Context())
 		defer cancelMutation()
@@ -299,11 +371,50 @@ func (h *AdminHandler) handlePutAutomation(w http.ResponseWriter, r *http.Reques
 		}
 	}
 
+	if playlistSourcesUpdated {
+		if err := h.applyAutomationPlaylistSourceUpserts(mutationCtx, playlistSourceUpserts); err != nil {
+			writePlaylistSourceMutationError(w, err, "update playlist_sources")
+			return
+		}
+		if err := h.reloadPlaylistSourceRuntime(mutationCtx); err != nil {
+			writePlaylistSourceRuntimeApplyError(
+				w,
+				"update_playlist_sources",
+				err,
+				map[string]any{"source_ids": playlistSourceIDsFromNormalizedUpserts(playlistSourceUpserts)},
+			)
+			return
+		}
+		playlistURLUpdated = true
+	} else if req.PlaylistURL != nil {
+		playlistURL := strings.TrimSpace(*req.PlaylistURL)
+		update := playlist.PlaylistSourceUpdate{
+			PlaylistURL: &playlistURL,
+		}
+		if _, err := h.automation.Settings.UpdatePlaylistSource(mutationCtx, 1, update); err != nil {
+			writePlaylistSourceMutationError(w, err, "update playlist_url")
+			return
+		}
+	}
+
 	if timezoneUpdated {
 		h.logAdminMutation(
 			r,
 			"admin automation timezone updated",
 			"timezone", timezoneValue,
+		)
+	}
+
+	if playlistSourcesUpdated {
+		h.logAdminMutation(
+			r,
+			"admin automation playlist sources updated",
+			"source_count", len(playlistSourceUpserts),
+		)
+	} else if playlistURLUpdated {
+		h.logAdminMutation(
+			r,
+			"admin automation playlist url updated",
 		)
 	}
 
@@ -346,18 +457,429 @@ func (h *AdminHandler) handlePutAutomation(w http.ResponseWriter, r *http.Reques
 		"admin automation updated",
 		"playlist_schedule_updated", playlistUpdate.apply,
 		"auto_prioritize_schedule_updated", autoUpdate.apply,
+		"playlist_sources_updated", playlistSourcesUpdated,
+		"playlist_url_updated", playlistURLUpdated,
 		"settings_updated", len(settingKeys),
 		"timezone_updated", timezoneUpdated,
 	)
 	writeJSON(w, http.StatusOK, payload)
 }
 
+func (h *AdminHandler) handleListPlaylistSources(w http.ResponseWriter, r *http.Request) {
+	sources, err := h.automation.Settings.ListPlaylistSources(r.Context())
+	if err != nil {
+		http.Error(w, fmt.Sprintf("list playlist sources: %v", err), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"playlist_sources": playlistSourceResponsesFromModels(sources),
+	})
+}
+
+func (h *AdminHandler) handleGetPlaylistSource(w http.ResponseWriter, r *http.Request) {
+	sourceID, err := parsePathInt64(r, "sourceID")
+	if err != nil {
+		http.Error(w, "invalid source id", http.StatusBadRequest)
+		return
+	}
+
+	source, err := h.automation.Settings.GetPlaylistSource(r.Context(), sourceID)
+	if err != nil {
+		writePlaylistSourceMutationError(w, err, fmt.Sprintf("get playlist source %d", sourceID))
+		return
+	}
+	writeJSON(w, http.StatusOK, playlistSourceResponseFromModel(source))
+}
+
+func (h *AdminHandler) handleCreatePlaylistSource(w http.ResponseWriter, r *http.Request) {
+	var req playlistSourceUpsertRequest
+	if err := h.decodeJSON(w, r, &req); err != nil {
+		writeJSONDecodeError(w, err)
+		return
+	}
+	if req.SourceID != nil {
+		http.Error(w, "source_id is not allowed in create payload", http.StatusBadRequest)
+		return
+	}
+
+	create := playlist.PlaylistSourceCreate{
+		Name:        strings.TrimSpace(req.Name),
+		PlaylistURL: strings.TrimSpace(req.PlaylistURL),
+		TunerCount:  req.TunerCount,
+		Enabled:     req.Enabled,
+	}
+	mutationCtx, cancelMutation := h.detachedAutomationMutationContext(r.Context())
+	defer cancelMutation()
+
+	source, err := h.automation.Settings.CreatePlaylistSource(mutationCtx, create)
+	if err != nil {
+		writePlaylistSourceMutationError(w, err, "create playlist source")
+		return
+	}
+	if err := h.reloadPlaylistSourceRuntime(mutationCtx); err != nil {
+		writePlaylistSourceRuntimeApplyError(
+			w,
+			"create_playlist_source",
+			err,
+			map[string]any{"source_id": source.SourceID},
+		)
+		return
+	}
+
+	h.logAdminMutation(
+		r,
+		"admin playlist source created",
+		"source_id", source.SourceID,
+		"name", source.Name,
+		"enabled", source.Enabled,
+		"tuner_count", source.TunerCount,
+	)
+	writeJSON(w, http.StatusCreated, playlistSourceResponseFromModel(source))
+}
+
+func (h *AdminHandler) handleUpdatePlaylistSource(w http.ResponseWriter, r *http.Request) {
+	sourceID, err := parsePathInt64(r, "sourceID")
+	if err != nil {
+		http.Error(w, "invalid source id", http.StatusBadRequest)
+		return
+	}
+
+	var req struct {
+		Name        *string `json:"name"`
+		PlaylistURL *string `json:"playlist_url"`
+		TunerCount  *int    `json:"tuner_count"`
+		Enabled     *bool   `json:"enabled"`
+	}
+	if err := h.decodeJSON(w, r, &req); err != nil {
+		writeJSONDecodeError(w, err)
+		return
+	}
+	if req.Name == nil && req.PlaylistURL == nil && req.TunerCount == nil && req.Enabled == nil {
+		http.Error(w, "at least one field is required", http.StatusBadRequest)
+		return
+	}
+
+	update := playlist.PlaylistSourceUpdate{
+		Name:        req.Name,
+		PlaylistURL: req.PlaylistURL,
+		TunerCount:  req.TunerCount,
+		Enabled:     req.Enabled,
+	}
+	mutationCtx, cancelMutation := h.detachedAutomationMutationContext(r.Context())
+	defer cancelMutation()
+
+	source, err := h.automation.Settings.UpdatePlaylistSource(mutationCtx, sourceID, update)
+	if err != nil {
+		writePlaylistSourceMutationError(w, err, fmt.Sprintf("update playlist source %d", sourceID))
+		return
+	}
+	if err := h.reloadPlaylistSourceRuntime(mutationCtx); err != nil {
+		writePlaylistSourceRuntimeApplyError(
+			w,
+			"update_playlist_source",
+			err,
+			map[string]any{"source_id": sourceID},
+		)
+		return
+	}
+
+	h.logAdminMutation(
+		r,
+		"admin playlist source updated",
+		"source_id", source.SourceID,
+		"name", source.Name,
+		"enabled", source.Enabled,
+		"tuner_count", source.TunerCount,
+	)
+	writeJSON(w, http.StatusOK, playlistSourceResponseFromModel(source))
+}
+
+func (h *AdminHandler) handleDeletePlaylistSource(w http.ResponseWriter, r *http.Request) {
+	sourceID, err := parsePathInt64(r, "sourceID")
+	if err != nil {
+		http.Error(w, "invalid source id", http.StatusBadRequest)
+		return
+	}
+
+	mutationCtx, cancelMutation := h.detachedAutomationMutationContext(r.Context())
+	defer cancelMutation()
+
+	if err := h.automation.Settings.DeletePlaylistSource(mutationCtx, sourceID); err != nil {
+		writePlaylistSourceMutationError(w, err, fmt.Sprintf("delete playlist source %d", sourceID))
+		return
+	}
+	if err := h.reloadPlaylistSourceRuntime(mutationCtx); err != nil {
+		writePlaylistSourceRuntimeApplyError(
+			w,
+			"delete_playlist_source",
+			err,
+			map[string]any{"source_id": sourceID},
+		)
+		return
+	}
+
+	h.logAdminMutation(
+		r,
+		"admin playlist source deleted",
+		"source_id", sourceID,
+	)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"deleted":   true,
+		"source_id": sourceID,
+	})
+}
+
+func (h *AdminHandler) normalizeAutomationPlaylistSourceUpserts(
+	ctx context.Context,
+	reqSources []playlistSourceUpsertRequest,
+	legacyPlaylistURL *string,
+) ([]normalizedPlaylistSourceUpsert, error) {
+	if len(reqSources) == 0 {
+		return nil, fmt.Errorf("playlist_sources must include at least one source")
+	}
+
+	existingSources, err := h.automation.Settings.ListPlaylistSources(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list playlist sources: %w", err)
+	}
+	if len(existingSources) == 0 {
+		return nil, fmt.Errorf("no playlist sources are configured")
+	}
+	if len(reqSources) != len(existingSources) {
+		return nil, fmt.Errorf("playlist_sources must include all existing sources; use /api/admin/playlist-sources CRUD endpoints for add/remove")
+	}
+
+	existingByID := make(map[int64]playlist.PlaylistSource, len(existingSources))
+	for _, source := range existingSources {
+		existingByID[source.SourceID] = source
+	}
+
+	out := make([]normalizedPlaylistSourceUpsert, 0, len(reqSources))
+	seenIDs := make(map[int64]struct{}, len(reqSources))
+	seenNames := make(map[string]int, len(reqSources))
+	seenURLs := make(map[string]int, len(reqSources))
+	enabledCount := 0
+
+	for i, reqSource := range reqSources {
+		if reqSource.SourceID == nil {
+			return nil, fmt.Errorf("playlist_sources[%d].source_id is required", i)
+		}
+		sourceID := *reqSource.SourceID
+		if sourceID <= 0 {
+			return nil, fmt.Errorf("playlist_sources[%d].source_id must be a positive integer", i)
+		}
+		if _, exists := seenIDs[sourceID]; exists {
+			return nil, fmt.Errorf("playlist_sources contains duplicate source_id %d", sourceID)
+		}
+		existing, ok := existingByID[sourceID]
+		if !ok {
+			return nil, fmt.Errorf("playlist_sources[%d].source_id=%d not found", i, sourceID)
+		}
+		if expectedSourceID := existingSources[i].SourceID; sourceID != expectedSourceID {
+			return nil, fmt.Errorf(
+				"playlist_sources[%d].source_id must be %d to preserve existing source order (got %d)",
+				i,
+				expectedSourceID,
+				sourceID,
+			)
+		}
+		seenIDs[sourceID] = struct{}{}
+
+		name := strings.TrimSpace(reqSource.Name)
+		if name == "" {
+			return nil, fmt.Errorf("playlist_sources[%d].name is required", i)
+		}
+		playlistURL := playlist.CanonicalPlaylistSourceURL(reqSource.PlaylistURL)
+		if playlistURL == "" && sourceID != 1 {
+			return nil, fmt.Errorf("playlist_sources[%d].playlist_url is required", i)
+		}
+		if reqSource.TunerCount < 1 {
+			return nil, fmt.Errorf("playlist_sources[%d].tuner_count must be at least 1", i)
+		}
+
+		nameKey := playlist.CanonicalPlaylistSourceName(name)
+		if prev, exists := seenNames[nameKey]; exists {
+			return nil, fmt.Errorf("playlist_sources[%d].name duplicates playlist_sources[%d].name", i, prev)
+		}
+		seenNames[nameKey] = i
+
+		urlKey := playlist.CanonicalPlaylistSourceURL(playlistURL)
+		if prev, exists := seenURLs[urlKey]; exists {
+			return nil, fmt.Errorf("playlist_sources[%d].playlist_url duplicates playlist_sources[%d].playlist_url", i, prev)
+		}
+		seenURLs[urlKey] = i
+
+		enabled := existing.Enabled
+		if reqSource.Enabled != nil {
+			enabled = *reqSource.Enabled
+		}
+		if enabled {
+			enabledCount++
+		}
+
+		out = append(out, normalizedPlaylistSourceUpsert{
+			SourceID:    sourceID,
+			Name:        name,
+			PlaylistURL: playlistURL,
+			TunerCount:  reqSource.TunerCount,
+			Enabled:     enabled,
+		})
+	}
+
+	if _, ok := seenIDs[1]; !ok {
+		return nil, playlist.ErrPrimaryPlaylistSourceOrderChange
+	}
+	if enabledCount == 0 {
+		return nil, playlist.ErrNoEnabledPlaylistSources
+	}
+
+	if legacyPlaylistURL != nil {
+		legacyURL := playlist.CanonicalPlaylistSourceURL(*legacyPlaylistURL)
+		primaryURL := ""
+		for _, source := range out {
+			if source.SourceID == 1 {
+				primaryURL = source.PlaylistURL
+				break
+			}
+		}
+		if legacyURL != primaryURL {
+			return nil, fmt.Errorf("playlist_url must match playlist_sources primary source URL")
+		}
+	}
+
+	return out, nil
+}
+
+func (h *AdminHandler) applyAutomationPlaylistSourceUpserts(ctx context.Context, upserts []normalizedPlaylistSourceUpsert) error {
+	if len(upserts) == 0 {
+		return nil
+	}
+
+	updates := make([]playlist.PlaylistSourceBulkUpdate, 0, len(upserts))
+	for _, upsert := range upserts {
+		updates = append(updates, playlist.PlaylistSourceBulkUpdate{
+			SourceID:    upsert.SourceID,
+			Name:        upsert.Name,
+			PlaylistURL: upsert.PlaylistURL,
+			TunerCount:  upsert.TunerCount,
+			Enabled:     upsert.Enabled,
+		})
+	}
+	return h.automation.Settings.BulkUpdatePlaylistSources(ctx, updates)
+}
+
+func playlistSourceIDsFromNormalizedUpserts(upserts []normalizedPlaylistSourceUpsert) []int64 {
+	if len(upserts) == 0 {
+		return nil
+	}
+	ids := make([]int64, 0, len(upserts))
+	for _, upsert := range upserts {
+		if upsert.SourceID <= 0 {
+			continue
+		}
+		ids = append(ids, upsert.SourceID)
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	return ids
+}
+
+func (h *AdminHandler) reloadPlaylistSourceRuntime(ctx context.Context) error {
+	if h == nil || h.playlistSourceRuntime == nil {
+		return nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	return h.playlistSourceRuntime.ReloadPlaylistSources(ctx)
+}
+
+func writePlaylistSourceMutationError(w http.ResponseWriter, err error, action string) {
+	switch {
+	case errors.Is(err, playlist.ErrPlaylistSourceNotFound), errors.Is(err, sql.ErrNoRows):
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	case errors.Is(err, playlist.ErrPlaylistSourceOrderDrift):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case errors.Is(err, playlist.ErrPrimaryPlaylistSourceDelete),
+		errors.Is(err, playlist.ErrPrimaryPlaylistSourceOrderChange),
+		errors.Is(err, playlist.ErrNoEnabledPlaylistSources):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	message := strings.ToLower(strings.TrimSpace(err.Error()))
+	if isInputError(err) || strings.Contains(message, "already exists") {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	http.Error(w, fmt.Sprintf("%s: %v", action, err), http.StatusInternalServerError)
+}
+
+func writePlaylistSourceRuntimeApplyError(w http.ResponseWriter, operation string, runtimeErr error, extras map[string]any) {
+	payload := map[string]any{
+		"error":           "playlist_source_runtime_apply_failed",
+		"message":         "playlist source mutation persisted but runtime source reload failed",
+		"operation":       strings.TrimSpace(operation),
+		"persisted":       true,
+		"runtime_applied": false,
+		"consistency":     "eventual",
+	}
+	detail := ""
+	if runtimeErr != nil {
+		detail = strings.TrimSpace(runtimeErr.Error())
+	}
+	if detail != "" {
+		payload["runtime_error"] = detail
+	}
+	for key, value := range extras {
+		trimmed := strings.TrimSpace(key)
+		if trimmed == "" {
+			continue
+		}
+		payload[trimmed] = value
+	}
+	writeJSON(w, http.StatusInternalServerError, payload)
+}
+
 func (h *AdminHandler) handleRunPlaylistSync(w http.ResponseWriter, r *http.Request) {
-	h.startJobRun(w, r, jobs.JobPlaylistSync)
+	sourceID, sourceScope, err := parsePlaylistSyncSourceIDQueryParam(r.URL.Query().Get("source_id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	runCtx := context.WithoutCancel(r.Context())
+	responseExtras := map[string]any{}
+	logExtras := make([]any, 0, 2)
+
+	if sourceScope {
+		source, err := h.automation.Settings.GetPlaylistSource(r.Context(), sourceID)
+		if err != nil {
+			if errors.Is(err, playlist.ErrPlaylistSourceNotFound) || errors.Is(err, sql.ErrNoRows) {
+				http.Error(w, "playlist source not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, fmt.Sprintf("get playlist source %d: %v", sourceID, err), http.StatusInternalServerError)
+			return
+		}
+		if !source.Enabled {
+			http.Error(w, fmt.Sprintf("playlist source %d is disabled", sourceID), http.StatusBadRequest)
+			return
+		}
+
+		runCtx = jobs.WithPlaylistSyncSourceID(runCtx, sourceID)
+		responseExtras["source_id"] = sourceID
+		logExtras = append(logExtras, "source_id", sourceID)
+	}
+
+	h.startJobRunWithContext(w, r, runCtx, jobs.JobPlaylistSync, logExtras, responseExtras)
 }
 
 func (h *AdminHandler) handleRunAutoPrioritize(w http.ResponseWriter, r *http.Request) {
-	h.startJobRun(w, r, jobs.JobAutoPrioritize)
+	h.startJobRunWithContext(w, r, context.WithoutCancel(r.Context()), jobs.JobAutoPrioritize, nil, nil)
 }
 
 func (h *AdminHandler) handleClearAutoPrioritizeCache(w http.ResponseWriter, r *http.Request) {
@@ -376,14 +898,25 @@ func (h *AdminHandler) handleClearAutoPrioritizeCache(w http.ResponseWriter, r *
 	})
 }
 
-func (h *AdminHandler) startJobRun(w http.ResponseWriter, r *http.Request, jobName string) {
+func (h *AdminHandler) startJobRunWithContext(
+	w http.ResponseWriter,
+	r *http.Request,
+	runCtx context.Context,
+	jobName string,
+	logExtras []any,
+	responseExtras map[string]any,
+) {
+	if runCtx == nil {
+		runCtx = context.WithoutCancel(r.Context())
+	}
+
 	fn := h.automation.JobFuncs[jobName]
 	if fn == nil {
 		http.Error(w, fmt.Sprintf("job %q is not configured", jobName), http.StatusInternalServerError)
 		return
 	}
 
-	runID, err := h.automation.Runner.Start(context.WithoutCancel(r.Context()), jobName, jobs.TriggerManual, fn)
+	runID, err := h.automation.Runner.Start(runCtx, jobName, jobs.TriggerManual, fn)
 	if err != nil {
 		if errors.Is(err, jobs.ErrAlreadyRunning) {
 			http.Error(w, fmt.Sprintf("job %q is already running", jobName), http.StatusConflict)
@@ -396,18 +929,24 @@ func (h *AdminHandler) startJobRun(w http.ResponseWriter, r *http.Request, jobNa
 		http.Error(w, fmt.Sprintf("start job %q: %v", jobName, err), http.StatusInternalServerError)
 		return
 	}
-	h.logAdminMutation(
-		r,
-		"admin manual job run started",
+	logFields := []any{
 		"job_name", jobName,
 		"run_id", runID,
 		"triggered_by", jobs.TriggerManual,
-	)
+	}
+	if len(logExtras) > 0 {
+		logFields = append(logFields, logExtras...)
+	}
+	h.logAdminMutation(r, "admin manual job run started", logFields...)
 
-	writeJSON(w, http.StatusAccepted, map[string]any{
+	payload := map[string]any{
 		"run_id": runID,
 		"status": "queued",
-	})
+	}
+	for key, value := range responseExtras {
+		payload[key] = value
+	}
+	writeJSON(w, http.StatusAccepted, payload)
 }
 
 func (h *AdminHandler) handleGetJobRun(w http.ResponseWriter, r *http.Request) {
@@ -474,9 +1013,25 @@ func (h *AdminHandler) automationState(ctx context.Context) (automationStateResp
 		scheduleByName[schedule.JobName] = schedule
 	}
 
-	playlistURL, err := h.settingOrDefault(ctx, sqlite.SettingPlaylistURL, "")
+	playlistSources, err := h.automation.Settings.ListPlaylistSources(ctx)
 	if err != nil {
 		return automationStateResponse{}, err
+	}
+	playlistURL := ""
+	for _, source := range playlistSources {
+		if source.SourceID == 1 {
+			playlistURL = strings.TrimSpace(source.PlaylistURL)
+			break
+		}
+	}
+	if playlistURL == "" && len(playlistSources) > 0 {
+		playlistURL = strings.TrimSpace(playlistSources[0].PlaylistURL)
+	}
+	if playlistURL == "" {
+		playlistURL, err = h.settingOrDefault(ctx, sqlite.SettingPlaylistURL, "")
+		if err != nil {
+			return automationStateResponse{}, err
+		}
 	}
 
 	probeTimeoutMS, err := h.intSettingOrDefault(ctx, sqlite.SettingAnalyzerProbeTimeoutMS, 7000)
@@ -521,8 +1076,9 @@ func (h *AdminHandler) automationState(ctx context.Context) (automationStateResp
 	}
 
 	payload := automationStateResponse{
-		PlaylistURL: playlistURL,
-		Timezone:    h.automation.Scheduler.Timezone(),
+		PlaylistURL:     playlistURL,
+		PlaylistSources: playlistSourceResponsesFromModels(playlistSources),
+		Timezone:        h.automation.Scheduler.Timezone(),
 		PlaylistSync: automationScheduleState{
 			Enabled:  playlistSchedule.Enabled,
 			CronSpec: playlistSchedule.CronSpec,
@@ -777,6 +1333,18 @@ func parseInt64Strict(raw string) (int64, bool) {
 		return 0, false
 	}
 	return value, true
+}
+
+func parsePlaylistSyncSourceIDQueryParam(raw string) (sourceID int64, hasValue bool, err error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return 0, false, nil
+	}
+	sourceID, ok := parseInt64Strict(raw)
+	if !ok || sourceID <= 0 {
+		return 0, false, fmt.Errorf("source_id must be a positive integer")
+	}
+	return sourceID, true, nil
 }
 
 func boolToSetting(value bool) string {

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/arodd/hdhriptv/internal/logging"
@@ -56,7 +57,7 @@ type Server struct {
 	logger         *slog.Logger
 	deviceID       uint32
 	deviceAuth     string
-	tunerCount     uint8
+	tunerCount     atomic.Uint32
 	advertisedPort int
 
 	localAddrResolver   localAddrResolver
@@ -85,9 +86,6 @@ func NewServer(cfg Config) (*Server, error) {
 
 	if cfg.TunerCount < 1 {
 		return nil, errors.New("tuner-count must be at least 1")
-	}
-	if cfg.TunerCount > 255 {
-		return nil, errors.New("tuner-count must be <= 255 for discovery tag encoding")
 	}
 
 	port, err := parsePortFromAddr(cfg.HTTPAddr)
@@ -119,12 +117,11 @@ func NewServer(cfg Config) (*Server, error) {
 
 	boundHost, boundHostIsLoopback := localHostFromAddr(conn.LocalAddr())
 
-	return &Server{
+	server := &Server{
 		conn:                conn,
 		logger:              logger,
 		deviceID:            uint32(deviceID),
 		deviceAuth:          strings.TrimSpace(cfg.DeviceAuth),
-		tunerCount:          uint8(cfg.TunerCount),
 		advertisedPort:      port,
 		localAddrResolver:   dialLocalAddrForRemote,
 		interfaceAddrs:      net.InterfaceAddrs,
@@ -132,7 +129,28 @@ func NewServer(cfg Config) (*Server, error) {
 		hostCache:           make(map[string]routeHostCacheEntry),
 		boundHost:           boundHost,
 		boundHostIsLoopback: boundHostIsLoopback,
-	}, nil
+	}
+	server.SetDiscoveryAdvertisedTunerCount(cfg.TunerCount)
+	return server, nil
+}
+
+func capDiscoveryAdvertisedTunerCount(tunerCount int) int {
+	if tunerCount > 255 {
+		return 255
+	}
+	if tunerCount < 1 {
+		return 1
+	}
+	return tunerCount
+}
+
+// SetDiscoveryAdvertisedTunerCount updates the tuner count encoded into UDP
+// discovery responses. Values are capped to HDHomeRun-compatible bounds [1,255].
+func (s *Server) SetDiscoveryAdvertisedTunerCount(tunerCount int) {
+	if s == nil {
+		return
+	}
+	s.tunerCount.Store(uint32(capDiscoveryAdvertisedTunerCount(tunerCount)))
 }
 
 func (s *Server) Addr() net.Addr {
@@ -208,7 +226,7 @@ func (s *Server) handleDatagram(frame []byte, remoteAddr *net.UDPAddr) error {
 
 	respFrame, err := BuildDiscoverResponseFrame(DiscoverResponse{
 		DeviceID:   s.deviceID,
-		TunerCount: s.tunerCount,
+		TunerCount: uint8(s.tunerCount.Load()),
 		BaseURL:    baseURL,
 		LineupURL:  lineupURL,
 		DeviceAuth: s.deviceAuth,

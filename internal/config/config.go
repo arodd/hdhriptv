@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/arodd/hdhriptv/internal/playlist"
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/pflag"
 )
@@ -16,6 +17,9 @@ const (
 	streamModeDirect          = "direct"
 	streamModeFFmpegCopy      = "ffmpeg-copy"
 	streamModeFFmpegTranscode = "ffmpeg-transcode"
+
+	defaultPrimaryPlaylistSourceName = "Primary"
+	maxDiscoveryTunerAdvertisedCount = 255
 
 	defaultUPnPContentDirectoryUpdateIDCacheTTL = time.Second
 	defaultDVRLineupReloadTimeout               = 30 * time.Second
@@ -30,6 +34,9 @@ const (
 	maxCatalogSearchMaxDisjunctsLimit = 128
 	maxCatalogSearchMaxTermRunesLimit = 256
 
+	defaultPlaylistSyncSourceConcurrency = 1
+	maxPlaylistSyncSourceConcurrency     = 16
+
 	defaultRecoveryFillerText                   = "Channel recovering..."
 	defaultFFmpegStartupProbeSizeBytes          = 1_000_000
 	defaultFFmpegStartupAnalyzeDuration         = 1500 * time.Millisecond
@@ -41,6 +48,14 @@ const (
 	minFFmpegStartupProbeSizeBytes              = 128_000
 	minFFmpegStartupAnalyzeDuration             = 1 * time.Second
 )
+
+// PlaylistSourceConfig describes one resolved playlist source from startup config.
+type PlaylistSourceConfig struct {
+	Name        string
+	PlaylistURL string
+	TunerCount  int
+	Enabled     bool
+}
 
 // Config carries runtime settings from CLI flags and environment variables.
 type Config struct {
@@ -54,12 +69,16 @@ type Config struct {
 	UPnPNotifyInterval                   time.Duration
 	UPnPMaxAge                           time.Duration
 	UPnPContentDirectoryUpdateIDCacheTTL time.Duration
+	PrimaryTunerCount                    int
 	TunerCount                           int
+	PlaylistSources                      []PlaylistSourceConfig
+	PlaylistSourcesStartupAuthoritative  bool
 	TraditionalGuideStart                int
 	FriendlyName                         string
 	DeviceID                             string
 	DeviceAuth                           string
 	RefreshSchedule                      string
+	PlaylistSyncSourceConcurrency        int
 	ReconcileDynamicRulePaged            bool
 	FFmpegPath                           string
 	FFprobePath                          string
@@ -132,6 +151,8 @@ type Config struct {
 	CatalogSearchMaxTerms                int
 	CatalogSearchMaxDisjuncts            int
 	CatalogSearchMaxTermRunes            int
+
+	playlistSourceSpecsRaw []string
 }
 
 // RedactedConfig is safe for logs and startup output.
@@ -146,12 +167,18 @@ type RedactedConfig struct {
 	UPnPNotifyInterval                   string   `json:"upnp_notify_interval"`
 	UPnPMaxAge                           string   `json:"upnp_max_age"`
 	UPnPContentDirectoryUpdateIDCacheTTL string   `json:"upnp_content_directory_update_id_cache_ttl"`
+	PrimaryTunerCount                    int      `json:"primary_tuner_count"`
 	TunerCount                           int      `json:"tuner_count"`
+	PlaylistSourceCount                  int      `json:"playlist_source_count"`
+	PlaylistSourcesStartupAuthoritative  bool     `json:"playlist_sources_startup_authoritative"`
+	DiscoveryTunerCount                  int      `json:"discovery_tuner_count"`
+	DiscoveryTunerCountCapped            bool     `json:"discovery_tuner_count_capped"`
 	TraditionalGuideStart                int      `json:"traditional_guide_start"`
 	FriendlyName                         string   `json:"friendly_name"`
 	DeviceID                             string   `json:"device_id"`
 	DeviceAuthConfigured                 bool     `json:"device_auth_configured"`
 	RefreshSchedule                      string   `json:"refresh_schedule,omitempty"`
+	PlaylistSyncSourceConcurrency        int      `json:"playlist_sync_source_concurrency"`
 	ReconcileDynamicRulePaged            bool     `json:"reconcile_dynamic_rule_paged"`
 	FFmpegPath                           string   `json:"ffmpeg_path"`
 	FFprobePath                          string   `json:"ffprobe_path"`
@@ -238,12 +265,18 @@ func (c Config) Redacted() RedactedConfig {
 		UPnPNotifyInterval:                   c.UPnPNotifyInterval.String(),
 		UPnPMaxAge:                           c.UPnPMaxAge.String(),
 		UPnPContentDirectoryUpdateIDCacheTTL: c.UPnPContentDirectoryUpdateIDCacheTTL.String(),
+		PrimaryTunerCount:                    c.PrimaryTunerCount,
 		TunerCount:                           c.TunerCount,
+		PlaylistSourceCount:                  len(c.PlaylistSources),
+		PlaylistSourcesStartupAuthoritative:  c.PlaylistSourcesStartupAuthoritative,
+		DiscoveryTunerCount:                  c.DiscoveryAdvertisedTunerCount(),
+		DiscoveryTunerCountCapped:            c.DiscoveryTunerCountCapped(),
 		TraditionalGuideStart:                c.TraditionalGuideStart,
 		FriendlyName:                         c.FriendlyName,
 		DeviceID:                             c.DeviceID,
 		DeviceAuthConfigured:                 strings.TrimSpace(c.DeviceAuth) != "",
 		RefreshSchedule:                      c.RefreshSchedule,
+		PlaylistSyncSourceConcurrency:        c.PlaylistSyncSourceConcurrency,
 		ReconcileDynamicRulePaged:            c.ReconcileDynamicRulePaged,
 		FFmpegPath:                           c.FFmpegPath,
 		FFprobePath:                          c.FFprobePath,
@@ -322,6 +355,10 @@ func (c Config) Redacted() RedactedConfig {
 func Load(args []string) (Config, error) {
 	refreshSchedule := strings.TrimSpace(getenv("REFRESH_SCHEDULE", ""))
 	defaultLogDir := defaultWorkingDirectory()
+	playlistSourceSpecsRaw, err := splitPlaylistSourceSpecs(strings.TrimSpace(os.Getenv("PLAYLIST_SOURCES")))
+	if err != nil {
+		return Config{}, fmt.Errorf("parse PLAYLIST_SOURCES: %w", err)
+	}
 	legacyRefreshIntervalRaw := strings.TrimSpace(os.Getenv("REFRESH_INTERVAL"))
 	legacyRefreshInterval := time.Duration(0)
 	if refreshSchedule == "" && legacyRefreshIntervalRaw != "" {
@@ -344,11 +381,13 @@ func Load(args []string) (Config, error) {
 		UPnPMaxAge:                           getenvDuration("UPNP_MAX_AGE", 30*time.Minute),
 		UPnPContentDirectoryUpdateIDCacheTTL: getenvDuration("UPNP_CONTENT_DIRECTORY_UPDATE_ID_CACHE_TTL", defaultUPnPContentDirectoryUpdateIDCacheTTL),
 		TunerCount:                           getenvInt("TUNER_COUNT", 2),
+		PlaylistSourcesStartupAuthoritative:  getenvBool("PLAYLIST_SOURCES_STARTUP_AUTHORITATIVE", false),
 		TraditionalGuideStart:                getenvInt("TRADITIONAL_GUIDE_START", defaultTraditionalGuideStart),
 		FriendlyName:                         getenv("FRIENDLY_NAME", "HDHR IPTV"),
 		DeviceID:                             getenv("DEVICE_ID", ""),
 		DeviceAuth:                           getenv("DEVICE_AUTH", ""),
 		RefreshSchedule:                      refreshSchedule,
+		PlaylistSyncSourceConcurrency:        getenvInt("PLAYLIST_SYNC_SOURCE_CONCURRENCY", defaultPlaylistSyncSourceConcurrency),
 		ReconcileDynamicRulePaged:            getenvBool("RECONCILE_DYNAMIC_RULE_PAGED", false),
 		FFmpegPath:                           getenv("FFMPEG_PATH", "ffmpeg"),
 		FFprobePath:                          getenv("FFPROBE_PATH", "ffprobe"),
@@ -421,10 +460,17 @@ func Load(args []string) (Config, error) {
 		EnableMetrics:                        getenvBool("ENABLE_METRICS", false),
 		HTTPRequestLogEnabled:                getenvBool("HTTP_REQUEST_LOG_ENABLED", false),
 		LogLevel:                             getenv("LOG_LEVEL", "info"),
+		playlistSourceSpecsRaw:               append([]string(nil), playlistSourceSpecsRaw...),
 	}
 
 	fs := pflag.NewFlagSet("hdhriptv", pflag.ContinueOnError)
 	fs.StringVar(&cfg.PlaylistURL, "playlist-url", cfg.PlaylistURL, "M3U playlist URL")
+	fs.StringArrayVar(
+		&cfg.playlistSourceSpecsRaw,
+		"playlist-source",
+		cfg.playlistSourceSpecsRaw,
+		"Additional playlist source spec (repeatable): url=<playlist_url>,tuners=<count>[,name=<label>][,enabled=<bool>]",
+	)
 	fs.StringVar(&cfg.DBPath, "db-path", cfg.DBPath, "SQLite DB path")
 	fs.StringVar(&cfg.HTTPAddr, "http-addr", cfg.HTTPAddr, "HTTP listen address")
 	fs.StringVar(&cfg.LegacyHTTPAddr, "http-addr-legacy", cfg.LegacyHTTPAddr, "Legacy HTTP listen address (often :80)")
@@ -434,11 +480,18 @@ func Load(args []string) (Config, error) {
 	fs.DurationVar(&cfg.UPnPMaxAge, "upnp-max-age", cfg.UPnPMaxAge, "UPnP SSDP max-age advertised in CACHE-CONTROL")
 	fs.DurationVar(&cfg.UPnPContentDirectoryUpdateIDCacheTTL, "upnp-content-directory-update-id-cache-ttl", cfg.UPnPContentDirectoryUpdateIDCacheTTL, "UPnP ContentDirectory GetSystemUpdateID cache TTL")
 	fs.IntVar(&cfg.TunerCount, "tuner-count", cfg.TunerCount, "Number of emulated tuners")
+	fs.BoolVar(
+		&cfg.PlaylistSourcesStartupAuthoritative,
+		"playlist-sources-startup-authoritative",
+		cfg.PlaylistSourcesStartupAuthoritative,
+		"When --playlist-source/PLAYLIST_SOURCES is provided, prune persisted non-primary sources not declared in startup config",
+	)
 	fs.IntVar(&cfg.TraditionalGuideStart, "traditional-guide-start", cfg.TraditionalGuideStart, "First guide number used when assigning traditional channels")
 	fs.StringVar(&cfg.FriendlyName, "friendly-name", cfg.FriendlyName, "Device friendly name")
 	fs.StringVar(&cfg.DeviceID, "device-id", cfg.DeviceID, "8 hex character device ID")
 	fs.StringVar(&cfg.DeviceAuth, "device-auth", cfg.DeviceAuth, "Device auth token")
 	fs.StringVar(&cfg.RefreshSchedule, "refresh-schedule", cfg.RefreshSchedule, "Playlist sync cron schedule (5-field or optional-seconds 6-field)")
+	fs.IntVar(&cfg.PlaylistSyncSourceConcurrency, "playlist-sync-source-concurrency", cfg.PlaylistSyncSourceConcurrency, "Bounded worker count for playlist source refreshes during all-source sync runs (1 keeps sequential behavior)")
 	fs.BoolVar(&cfg.ReconcileDynamicRulePaged, "reconcile-dynamic-rule-paged", cfg.ReconcileDynamicRulePaged, "Enable paged catalog-filter sync for one-off dynamic reconcile rules (default false uses legacy slice mode)")
 	fs.DurationVar(&legacyRefreshInterval, "refresh-interval", legacyRefreshInterval, "Deprecated: playlist refresh interval duration (converted to --refresh-schedule when representable)")
 	fs.StringVar(&cfg.FFmpegPath, "ffmpeg-path", cfg.FFmpegPath, "Path to ffmpeg executable")
@@ -613,6 +666,20 @@ func (c *Config) normalize() error {
 	if c.TunerCount < 1 {
 		return fmt.Errorf("tuner-count must be at least 1")
 	}
+	resolvedPlaylistSources, err := resolvePlaylistSources(
+		c.PlaylistURL,
+		c.TunerCount,
+		c.playlistSourceSpecsRaw,
+	)
+	if err != nil {
+		return err
+	}
+	c.PrimaryTunerCount = c.TunerCount
+	c.PlaylistSources = resolvedPlaylistSources
+	c.TunerCount = totalEnabledPlaylistSourceTuners(c.PlaylistSources)
+	if c.TunerCount < 1 {
+		return fmt.Errorf("at least one enabled playlist source is required")
+	}
 	if c.TraditionalGuideStart < 1 {
 		return fmt.Errorf("traditional-guide-start must be at least 1")
 	}
@@ -632,6 +699,12 @@ func (c *Config) normalize() error {
 		if err := validateCron(c.RefreshSchedule); err != nil {
 			return fmt.Errorf("refresh-schedule is invalid: %w", err)
 		}
+	}
+	if c.PlaylistSyncSourceConcurrency < 1 {
+		return fmt.Errorf("playlist-sync-source-concurrency must be at least 1")
+	}
+	if c.PlaylistSyncSourceConcurrency > maxPlaylistSyncSourceConcurrency {
+		return fmt.Errorf("playlist-sync-source-concurrency cannot exceed %d", maxPlaylistSyncSourceConcurrency)
 	}
 	if c.StartupTimeout <= 0 {
 		return fmt.Errorf("startup-timeout must be positive")
@@ -862,6 +935,16 @@ func (c *Config) normalize() error {
 	return nil
 }
 
+// DiscoveryAdvertisedTunerCount returns tuner count exposed on discovery endpoints.
+func (c Config) DiscoveryAdvertisedTunerCount() int {
+	return capDiscoveryAdvertisedTunerCount(c.TunerCount)
+}
+
+// DiscoveryTunerCountCapped reports whether discovery is capped below internal capacity.
+func (c Config) DiscoveryTunerCountCapped() bool {
+	return c.TunerCount > maxDiscoveryTunerAdvertisedCount
+}
+
 func normalizeFFmpegSourceLogLevel(v string) string {
 	normalized := strings.ToLower(strings.TrimSpace(v))
 	switch normalized {
@@ -912,6 +995,199 @@ func normalizeFFmpegStartupAnalyzeDuration(v time.Duration) time.Duration {
 		return minFFmpegStartupAnalyzeDuration
 	}
 	return v
+}
+
+func capDiscoveryAdvertisedTunerCount(total int) int {
+	if total > maxDiscoveryTunerAdvertisedCount {
+		return maxDiscoveryTunerAdvertisedCount
+	}
+	if total < 1 {
+		return 1
+	}
+	return total
+}
+
+func splitPlaylistSourceSpecs(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	entries := strings.Split(raw, ";")
+	out := make([]string, 0, len(entries))
+	for i, entry := range entries {
+		spec := strings.TrimSpace(entry)
+		if spec == "" {
+			return nil, fmt.Errorf("entry %d is empty", i+1)
+		}
+		out = append(out, spec)
+	}
+	return out, nil
+}
+
+func resolvePlaylistSources(primaryURL string, primaryTunerCount int, additionalSpecs []string) ([]PlaylistSourceConfig, error) {
+	sources := make([]PlaylistSourceConfig, 0, 1+len(additionalSpecs))
+	sources = append(sources, PlaylistSourceConfig{
+		Name:        defaultPrimaryPlaylistSourceName,
+		PlaylistURL: strings.TrimSpace(primaryURL),
+		TunerCount:  primaryTunerCount,
+		Enabled:     true,
+	})
+
+	for i, rawSpec := range additionalSpecs {
+		spec, err := parsePlaylistSourceSpec(rawSpec, i+1)
+		if err != nil {
+			return nil, err
+		}
+		if spec.Name == "" {
+			spec.Name = fmt.Sprintf("Source %d", i+2)
+		}
+		sources = append(sources, spec)
+	}
+
+	if err := validatePlaylistSourceUniqueness(sources); err != nil {
+		return nil, err
+	}
+	return sources, nil
+}
+
+func parsePlaylistSourceSpec(rawSpec string, index int) (PlaylistSourceConfig, error) {
+	spec := PlaylistSourceConfig{Enabled: true}
+	rawSpec = strings.TrimSpace(rawSpec)
+	if rawSpec == "" {
+		return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: spec is required", index)
+	}
+
+	seen := make(map[string]struct{})
+	parts := strings.Split(rawSpec, ",")
+	for _, part := range parts {
+		token := strings.TrimSpace(part)
+		if token == "" {
+			return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: malformed token in %q", index, rawSpec)
+		}
+		keyValue := strings.SplitN(token, "=", 2)
+		if len(keyValue) != 2 {
+			return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: expected key=value token %q", index, token)
+		}
+		key := strings.ToLower(strings.TrimSpace(keyValue[0]))
+		value := strings.TrimSpace(keyValue[1])
+		if key == "" {
+			return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: key is required in token %q", index, token)
+		}
+		canonicalKey, ok := canonicalPlaylistSourceSpecKey(key)
+		if !ok {
+			return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: unknown key %q", index, key)
+		}
+		if _, ok := seen[canonicalKey]; ok {
+			return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: duplicate key %q", index, canonicalKey)
+		}
+		seen[canonicalKey] = struct{}{}
+
+		switch canonicalKey {
+		case "playlist_url":
+			if value == "" {
+				return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: url is required", index)
+			}
+			spec.PlaylistURL = value
+		case "tuner_count":
+			tunerCount, err := strconv.Atoi(value)
+			if err != nil {
+				return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: parse tuners %q: %w", index, value, err)
+			}
+			if tunerCount < 1 {
+				return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: tuners must be at least 1", index)
+			}
+			spec.TunerCount = tunerCount
+		case "name":
+			if value == "" {
+				return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: name is required when provided", index)
+			}
+			spec.Name = value
+		case "enabled":
+			enabled, err := parsePlaylistSourceEnabled(value)
+			if err != nil {
+				return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: %w", index, err)
+			}
+			spec.Enabled = enabled
+		}
+	}
+
+	if strings.TrimSpace(spec.PlaylistURL) == "" {
+		return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: url is required", index)
+	}
+	if spec.TunerCount < 1 {
+		return PlaylistSourceConfig{}, fmt.Errorf("playlist-source[%d]: tuners is required and must be at least 1", index)
+	}
+
+	spec.Name = strings.TrimSpace(spec.Name)
+	spec.PlaylistURL = strings.TrimSpace(spec.PlaylistURL)
+	return spec, nil
+}
+
+func canonicalPlaylistSourceSpecKey(key string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(key)) {
+	case "url", "playlist_url":
+		return "playlist_url", true
+	case "tuners", "tuner_count":
+		return "tuner_count", true
+	case "name":
+		return "name", true
+	case "enabled":
+		return "enabled", true
+	default:
+		return "", false
+	}
+}
+
+func parsePlaylistSourceEnabled(raw string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "1", "true", "yes", "on":
+		return true, nil
+	case "0", "false", "no", "off":
+		return false, nil
+	default:
+		return false, fmt.Errorf("enabled must be true/false")
+	}
+}
+
+func validatePlaylistSourceUniqueness(sources []PlaylistSourceConfig) error {
+	nameEntries := make(map[string]int, len(sources))
+	urlEntries := make(map[string]int, len(sources))
+
+	for i, source := range sources {
+		entry := i + 1
+		name := strings.TrimSpace(source.Name)
+		if name == "" {
+			return fmt.Errorf("playlist source entry %d: name is required", entry)
+		}
+		nameKey := playlist.CanonicalPlaylistSourceName(name)
+		if prev, ok := nameEntries[nameKey]; ok {
+			return fmt.Errorf("duplicate playlist source name %q between entries %d and %d", name, prev, entry)
+		}
+		nameEntries[nameKey] = entry
+
+		playlistURL := strings.TrimSpace(source.PlaylistURL)
+		if playlistURL == "" {
+			continue
+		}
+		urlKey := playlist.CanonicalPlaylistSourceURL(playlistURL)
+		if prev, ok := urlEntries[urlKey]; ok {
+			return fmt.Errorf("duplicate playlist source URL %q between entries %d and %d", playlistURL, prev, entry)
+		}
+		urlEntries[urlKey] = entry
+	}
+	return nil
+}
+
+func totalEnabledPlaylistSourceTuners(sources []PlaylistSourceConfig) int {
+	total := 0
+	for _, source := range sources {
+		if !source.Enabled || source.TunerCount <= 0 {
+			continue
+		}
+		total += source.TunerCount
+	}
+	return total
 }
 
 func getenv(key, def string) string {

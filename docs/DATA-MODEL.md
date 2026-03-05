@@ -24,13 +24,33 @@ Generation logic:
 1. **With tvg-id**: `tvg:<tvg_id_lower>`
 2. **Without tvg-id**: `name:<name_lower_normalized>`
 
+### Multi-Source Item Key Namespacing
+
+When multiple playlist sources are configured, item keys are namespaced to avoid cross-source collisions while preserving legacy keys:
+
+- **Primary source** (`source_id=1`, `source_key="primary"`): item keys are unchanged (legacy format preserved).
+- **Non-primary sources**: item keys are prefixed deterministically as `ps:<source_key>:<base_item_key>`.
+
+This avoids rebuilding FK relationships around composite PKs while preserving legacy references and history for the primary source. The `channel_key` generation remains unchanged so cross-playlist grouping and failover still work.
+
+Impact on related tables:
+
+- `channel_sources.item_key`: contains namespaced keys for non-primary source items. No schema change needed.
+- `stream_metrics.item_key`: namespaced keys mean the same stream URL from different sources gets separate metric rows (correct — different sources may have different availability characteristics).
+- `published_channels.dynamic_item_key`: contains namespaced keys for dynamic-generated channels seeded from non-primary sources.
+
 ### URL Normalization
 
 Before hashing, stream URLs are normalized (`normalizedURLForKey`):
 
-- Parse the URL; if valid, strip query parameters and fragment
-- Reconstruct as `scheme://host/path`
+- Parse the URL; if valid, remove fragment data
+- Drop volatile auth/session query keys (`token`, `auth*`, `sig*`, `session*`, `expires*`)
+- Keep non-volatile query parameters in deterministic key/value order
+- Reconstruct as `scheme://host/path` (plus normalized query when retained)
 - If unparseable, fall back to whitespace-trimmed raw value
+
+This keeps `item_key` stable across auth token rotation while preserving
+distinct keys for meaningful query variants.
 
 ### channel_key Normalization (Store Layer)
 
@@ -69,7 +89,7 @@ Foreign key constraints are declared in the schema DDL for several tables (see b
 
 ## Schema Tables
 
-All tables are defined across `migrations/001_init.sql` through `migrations/006_*.sql`, with additional columns added programmatically via `addColumnIfMissing` in `ensureFailoverSchema`, `ensureMetricsSchema`, and `ensureDVRSchema`.
+All tables are defined across `migrations/001_init.sql` through `migrations/007_playlist_sources.sql`, with additional columns added programmatically via `addColumnIfMissing` in `ensurePlaylistSourcesSchema`, `ensureFailoverSchema`, `ensureMetricsSchema`, and `ensureDVRSchema`.
 
 ### settings
 
@@ -94,6 +114,39 @@ Default settings seeded by `002_jobs_metrics.sql` and `003_autoprioritize_scope.
 Additional identity settings managed at runtime:
 
 - `identity.friendly_name` / `identity.device_id` / `identity.device_auth`
+- `app.version` / `app.commit` / `app.build_time`
+
+### playlist_sources
+
+Playlist source definitions. Each source represents a distinct M3U playlist URL with its own tuner capacity.
+
+| Column | Type | Constraints | Description |
+|--------|------|-------------|-------------|
+| `source_id` | INTEGER | PRIMARY KEY AUTOINCREMENT | Stable internal identity |
+| `source_key` | TEXT | NOT NULL UNIQUE | Auto-generated immutable opaque key (8-byte hex for new sources; legacy shorter keys may still exist) for item-key namespacing |
+| `name` | TEXT | NOT NULL UNIQUE | Operator label (uniqueness enforced) |
+| `playlist_url` | TEXT | NOT NULL DEFAULT '' UNIQUE | M3U playlist URL (duplicate URLs rejected) |
+| `tuner_count` | INTEGER | NOT NULL | Per-source virtual tuner capacity |
+| `enabled` | INTEGER | NOT NULL DEFAULT 1 | Whether source participates in sync and tuner pools |
+| `order_index` | INTEGER | NOT NULL | Sort position for sync ordering and UI display |
+| `created_at` | INTEGER | NOT NULL | Unix epoch |
+| `updated_at` | INTEGER | NOT NULL | Unix epoch |
+
+**Indexes:**
+
+- `idx_playlist_sources_order` -- UNIQUE `(order_index)`
+- `idx_playlist_sources_enabled_order` -- `(enabled, order_index)`
+
+**Primary source safety rules:**
+
+- `source_id=1` (the primary source) cannot be deleted. It can be disabled or edited but must always exist to preserve legacy `playlist_items` references.
+- The primary source is auto-seeded from legacy `playlist.url` setting and startup config when no sources exist, with `source_key="primary"`.
+
+**`source_key` generation:**
+
+- Auto-generated at creation time. Format: 8-byte random hex string for newly created sources (legacy deployments may contain older shorter keys). Immutable after creation.
+- Primary source uses well-known constant `"primary"` for deterministic legacy-to-multi-source transitions.
+- Operators interact with sources via `source_id` and `name`, never via `source_key` directly.
 
 ### playlist_items
 
@@ -102,6 +155,7 @@ The catalog of parsed M3U entries. Primary table for the channel catalog.
 | Column | Type | Constraints | Description |
 |--------|------|-------------|-------------|
 | `item_key` | TEXT | PRIMARY KEY | Deterministic stream identity (see Dual-Key above) |
+| `playlist_source_id` | INTEGER | NOT NULL DEFAULT 1 | FK to `playlist_sources.source_id` (logical reference) |
 | `channel_key` | TEXT | | Channel-level grouping key |
 | `name` | TEXT | NOT NULL | Display name from M3U `#EXTINF` |
 | `group_name` | TEXT | NOT NULL | Group/category from `group-title` attribute |
@@ -124,6 +178,9 @@ The catalog of parsed M3U entries. Primary table for the channel catalog.
 - `idx_playlist_active_group_name_name_item` -- `(active, group_name, name, item_key)` -- covers filtered+sorted catalog queries
 - `idx_playlist_active_name_item` -- `(active, name, item_key)` -- covers unfiltered catalog listing
 - `idx_playlist_active_key_name_item` -- `(active, channel_key, name, item_key)` -- covers channel_key lookups with sort
+- `idx_playlist_source_active_name_item` -- `(playlist_source_id, active, name, item_key)` -- covers source-scoped catalog listings
+- `idx_playlist_source_active_key_name_item` -- `(playlist_source_id, active, channel_key, name, item_key)` -- covers source-scoped channel_key lookups
+- `idx_playlist_source_active_group_name` -- `(playlist_source_id, active, group_name)` -- covers source-scoped distinct group queries
 
 ### published_channels
 
@@ -146,6 +203,7 @@ Published HDHomeRun channels exposed to DVR clients.
 | `dynamic_group_names_json` | TEXT | NOT NULL DEFAULT '[]' | Multi-group filter (JSON array) |
 | `dynamic_search_query` | TEXT | NOT NULL DEFAULT '' | Catalog search filter |
 | `dynamic_search_regex` | INTEGER | NOT NULL DEFAULT 0 | Whether search uses regex mode |
+| `dynamic_source_ids_json` | TEXT | NOT NULL DEFAULT '[]' | Playlist source filter (JSON array of source_id integers; empty = all sources) |
 | `created_at` | INTEGER | NOT NULL | Unix epoch |
 | `updated_at` | INTEGER | NOT NULL | Unix epoch |
 
@@ -206,6 +264,7 @@ Saved catalog filter queries that auto-generate channels.
 | `group_names_json` | TEXT | NOT NULL DEFAULT '[]' | Multi-group filter (JSON array) |
 | `search_query` | TEXT | NOT NULL DEFAULT '' | Catalog search text |
 | `search_regex` | INTEGER | NOT NULL DEFAULT 0 | Regex search mode flag |
+| `source_ids_json` | TEXT | NOT NULL DEFAULT '[]' | Playlist source filter (JSON array of source_id integers; empty = all sources) |
 | `order_index` | INTEGER | NOT NULL | Sort position |
 | `last_count` | INTEGER | NOT NULL DEFAULT 0 | Channels from last sync |
 | `truncated_by` | INTEGER | NOT NULL DEFAULT 0 | Items truncated by slot limits |
@@ -333,6 +392,7 @@ Migrations use Go's `embed.FS` to bundle SQL files from `migrations/*.sql`. On s
 
 After numbered migrations, programmatic schema extensions run:
 
+- **`ensurePlaylistSourcesSchema`**: Creates `playlist_sources` table and indexes, adds `playlist_source_id` column to `playlist_items` with backfill to `1`, creates source-scoped composite indexes, seeds primary source from legacy settings, adds `dynamic_source_ids_json` to `published_channels` and `source_ids_json` to `dynamic_channel_queries`
 - **`ensureFailoverSchema`**: Adds columns (`channel_key`, `tvg_name`, `first_seen_at`, `last_seen_at`, `active`) to `playlist_items`, creates `dynamic_channel_queries`, `published_channels`, and `channel_sources` tables, backfills data, and creates indexes
 - **`ensureMetricsSchema`**: Ensures `stream_metrics` table has `video_codec` and `audio_codec` columns
 - **`ensureDVRSchema`**: Ensures `dvr_instances` and `published_channel_dvr_map` tables have all required columns, enforces singleton, creates indexes
@@ -344,16 +404,16 @@ The helper `addColumnIfMissing(table, column, alterSQL)` uses `PRAGMA table_info
 
 ## Non-Destructive Refresh
 
-Playlist refresh (`upsertPlaylistItemsStream`) follows a non-destructive pattern:
+Playlist refresh (`upsertPlaylistItemsStream` / `upsertPlaylistItemsStreamForSource`) follows a non-destructive, source-scoped pattern:
 
 ```
 BEGIN TRANSACTION
   1. For each item in the incoming stream:
      - UPSERT into playlist_items with ON CONFLICT(item_key) DO UPDATE
-     - Set active=1, update last_seen_at to current refresh mark
-  2. Mark all items NOT seen in this refresh as inactive:
+     - Set playlist_source_id, active=1, update last_seen_at to current refresh mark
+  2. Mark items NOT seen in this refresh as inactive (source-scoped):
      UPDATE playlist_items SET active=0
-       WHERE last_seen_at <> ? AND active <> 0
+       WHERE playlist_source_id = ? AND last_seen_at <> ? AND active <> 0
 COMMIT
 ```
 
@@ -363,6 +423,7 @@ Key properties:
 - **Upsert semantics**: Existing items get their metadata updated; new items are inserted
 - **Atomic refresh**: The entire refresh runs in a single transaction -- either all items are updated or none are
 - **Timestamp-based marking**: Uses a nanosecond-precision refresh mark to distinguish "seen in this refresh" from "not seen"
+- **Source-scoped deactivation**: Inactive marking is scoped to the source being refreshed (`playlist_source_id = ?`), preventing one failing source from deactivating items from other sources
 
 ## Query Patterns
 
@@ -435,36 +496,50 @@ Default page size is 512 rows. This is used by dynamic source synchronization.
 ## Entity Relationships
 
 ```
- +----------------+       +---------------------+       +------------------+
- | playlist_items |       | published_channels  |       | dvr_instances    |
- |----------------|       |---------------------|       |------------------|
- | item_key (PK)  |<--+   | channel_id (PK)     |<--+   | id (PK)          |
- | channel_key    |   |   | channel_class       |   |   | singleton_key    |
- | name           |   |   | channel_key --------+-->|   | provider         |
- | group_name     |   |   | guide_number        |   |   | base_url         |
- | stream_url     |   |   | guide_name          |   |   | sync_enabled     |
- | tvg_id         |   |   | order_index         |   |   | sync_mode        |
- | active         |   |   | enabled             |   |   | ...              |
- | ...            |   |   | dynamic_query_id ---+-->|   +------------------+
- +----------------+   |   | ...                 |   |          |
-        |             |   +---------------------+   |          |
-        |             |           |                  |          |
-        |             |           | 1                |          |
-        |             |           |                  |          |
-        |             |           v N                |          |
-        |             |   +------------------+       |          |
-        |             +---| channel_sources  |       |          |
-        |                 |------------------|       |          |
-        |                 | source_id (PK)   |       |          |
-        +<---FK-----------| item_key         |       |          |
-                          | channel_id  -----+-------+          |
-                          | priority_index   |                  |
-                          | association_type |                  |
-                          | enabled          |                  |
-                          | last_ok_at       |                  |
-                          | fail_count       |                  |
-                          | profile_*        |                  |
-                          +------------------+                  |
+ +--------------------+
+ | playlist_sources   |
+ |--------------------|
+ | source_id (PK)     |<---------+
+ | source_key (UQ)    |          |
+ | name (UQ)          |          |
+ | playlist_url (UQ)  |          |
+ | tuner_count        |          |
+ | enabled            |          |
+ | order_index (UQ)   |          |
+ +--------------------+          |
+                                 | playlist_source_id (logical ref)
+ +----------------+              |
+ | playlist_items |       +------+------+----------+       +------------------+
+ |----------------|       | published_channels     |       | dvr_instances    |
+ | item_key (PK)  |<--+   |------------------------|       |------------------|
+ | playlist_source_id +-->| channel_id (PK)        |<--+   | id (PK)          |
+ | channel_key    |   |   | channel_class          |   |   | singleton_key    |
+ | name           |   |   | channel_key -----------+-->|   | provider         |
+ | group_name     |   |   | guide_number           |   |   | base_url         |
+ | stream_url     |   |   | guide_name             |   |   | sync_enabled     |
+ | tvg_id         |   |   | order_index            |   |   | sync_mode        |
+ | active         |   |   | enabled                |   |   | ...              |
+ | ...            |   |   | dynamic_query_id ------+-->|   +------------------+
+ +----------------+   |   | dynamic_source_ids_json|   |          |
+        |             |   | ...                    |   |          |
+        |             |   +------------------------+   |          |
+        |             |           |                    |          |
+        |             |           | 1                  |          |
+        |             |           |                    |          |
+        |             |           v N                  |          |
+        |             |   +------------------+         |          |
+        |             +---| channel_sources  |         |          |
+        |                 |------------------|         |          |
+        |                 | source_id (PK)   |         |          |
+        +<---FK-----------| item_key         |         |          |
+                          | channel_id  -----+---------+          |
+                          | priority_index   |                    |
+                          | association_type |                    |
+                          | enabled          |                    |
+                          | last_ok_at       |                    |
+                          | fail_count       |                    |
+                          | profile_*        |                    |
+                          +------------------+                    |
                                                                 |
  +----------------------------+       +-------------------------+
  | dynamic_channel_queries    |       | published_channel_      |
@@ -505,6 +580,7 @@ Default page size is 512 rows. This is used by dynamic source synchronization.
 
 Key relationships:
 
+- `playlist_items.playlist_source_id` -> `playlist_sources.source_id` — Logical reference (no DDL FK; application-level integrity maintained via explicit source-delete cleanup of source-owned catalog rows and dependent references)
 - `channel_sources.channel_id` -> `published_channels.channel_id` — DDL FK (CASCADE delete, not runtime-enforced)
 - `channel_sources.item_key` -> `playlist_items.item_key` — DDL FK (RESTRICT delete, not runtime-enforced)
 - `published_channel_dvr_map.channel_id` -> `published_channels.channel_id` — DDL FK (CASCADE delete, not runtime-enforced)
@@ -527,6 +603,7 @@ The `settings` table stores all application configuration as key-value text pair
 
 | Prefix | Purpose |
 |--------|---------|
+| `app.*` | Runtime build metadata persisted at startup (version, commit, build_time) |
 | `identity.*` | Device identity (friendly_name, device_id, device_auth) |
 | `playlist.*` | Playlist URL |
 | `jobs.*` | Scheduler configuration (timezone, sync enables/crons) |
@@ -557,6 +634,8 @@ All multi-step write operations (playlist refresh, legacy migration, DVR singlet
 
 | Table | Index | Columns | Type |
 |-------|-------|---------|------|
+| `playlist_sources` | `idx_playlist_sources_order` | `(order_index)` | UNIQUE |
+| | `idx_playlist_sources_enabled_order` | `(enabled, order_index)` | regular |
 | `playlist_items` | `idx_playlist_channel_key` | `(channel_key)` | regular |
 | | `idx_playlist_group` | `(group_name)` | regular |
 | | `idx_playlist_name` | `(name)` | regular |
@@ -564,6 +643,9 @@ All multi-step write operations (playlist refresh, legacy migration, DVR singlet
 | | `idx_playlist_active_group_name_name_item` | `(active, group_name, name, item_key)` | covering — filtered+sorted catalog |
 | | `idx_playlist_active_name_item` | `(active, name, item_key)` | covering — unfiltered catalog |
 | | `idx_playlist_active_key_name_item` | `(active, channel_key, name, item_key)` | covering — channel_key lookups |
+| | `idx_playlist_source_active_name_item` | `(playlist_source_id, active, name, item_key)` | covering — source-scoped catalog |
+| | `idx_playlist_source_active_key_name_item` | `(playlist_source_id, active, channel_key, name, item_key)` | covering — source-scoped channel_key |
+| | `idx_playlist_source_active_group_name` | `(playlist_source_id, active, group_name)` | source-scoped group queries |
 | `published_channels` | `idx_published_channels_guide_number` | `(guide_number)` | UNIQUE |
 | | `idx_published_channels_order` | `(order_index)` | UNIQUE |
 | | `idx_published_channels_channel_key` | `(channel_key)` | regular |
@@ -593,7 +675,8 @@ All multi-step write operations (playlist refresh, legacy migration, DVR singlet
 
 | Table | Status | Write profile |
 |-------|--------|---------------|
-| `playlist_items` | **active** | High-write during playlist sync (full upsert + mark-inactive per refresh) |
+| `playlist_sources` | **active** | Low — source CRUD, reorder, legacy sync on primary source URL |
+| `playlist_items` | **active** | High-write during playlist sync (full upsert + source-scoped mark-inactive per refresh) |
 | `published_channels` | **active** | Moderate — channel creation, reorder, dynamic sync |
 | `channel_sources` | **active** | Moderate — source add/remove, failover stats updates |
 | `dynamic_channel_queries` | **active** | Low — query CRUD |

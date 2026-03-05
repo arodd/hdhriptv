@@ -72,6 +72,74 @@ func TestDiscoverJSON(t *testing.T) {
 	if out.DeviceID != "1234ABCD" {
 		t.Fatalf("DeviceID = %q, want 1234ABCD", out.DeviceID)
 	}
+	if out.TunerCount != 2 {
+		t.Fatalf("TunerCount = %d, want 2", out.TunerCount)
+	}
+}
+
+func TestDiscoverJSONCapsAdvertisedTunerCount(t *testing.T) {
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   999,
+	}, fakeChannelsProvider{})
+
+	r := httptest.NewRequest(http.MethodGet, "http://example.local/discover.json", nil)
+	r.Host = "example.local:5004"
+	w := httptest.NewRecorder()
+
+	h.DiscoverJSON(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var out DiscoverResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.TunerCount != 255 {
+		t.Fatalf("TunerCount = %d, want 255 cap", out.TunerCount)
+	}
+}
+
+func TestDiscoverJSONReflectsRuntimeAdvertisedTunerCountUpdates(t *testing.T) {
+	h := NewHandler(Config{
+		FriendlyName: "HDHR IPTV",
+		DeviceID:     "1234ABCD",
+		DeviceAuth:   "token",
+		TunerCount:   2,
+	}, fakeChannelsProvider{})
+
+	h.SetDiscoveryAdvertisedTunerCount(370)
+
+	r := httptest.NewRequest(http.MethodGet, "http://example.local/discover.json", nil)
+	r.Host = "example.local:5004"
+	w := httptest.NewRecorder()
+	h.DiscoverJSON(w, r)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status code = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var out DiscoverResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if out.TunerCount != 255 {
+		t.Fatalf("TunerCount after runtime update = %d, want 255 cap", out.TunerCount)
+	}
+
+	h.SetDiscoveryAdvertisedTunerCount(7)
+	w = httptest.NewRecorder()
+	h.DiscoverJSON(w, r)
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode response (second call): %v", err)
+	}
+	if out.TunerCount != 7 {
+		t.Fatalf("TunerCount after second runtime update = %d, want 7", out.TunerCount)
+	}
 }
 
 func TestNewHandlerContentDirectoryUpdateIDCacheTTL(t *testing.T) {

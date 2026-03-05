@@ -22,6 +22,7 @@ Core subsystem ownership:
   - `internal/playlist/refresh.go`
   - `internal/m3u/parser.go`
   - `internal/store/sqlite/catalog_index.go`
+  - `internal/store/sqlite/playlist_sources.go`
 - Published channels and source graph
   - `internal/channels/service.go`
   - `internal/store/sqlite/channels.go`
@@ -31,6 +32,8 @@ Core subsystem ownership:
   - `internal/stream/pump.go`
   - `internal/stream/ring.go`
   - `internal/stream/tuners.go`
+  - `internal/stream/virtual_tuners.go`
+  - `internal/stream/tuner_usage.go`
   - `internal/stream/ffmpeg.go`
 - Automation jobs and schedules
   - `internal/jobs/runner.go`
@@ -48,8 +51,10 @@ Core subsystem ownership:
   - Public HDHR: `internal/hdhr/http_handlers.go`
   - UDP discovery: `internal/hdhr/discovery/udp.go`
   - UPnP/SSDP discovery: `internal/hdhr/upnp/server.go` and `internal/hdhr/upnp/protocol.go`
-  - Admin: `internal/http/admin_routes.go`
-  - Dynamic channel immediate-sync orchestration: `internal/http/admin_routes.go` (coalesced/cancelable worker loop per channel)
+  - Admin route registration/core wiring: `internal/http/admin_routes.go`
+  - Catalog/channel/source handlers: `internal/http/admin_channels.go`
+  - Dynamic channel and DVR lineup background workers: `internal/http/admin_workers.go`
+  - Tuner status/recovery and reverse-DNS cache handlers: `internal/http/admin_tuners.go`
   - Automation admin handlers: `internal/http/admin_automation.go`
   - DVR admin handlers: `internal/http/admin_dvr.go`
   - Middleware: `internal/http/middleware/*.go`
@@ -63,17 +68,30 @@ Persistence is SQLite (`internal/store/sqlite/store.go`) with migrations under
 
 1. Trigger source:
    - startup one-shot sync in `cmd/hdhriptv/main.go`
-   - manual trigger: `POST /api/admin/jobs/playlist-sync/run`
+   - manual trigger: `POST /api/admin/jobs/playlist-sync/run` (optional
+     `?source_id=N` for per-source sync)
    - scheduled trigger via `internal/scheduler/scheduler.go`
 2. Job runner starts persisted run in `internal/jobs/runner.go`.
 3. `internal/jobs/playlist_sync.go` executes:
-   - refresh catalog via `internal/playlist/refresh.go`
+   - resolves the list of playlist sources to refresh (all enabled sources,
+     or a single source when `source_id` is scoped via context)
+   - refreshes each source via
+     `internal/playlist/refresh.go:RefreshForSource(ctx, source)` using
+     bounded worker concurrency (`playlist_sync_source_concurrency`).
+     Default worker count `1` preserves sequential behavior; higher values
+     are opt-in and process sources in parallel while preserving per-source
+     upsert/deactivation semantics and source-order result summaries
+   - records per-source sync outcome (item count, duration, success/failure)
+     and emits per-source Prometheus metrics
    - reconcile channel sources via `internal/reconcile/reconcile.go`
+     (skipped when all sources fail)
    - optional post-sync DVR lineup reload hook (`DVRLineupReloader`) via
      `ReloadLineupForPlaylistSyncOutcome(...)`, with active-provider fan-out
-     and provider-aware skip semantics for incomplete Jellyfin config
-4. Catalog refresh upserts active rows and marks unseen rows inactive in
-   `internal/store/sqlite/catalog_index.go`.
+     and provider-aware skip semantics for incomplete Jellyfin config;
+     triggered when at least one source succeeds
+4. Catalog refresh upserts active rows and marks unseen rows inactive
+   **per source** in `internal/store/sqlite/catalog_index.go` — one failing
+   source does not deactivate items from other sources.
    - IOERR diagnostics are enriched in `internal/store/sqlite/error_diag.go`,
      `internal/store/sqlite/ioerr_diag.go`, and
      `internal/store/sqlite/op_trace.go`:
@@ -88,12 +106,16 @@ Persistence is SQLite (`internal/store/sqlite/store.go`) with migrations under
 2. Global tune backoff is checked before creating a new shared session.
 3. `SessionManager` in `internal/stream/shared_session.go` creates/reuses
    one shared runtime session per channel.
-4. Session acquires tuner lease (`internal/stream/tuners.go`), selects a source
-   with cooldown-aware ordering, and starts producer (`internal/stream/ffmpeg.go`
-   and `internal/stream/producer.go`).
+4. Session acquires a tuner lease from the candidate source's virtual tuner
+   pool via `VirtualTunerManager` (`internal/stream/virtual_tuners.go`) or
+   the single global `Pool` (`internal/stream/tuners.go`) depending on
+   configuration. Each playlist source has its own capacity-limited pool.
 5. Pump publishes chunks into ring buffer (`internal/stream/pump.go` and
    `internal/stream/ring.go`) and subscribers stream the same shared bytes.
-6. Source health, recovery cycle telemetry, and stall handling are updated in
+6. On failover to a source from a different playlist source, the session
+   releases its current pool lease and acquires a new lease from the target
+   source's pool — implementing cross-source virtual tuner migration.
+7. Source health, recovery cycle telemetry, and stall handling are updated in
    shared session logic.
 
 ### 3. Auto-prioritize Flow
@@ -153,9 +175,9 @@ Persistence is SQLite (`internal/store/sqlite/store.go`) with migrations under
    - channel create/update requests carrying `dynamic_rule`
    - `POST /api/channels`
    - `PATCH /api/channels/{channelID}`
-2. `internal/http/admin_routes.go` normalizes the channel update response first,
-   then queues background sync work for eligible rules (`enabled=true` and
-   non-empty `search_query`).
+2. `internal/http/admin_channels.go` normalizes the channel update response
+   first, then queues background sync work for eligible rules
+   (`enabled=true` and non-empty `search_query`).
    - `search_query` uses the same token semantics as `/api/items?q=...`:
      OR-disjunct separators (`|` or standalone `OR`) with include terms and
      exclusion tokens prefixed with `-` or `!`. Queries with no OR separator
@@ -280,30 +302,30 @@ UI behavior notes:
 
 | Method | Path | Handler | Implementation |
 | --- | --- | --- | --- |
-| `GET` | `/api/groups` | `handleGroups` | `internal/http/admin_routes.go` |
-| `GET` | `/api/items` | `handleItems` | `internal/http/admin_routes.go` |
-| `GET` | `/api/channels` | `handleChannels` | `internal/http/admin_routes.go` |
-| `POST` | `/api/channels` | `handleCreateChannel` | `internal/http/admin_routes.go` |
-| `PATCH` | `/api/channels/reorder` | `handleReorderChannels` | `internal/http/admin_routes.go` |
-| `PATCH` | `/api/channels/{channelID}` | `handleUpdateChannel` | `internal/http/admin_routes.go` |
-| `DELETE` | `/api/channels/{channelID}` | `handleDeleteChannel` | `internal/http/admin_routes.go` |
-| `GET` | `/api/dynamic-channels` | `handleDynamicChannelQueries` | `internal/http/admin_routes.go` |
-| `POST` | `/api/dynamic-channels` | `handleCreateDynamicChannelQuery` | `internal/http/admin_routes.go` |
-| `GET` | `/api/dynamic-channels/{queryID}` | `handleGetDynamicChannelQuery` | `internal/http/admin_routes.go` |
-| `PATCH` | `/api/dynamic-channels/{queryID}` | `handleUpdateDynamicChannelQuery` | `internal/http/admin_routes.go` |
-| `DELETE` | `/api/dynamic-channels/{queryID}` | `handleDeleteDynamicChannelQuery` | `internal/http/admin_routes.go` |
-| `GET` | `/api/dynamic-channels/{queryID}/channels` | `handleDynamicGeneratedChannels` | `internal/http/admin_routes.go` |
-| `PATCH` | `/api/dynamic-channels/{queryID}/channels/reorder` | `handleReorderDynamicGeneratedChannels` | `internal/http/admin_routes.go` |
-| `GET` | `/api/channels/{channelID}/sources` | `handleSources` | `internal/http/admin_routes.go` |
-| `POST` | `/api/channels/{channelID}/sources` | `handleAddSource` | `internal/http/admin_routes.go` |
-| `POST` | `/api/channels/{channelID}/sources/health/clear` | `handleClearSourceHealth` | `internal/http/admin_routes.go` |
-| `PATCH` | `/api/channels/{channelID}/sources/reorder` | `handleReorderSources` | `internal/http/admin_routes.go` |
-| `PATCH` | `/api/channels/{channelID}/sources/{sourceID}` | `handleUpdateSource` | `internal/http/admin_routes.go` |
-| `DELETE` | `/api/channels/{channelID}/sources/{sourceID}` | `handleDeleteSource` | `internal/http/admin_routes.go` |
-| `POST` | `/api/channels/sources/health/clear` | `handleClearAllSourceHealth` | `internal/http/admin_routes.go` |
-| `GET` | `/api/suggestions/duplicates` | `handleDuplicateSuggestions` | `internal/http/admin_routes.go` |
-| `GET` | `/api/admin/tuners` | `handleTunerStatus` | `internal/http/admin_routes.go` |
-| `POST` | `/api/admin/tuners/recovery` | `handleTriggerTunerRecovery` | `internal/http/admin_routes.go` |
+| `GET` | `/api/groups` | `handleGroups` | `internal/http/admin_channels.go` |
+| `GET` | `/api/items` | `handleItems` | `internal/http/admin_channels.go` |
+| `GET` | `/api/channels` | `handleChannels` | `internal/http/admin_channels.go` |
+| `POST` | `/api/channels` | `handleCreateChannel` | `internal/http/admin_channels.go` |
+| `PATCH` | `/api/channels/reorder` | `handleReorderChannels` | `internal/http/admin_channels.go` |
+| `PATCH` | `/api/channels/{channelID}` | `handleUpdateChannel` | `internal/http/admin_channels.go` |
+| `DELETE` | `/api/channels/{channelID}` | `handleDeleteChannel` | `internal/http/admin_channels.go` |
+| `GET` | `/api/dynamic-channels` | `handleDynamicChannelQueries` | `internal/http/admin_channels.go` |
+| `POST` | `/api/dynamic-channels` | `handleCreateDynamicChannelQuery` | `internal/http/admin_channels.go` |
+| `GET` | `/api/dynamic-channels/{queryID}` | `handleGetDynamicChannelQuery` | `internal/http/admin_channels.go` |
+| `PATCH` | `/api/dynamic-channels/{queryID}` | `handleUpdateDynamicChannelQuery` | `internal/http/admin_channels.go` |
+| `DELETE` | `/api/dynamic-channels/{queryID}` | `handleDeleteDynamicChannelQuery` | `internal/http/admin_channels.go` |
+| `GET` | `/api/dynamic-channels/{queryID}/channels` | `handleDynamicGeneratedChannels` | `internal/http/admin_channels.go` |
+| `PATCH` | `/api/dynamic-channels/{queryID}/channels/reorder` | `handleReorderDynamicGeneratedChannels` | `internal/http/admin_channels.go` |
+| `GET` | `/api/channels/{channelID}/sources` | `handleSources` | `internal/http/admin_channels.go` |
+| `POST` | `/api/channels/{channelID}/sources` | `handleAddSource` | `internal/http/admin_channels.go` |
+| `POST` | `/api/channels/{channelID}/sources/health/clear` | `handleClearSourceHealth` | `internal/http/admin_channels.go` |
+| `PATCH` | `/api/channels/{channelID}/sources/reorder` | `handleReorderSources` | `internal/http/admin_channels.go` |
+| `PATCH` | `/api/channels/{channelID}/sources/{sourceID}` | `handleUpdateSource` | `internal/http/admin_channels.go` |
+| `DELETE` | `/api/channels/{channelID}/sources/{sourceID}` | `handleDeleteSource` | `internal/http/admin_channels.go` |
+| `POST` | `/api/channels/sources/health/clear` | `handleClearAllSourceHealth` | `internal/http/admin_channels.go` |
+| `GET` | `/api/suggestions/duplicates` | `handleDuplicateSuggestions` | `internal/http/admin_channels.go` |
+| `GET` | `/api/admin/tuners` | `handleTunerStatus` | `internal/http/admin_tuners.go` |
+| `POST` | `/api/admin/tuners/recovery` | `handleTriggerTunerRecovery` | `internal/http/admin_tuners.go` |
 
 Behavior notes:
 
@@ -313,8 +335,11 @@ Behavior notes:
   - trailing data after the first JSON value is rejected
   - malformed/invalid JSON returns HTTP `400`
   - oversized bodies are rejected with HTTP `413` via `http.MaxBytesReader`
-- `handleItems` (`GET /api/items`) accepts optional `group`/`group_names` and `q` filters plus
-  `limit`/`offset` pagination hints.
+- `handleGroups` (`GET /api/groups`) accepts optional `source_ids` filter
+  (comma-separated or repeated query parameter). When present, returns only
+  groups from the specified playlist sources (deduplicated by name).
+- `handleItems` (`GET /api/items`) accepts optional `group`/`group_names`, `q`,
+  and `source_ids` filters plus `limit`/`offset` pagination hints.
   - group filter semantics:
     - repeated `group` parameters are accepted (`?group=News&group=Sports`)
     - comma-separated values are accepted (`?group=News,Sports`)
@@ -367,8 +392,12 @@ Behavior notes:
   - `q` is case-insensitive across `channel_key` and `tvg_id`.
   - legacy `tvg_id` query fallback is accepted when `q` is omitted.
   - response echoes normalized `min` and `q`.
-- `handleTunerStatus` (`GET /api/admin/tuners`) returns both live tuner/session
-  rows and bounded shared-session history:
+- `handleTunerStatus` (`GET /api/admin/tuners`) returns live tuner/session
+  rows, per-source virtual tuner summaries (`virtual_tuners` array with
+  `playlist_source_id`, `playlist_source_name`, `tuner_count`, `in_use_count`,
+  `idle_count`, `active_session_count` per source), and bounded shared-session
+  history. Each tuner/session row includes `playlist_source_id`,
+  `playlist_source_name`, and `virtual_tuner_slot` fields:
   - supports optional `resolve_ip` boolean query parsing (`1/0`, `true/false`,
     `yes/no`, `on/off`; default `false`); invalid values return HTTP `400`.
   - when `resolve_ip=true`, reverse DNS hostnames are added as `client_host`
@@ -395,7 +424,7 @@ Behavior notes:
     `409` when a manual recovery request is already pending for that session.
 - `POST /api/channels` and `PATCH /api/channels/{channelID}` accept optional
   `dynamic_rule` payloads and return promptly; dynamic source sync runs
-  asynchronously in a background worker managed by `admin_routes.go`.
+  asynchronously in a background worker managed by `admin_workers.go`.
   - `dynamic_rule` supports preferred `group_names` multi-group payloads and
     legacy `group_name` compatibility aliasing.
   - `dynamic_rule.search_query` follows the same OR-capable include/exclude
@@ -427,6 +456,33 @@ Behavior notes:
   - those UI surfaces also render `search_warning` truncation summaries for
     token-mode over-limit queries.
 
+### Admin API Routes: Playlist Source Management
+
+| Method | Path | Handler | Implementation |
+| --- | --- | --- | --- |
+| `GET` | `/api/admin/playlist-sources` | `handleListPlaylistSources` | `internal/http/admin_automation.go` |
+| `POST` | `/api/admin/playlist-sources` | `handleCreatePlaylistSource` | `internal/http/admin_automation.go` |
+| `GET` | `/api/admin/playlist-sources/{sourceID}` | `handleGetPlaylistSource` | `internal/http/admin_automation.go` |
+| `PUT` | `/api/admin/playlist-sources/{sourceID}` | `handleUpdatePlaylistSource` | `internal/http/admin_automation.go` |
+| `DELETE` | `/api/admin/playlist-sources/{sourceID}` | `handleDeletePlaylistSource` | `internal/http/admin_automation.go` |
+
+Behavior notes:
+
+- `POST /api/admin/playlist-sources` auto-generates an immutable `source_key`
+  (8-byte random hex for newly created sources; legacy shorter keys remain
+  valid). Validates unique `name`, unique `playlist_url`, and
+  `tuner_count >= 1`.
+- `PUT /api/admin/playlist-sources/{sourceID}` accepts partial updates for
+  `name`, `playlist_url`, `tuner_count`, and `enabled`. `source_key` is
+  immutable and rejected in write payloads.
+- `DELETE /api/admin/playlist-sources/{sourceID}` is blocked for `source_id=1`
+  (returns HTTP `400`). Non-primary source deletion removes source-owned
+  catalog rows (no reassignment), removes channel-source mappings for deleted
+  items, removes generated dynamic channels keyed to deleted-source items, and
+  prunes deleted source IDs from dynamic source-filter JSON fields.
+- Duplicate `name` or `playlist_url` values return HTTP `400` with a
+  descriptive error identifying the conflicting field.
+
 ### Admin API Routes: Automation and Jobs
 
 | Method | Path | Handler | Implementation |
@@ -446,6 +502,8 @@ Behavior notes:
   serialized through one mutation critical section.
 - `handlePutAutomation` applies partial updates:
   - top-level keys: `playlist_url`, `timezone`
+  - `playlist_sources` array for bulk source updates (must include all
+    existing sources with `source_id`; validates unique names and URLs)
   - schedule objects: `playlist_sync`, `auto_prioritize` (`enabled`, `cron_spec`)
   - analyzer keys: `probe_timeout_ms`, `analyzeduration_us`, `probesize_bytes`,
     `bitrate_mode`, `sample_seconds`, `enabled_only`, `top_n_per_channel`
@@ -469,6 +527,10 @@ Behavior notes:
   `{"deleted":<count>}` with the removed cache row count.
 - `startJobRun` wraps `Runner.Start(...)` with `context.WithoutCancel(...)`,
   so manual trigger request cancellation does not cancel a queued/running job.
+- `handleRunPlaylistSync` accepts optional `?source_id=N` query parameter.
+  When present, validates the source exists and is enabled, and scopes the
+  sync job to refresh only that source. Response includes `source_id` when
+  scoped.
 - `handleListJobRuns` validates `name` against the allowlist
   (`playlist_sync`, `auto_prioritize`, `dvr_lineup_sync`) and normalizes query
   paging (`limit` default `50`, clamped `1..500`; `offset` clamped to `>= 0`).

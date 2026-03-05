@@ -106,7 +106,7 @@ type Config struct {
 type Handler struct {
 	channels    ChannelsProvider
 	logger      *slog.Logger
-	tuners      *Pool
+	tuners      tunerUsage
 	sessions    *SessionManager
 	tuneBackoff *tuneBackoffGate
 }
@@ -160,7 +160,7 @@ func (h *Handler) ClearAllSourceHealth() error {
 	return h.sessions.ClearAllSourceHealth()
 }
 
-func NewHandler(cfg Config, tuners *Pool, channelsProvider ChannelsProvider) *Handler {
+func NewHandler(cfg Config, tuners tunerUsage, channelsProvider ChannelsProvider) *Handler {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()

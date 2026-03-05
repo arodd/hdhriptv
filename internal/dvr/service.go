@@ -292,6 +292,7 @@ func (s *Service) ReloadLineupForPlaylistSyncOutcome(ctx context.Context) (Reloa
 	outcome := ReloadOutcome{
 		Status:           ReloadStatusUnknown,
 		SkippedProviders: make(map[ProviderType]string),
+		FailedProviders:  make(map[ProviderType]string),
 	}
 	for _, providerType := range activeProviders {
 		configured := instanceForProvider(instance, providerType)
@@ -310,10 +311,12 @@ func (s *Service) ReloadLineupForPlaylistSyncOutcome(ctx context.Context) (Reloa
 
 		provider, buildErr := s.buildLineupReloadProvider(configured)
 		if buildErr != nil {
-			return ReloadOutcome{}, fmt.Errorf("build %s dvr provider: %w", providerType, buildErr)
+			outcome.FailedProviders[providerType] = fmt.Sprintf("build_provider_failed: %v", buildErr)
+			continue
 		}
 		if err := s.reloadLineup(ctx, configured, provider); err != nil {
-			return ReloadOutcome{}, fmt.Errorf("reload lineup for provider %s: %w", providerType, err)
+			outcome.FailedProviders[providerType] = fmt.Sprintf("reload_lineup_failed: %v", err)
+			continue
 		}
 		outcome.Reloaded = true
 		outcome.ReloadedProviders = append(outcome.ReloadedProviders, providerType)
@@ -321,21 +324,23 @@ func (s *Service) ReloadLineupForPlaylistSyncOutcome(ctx context.Context) (Reloa
 
 	if len(outcome.SkippedProviders) > 0 {
 		outcome.Skipped = true
-		outcome.SkipReasons = make([]string, 0, len(outcome.SkippedProviders))
-		for _, providerType := range activeProviders {
-			reason, ok := outcome.SkippedProviders[providerType]
-			if !ok || strings.TrimSpace(reason) == "" {
-				continue
-			}
-			outcome.SkipReasons = append(outcome.SkipReasons, fmt.Sprintf("%s:%s", providerType, reason))
-		}
+		outcome.SkipReasons = providerReasonSummary(activeProviders, outcome.SkippedProviders)
 	} else {
 		outcome.SkippedProviders = nil
 	}
 
+	if len(outcome.FailedProviders) > 0 {
+		outcome.Failed = true
+		outcome.FailureReasons = providerReasonSummary(activeProviders, outcome.FailedProviders)
+	} else {
+		outcome.FailedProviders = nil
+	}
+
 	switch {
-	case outcome.Reloaded && outcome.Skipped:
+	case outcome.Reloaded && (outcome.Skipped || outcome.Failed):
 		outcome.Status = ReloadStatusPartial
+	case outcome.Failed:
+		outcome.Status = ReloadStatusFailed
 	case outcome.Skipped:
 		outcome.Status = ReloadStatusSkipped
 	case outcome.Reloaded:
@@ -345,6 +350,28 @@ func (s *Service) ReloadLineupForPlaylistSyncOutcome(ctx context.Context) (Reloa
 	}
 
 	return outcome, nil
+}
+
+func providerReasonSummary(activeProviders []ProviderType, providerReasons map[ProviderType]string) []string {
+	if len(providerReasons) == 0 {
+		return nil
+	}
+	parts := make([]string, 0, len(providerReasons))
+	for _, providerType := range activeProviders {
+		reason, ok := providerReasons[providerType]
+		if !ok {
+			continue
+		}
+		reason = strings.TrimSpace(reason)
+		if reason == "" {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s:%s", providerType, reason))
+	}
+	if len(parts) == 0 {
+		return nil
+	}
+	return parts
 }
 
 func (s *Service) reloadLineup(ctx context.Context, instance InstanceConfig, provider LineupReloadProvider) error {

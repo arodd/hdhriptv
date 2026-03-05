@@ -71,6 +71,7 @@ Current phase names are:
 - `sqlite_migrate`
 - `sqlite_open_total`
 - `identity_settings_resolve`
+- `app_version_sync`
 - `automation_overrides_sync`
 - `dvr_schedule_sync`
 - `scheduler_load_from_settings`
@@ -80,8 +81,8 @@ tracking in log pipelines.
 
 ### Initial playlist sync startup events
 
-When a playlist URL is configured, startup emits a dedicated initial-sync phase
-event stream:
+When at least one playlist source has a configured URL, startup emits a
+dedicated initial-sync phase event stream:
 
 - `msg="initial playlist sync phase"`
 - `initial_sync_phase=scheduled_after_listener_start|completed|failed`
@@ -91,32 +92,15 @@ Operational behavior:
 - The initial sync is deferred until HTTP listener readiness succeeds
   (`/healthz`) so provider reloads do not run before listeners are accepting
   requests.
-- Startup retry/backoff is scoped to transient Jellyfin lineup reload failures
-  only.
-- Retry policy is bounded: up to `4` attempts, exponential backoff from `1s`
-  capped at `8s`, within a `3m` retry budget.
-- Non-transient failures bypass retries and surface immediately.
+- DVR lineup reload during playlist sync is optimistic: provider reload
+  failures are logged and reflected in run summary fields but do not fail the
+  playlist sync run itself.
 - After startup sync reconciliation, dynamic generated guide names are refreshed
   so dynamic channel lineup names stay aligned with current playlist metadata.
-
-Transient error signatures treated as retryable during startup sync:
-
-- response status `5xx` (server-side errors)
-- `connection refused`
-- `connection reset`
-- `network is unreachable`
-- `broken pipe`
-- `deadline exceeded`
-- `timed out`
-- `timeout`
-- `temporarily unavailable`
-- `no route to host`
-- `eof`
 
 Useful fields:
 
 - `attempt` on `completed` phase events (`initial_sync_phase=completed`).
-- `attempt`, `max_attempts`, and `backoff` on retry warnings (`msg="initial playlist sync transient jellyfin lineup reload failure; retrying"`). Retry warnings are separate log records and do not carry an `initial_sync_phase` value.
 - `duration` on both `completed` and `failed` phase events, including readiness-gate failures.
 - `error` on `failed` events.
 
@@ -289,11 +273,14 @@ Prometheus `/metrics` endpoint.
 | `stream_slow_skip_events_total` | counter | none | Total skip-policy lag events (slow subscriber fell behind and skipped forward). |
 | `stream_slow_skip_lag_chunks` | histogram | none | Lag depth distribution (chunks) when skip-policy events happen. |
 | `stream_slow_skip_lag_bytes` | histogram | none | Estimated lag depth distribution (bytes) when skip-policy events happen. |
+| `stream_subscriber_write_deadline_unsupported_total` | counter | none | Subscriber writes where write-deadline setup was unsupported and the stream fell back to best-effort writes without deadline enforcement. |
 | `stream_subscriber_write_deadline_timeouts_total` | counter | none | Subscriber writes that hit write deadlines (`os.ErrDeadlineExceeded`/timeout-classified errors). |
 | `stream_subscriber_write_short_writes_total` | counter | none | Subscriber writes that returned `io.ErrShortWrite`. |
 | `stream_subscriber_write_blocked_seconds` | histogram | none | Time spent blocked in subscriber `ResponseWriter.Write` calls. |
 | `stream_source_read_pause_events_total` | counter | `reason` | Source read pauses >= 1s (minimum threshold) grouped by finalize reason. |
 | `stream_source_read_pause_seconds` | histogram | `reason` | Duration distribution for source read pauses >= 1s grouped by finalize reason. |
+| `stream_startup_probe_read_worker_waits_total` | counter | none | Startup-probe detached-read attempts that waited because the global worker budget was saturated. |
+| `stream_startup_probe_read_worker_acquire_timeouts_total` | counter | none | Startup-probe detached-read attempts that timed out/canceled while waiting for worker budget. |
 
 `stream_source_read_pause_*{reason=...}` values:
 
@@ -329,9 +316,31 @@ to your traffic profile after collecting at least several days of baseline.
 | Source read-pause rate by reason | `sum by (reason) (rate(stream_source_read_pause_events_total[5m]))` | Distinguishes upstream starvation (`recovered`) from expected shutdown/cancel churn (`ctx_cancel`, `pump_exit`). |
 | Source read-pause duration p95 | `histogram_quantile(0.95, sum by (le, reason) (rate(stream_source_read_pause_seconds_bucket[5m])))` | Shows whether pauses are brief blips or sustained stalls likely to drain DVR client buffers. |
 | Slow-skip event rate | `sum(rate(stream_slow_skip_events_total[5m]))` | Indicates subscribers repeatedly falling behind the publish window. |
-| Write-pressure timeout/short-write rate | `sum(rate(stream_subscriber_write_deadline_timeouts_total[5m]))` and `sum(rate(stream_subscriber_write_short_writes_total[5m]))` | Detects downstream client/network write pressure before widespread disconnects. |
+| Write-pressure timeout/short-write/unsupported rate | `sum(rate(stream_subscriber_write_deadline_timeouts_total[5m]))`, `sum(rate(stream_subscriber_write_short_writes_total[5m]))`, and `sum(rate(stream_subscriber_write_deadline_unsupported_total[5m]))` | Detects downstream client/network write pressure and unsupported deadline fallback paths before widespread disconnects. |
 | Bounded-close timeout/suppression | `sum(rate(stream_close_with_timeout_timeouts_total[5m]))` and `sum(rate(stream_close_with_timeout_suppressed_total[5m]))` | Surfaces shutdown/cleanup pressure and worker-budget saturation. |
 | Late-abandoned / release-underflow counters | `increase(stream_close_with_timeout_late_abandoned_total[15m])`, `increase(stream_close_with_timeout_release_underflow_total[15m])` | Flags close-path invariants and potentially stuck close operations. |
+| Per-source tuner utilization | `stream_virtual_tuner_utilization_ratio` by `playlist_source` | Identifies per-source pool saturation before global capacity is exhausted. |
+| Per-source sync duration | `histogram_quantile(0.95, sum by (le, playlist_source) (rate(playlist_sync_source_duration_seconds_bucket[5m])))` | Detects slow-fetching sources that extend total sync window. |
+| Per-source sync errors | `sum by (playlist_source) (rate(playlist_sync_source_errors_total[5m]))` | Isolates failing sources for targeted investigation. |
+
+### Grafana starter dashboard
+
+A ready-to-import dashboard bundle is available at:
+
+- `deploy/grafana/hdhriptv-release-health-dashboard.json`
+
+It combines Prometheus and Loki release health signals into one view:
+
+- target availability and process uptime
+- warning/error log rates over deploy windows
+- close-path invariant counters (timeouts, late-abandoned, release-underflow)
+- write-pressure / slow-skip and source read-pause rates
+- per-source tuner utilization and playlist-sync latency/error trends
+- release lifecycle logs (`starting server`, `phase=app_version_sync`, `job finished`)
+
+Import instructions and datasource mapping details are in:
+
+- `deploy/grafana/README.md`
 
 ### Suggested alert thresholds
 
@@ -341,6 +350,7 @@ to your traffic profile after collecting at least several days of baseline.
 | Page | `increase(stream_close_with_timeout_release_underflow_total[10m]) > 0` | Treat as invariant violation; inspect recent close suppression/timeout logs and deploy health before user impact expands. |
 | Warning | `sum(rate(stream_source_read_pause_events_total{reason="recovered"}[5m])) > 0.1` for `15m` | Upstream starvation is recurring; inspect provider/source health and failover behavior. |
 | Warning | `sum(rate(stream_subscriber_write_deadline_timeouts_total[5m])) > 0` for `10m` | Downstream write pressure is active; review subscriber network paths and lag policy settings. |
+| Warning | `sum(rate(stream_subscriber_write_deadline_unsupported_total[5m])) > 0` for `10m` | Write-deadline fallback is active; investigate transport/proxy paths that do not support deadlines. |
 | Warning | `sum(rate(stream_slow_skip_events_total[5m])) > 0` for `10m` | Slow-client lag compensation is frequently engaged; verify buffer and subscriber lag settings. |
 
 ### Source read-pause metric migration note
@@ -685,18 +695,23 @@ valid font for the family Sans`.
 
 ## Playlist and Channel Lifecycle
 
-- On startup, if `playlist.url` is configured (via persisted settings or `PLAYLIST_URL`), the service performs an initial playlist sync job.
+- On startup, if at least one playlist source has a configured URL (via `playlist_sources` table, persisted `playlist.url` setting, or `PLAYLIST_URL` environment variable), the service performs an initial playlist sync job covering all enabled sources.
 - Startup initial playlist sync is scheduled only after the primary HTTP listener answers `/healthz` readiness probes to avoid startup-window DVR reload races against an unopened listener.
-- Startup sync uses bounded retry/backoff only for transient Jellyfin lineup reload failures (`reload dvr lineup after playlist sync` + Jellyfin provider + transient network/5xx signatures): up to `4` attempts, exponential backoff from `1s` capped at `8s`, within a `3m` overall retry budget.
-- Non-transient startup sync failures abort immediately without retries.
+- DVR lineup reload after playlist sync is optimistic: reload failures do not
+  fail playlist sync and are surfaced through logs and job summary fields
+  (`dvr_lineup_reload_status=unknown`,
+  `dvr_lineup_reload_skip_reason=reload_error`).
 - Startup sync emits structured log records (`msg="initial playlist sync phase"`) with `initial_sync_phase=scheduled_after_listener_start|completed|failed` and includes attempt/duration metadata on completion.
-- Periodic refresh uses the automation schedule in `jobs.playlist_sync.cron`.
+- Periodic refresh uses the automation schedule in `jobs.playlist_sync.cron`. All enabled sources share a single cron schedule.
 - `--refresh-schedule` / `REFRESH_SCHEDULE` and the UI/API automation settings update the same persisted schedule keys.
-- Refresh is serialized by an internal lock (one refresh at a time).
-- Playlist upsert behavior:
-  - upserts existing entries
-  - inserts new entries
-  - marks stale entries inactive instead of deleting them
+- Source refresh worker concurrency is controlled by `--playlist-sync-source-concurrency` / `PLAYLIST_SYNC_SOURCE_CONCURRENCY` (default `1`, max `16`). `1` keeps sequential behavior; higher values enable bounded parallel source refresh.
+- Scheduler overlap contention is handled by a coalesced deferred catch-up policy with bounded exponential backoff (instead of dropping overlapping scheduled ticks).
+- Per-source manual sync: `POST /api/admin/jobs/playlist-sync/run?source_id=N` syncs a single source without affecting other sources.
+- Playlist upsert behavior (per source):
+  - upserts existing entries for the current source
+  - inserts new entries with the current `playlist_source_id`
+  - marks stale entries inactive only within the current source (source-scoped deactivation)
+  - items from other sources are never affected by a single-source refresh
 - Published channel behavior:
   - channels are ordered explicitly
   - guide numbers are contiguous and start at `--traditional-guide-start` (default `100`)
@@ -782,12 +797,16 @@ valid font for the family Sans`.
   - Channels reload runs for active `channels`.
   - Jellyfin reload runs for active `jellyfin` only when
     `jellyfin_base_url` and `jellyfin_api_token` are configured.
+  - Provider-local build/reload failures are aggregated while healthy
+    providers continue in the same fan-out pass.
   - Mixed outcomes are reported as `dvr_lineup_reload_status=partial`.
-  - Skipped provider reasons are encoded in
+  - All-provider failures are reported as `dvr_lineup_reload_status=failed`.
+  - Provider reason details (skips and failures) are encoded in
     `dvr_lineup_reload_skip_reason` (for example
-    `jellyfin:missing_jellyfin_api_token`).
+    `jellyfin:missing_jellyfin_api_token` or
+    `channels:reload_lineup_failed:...`).
   - Job summaries include
-    `dvr_lineup_reload_status=<disabled|reloaded|partial|skipped>`
+    `dvr_lineup_reload_status=<disabled|reloaded|partial|failed|skipped>`
     and `dvr_lineup_reload_skip_reason=<reason>`.
 
 ### Job Status Interpretation
@@ -888,10 +907,12 @@ Key info-level events emitted by the service:
 - Recovery diagnostics include burst and pacing fields on `shared session recovery triggered` / `shared session recovery cycle budget exhausted` (`recovery_burst_count`, `recovery_burst_budget_count`, `recovery_burst_pace_window`, and `recovery_trigger_logs_coalesced` when repeated warnings are rate-limited).
 - Tuner lifecycle: `tuner lease acquired`, `tuner lease reused`, `tuner lease released`, `tuner probe preempted`, `tuner idle-client preempted`.
 - Admin mutation lifecycle: `admin channel created`, `admin channel updated`, `admin channels reordered`, `admin channel deleted`, `admin source added`, `admin source updated`, `admin sources reordered`, `admin source deleted`, `admin source health cleared`, `admin all source health cleared`, `admin automation updated`, `admin automation timezone updated`, `admin automation schedule updated`, `admin automation settings updated`, `admin manual job run started`, `admin auto-prioritize cache cleared`, `admin dvr config updated`, `admin dvr schedule updated`, `admin dvr sync requested`, `admin dvr sync completed`, `admin dvr reverse-sync requested`, `admin dvr reverse-sync completed`, `admin channel dvr reverse-sync requested`, `admin channel dvr reverse-sync completed`, `admin channel dvr mapping updated`.
+- Playlist source lifecycle: `admin playlist source created`, `admin playlist source updated`, `admin playlist source deleted`.
+- Multi-source sync lifecycle: `playlist sync source refresh started`, `playlist sync source refresh succeeded`, `playlist sync source refresh failed` (with `playlist_source_id`, `playlist_source_name`, `playlist_source_key`, and `item_count` fields).
 - Dynamic channel immediate-sync lifecycle: `admin dynamic channel immediate sync queued`, `admin dynamic channel immediate sync started`, `admin dynamic channel immediate sync completed`, `admin dynamic channel immediate sync canceled`, `admin dynamic channel immediate sync skipped stale run`, `admin dynamic channel immediate sync failed`.
 - Dynamic block materialization lifecycle: `admin dynamic block sync queued`, `admin dynamic block immediate sync started`, `admin dynamic block immediate sync completed`, `admin dynamic block immediate sync canceled`, `admin dynamic block immediate sync failed`, `admin dynamic generated channels reordered`.
 - DVR lineup reload queue lifecycle: `admin dvr lineup reload queued`, `admin dvr lineup reload started`, `admin dvr lineup reload completed`, `admin dvr lineup reload canceled`, `admin dvr lineup reload failed`, `admin dvr lineup reload follow-up queued`.
-- Jobs/scheduler/playlist lifecycle: `job started`, `job finished`, `job panic recovered`, `job run persistence failed`, `scheduler loaded schedules`, `scheduler schedule updated`, `scheduler timezone updated`, `playlist refresh started`, `playlist refresh finished`.
+- Jobs/scheduler/playlist lifecycle: `job started`, `job finished`, `job panic recovered`, `job run persistence failed`, `scheduler loaded schedules`, `scheduler schedule updated`, `scheduler timezone updated`, `scheduled job started`, `scheduled job overlap deferred for catch-up`, `scheduled job overlap coalesced into existing deferred catch-up`, `scheduled deferred catch-up waiting`, `scheduled deferred catch-up started`, `playlist refresh started`, `playlist refresh finished`.
 - SQLite IOERR diagnostics lifecycle: `sqlite_ioerr_diag_bundle` (one-shot pragma/db-file snapshot) and `sqlite_ioerr_trace_dump` (rate-limited in-memory DB operation timeline).
 - Discovery lifecycle (trace-level): `discovery response sent`, `ssdp response sent`.
 - Recovery filler normalization (debug-level): `shared session slate AV recovery filler profile normalized` with `original_resolution`, `normalized_resolution`, and `normalization_reason`.
@@ -907,7 +928,7 @@ See `docs/STREAMING.md` bounded-close telemetry guidance for detailed triage and
 Common correlation fields on these events include:
 
 - `channel_id`, `guide_number`, `guide_name`
-- `tuner_id`, `source_id`, `source_item_key`
+- `tuner_id`, `source_id`, `source_item_key`, `playlist_source`, `playlist_source_id`
 - `subscriber_id`, `client_addr`, `remote_addr`
 - `run_id`, `job_name`, `triggered_by`
 - `result`, `reason`, `duration`
@@ -917,6 +938,16 @@ Common correlation fields on these events include:
 - Catalog, channels, source mappings, and persisted device identity are stored in SQLite at `DB_PATH`.
 - Default path is `./hdhr-iptv.db`.
 - In Docker, default DB path is `/data/hdhr-iptv.db`; mount `/data` to persist.
+- Runtime build metadata is persisted at startup in settings keys:
+  - `app.version`
+  - `app.commit`
+  - `app.build_time`
+
+Example query:
+
+```bash
+sqlite3 /data/hdhr-iptv.db "SELECT key, value FROM settings WHERE key LIKE 'app.%' ORDER BY key;"
+```
 
 ### Backup strategies
 
@@ -980,6 +1011,177 @@ Operational recommendation:
 - Set explicit `DEVICE_ID` and `DEVICE_AUTH` when you need fixed identity across
   fresh databases, DB replacements/restores, or multiple deployments.
 
+## Multi-Source Playlist Operations
+
+### Per-Source Sync Triggers
+
+| Trigger | Scope | Endpoint |
+|---------|-------|----------|
+| Scheduled cron | All enabled sources | Automation schedule (`jobs.playlist_sync.cron`) |
+| Manual all-source | All enabled sources | `POST /api/admin/jobs/playlist-sync/run` |
+| Manual per-source | Single source | `POST /api/admin/jobs/playlist-sync/run?source_id=N` |
+| UI per-source button | Single source | Per-row "Sync Now" on `/ui/automation` |
+| UI global button | All enabled sources | "Sync All" on `/ui/automation` |
+| Startup one-shot | All enabled sources | Automatic on process start |
+
+Per-source sync refreshes only the specified source's catalog items,
+runs source-scoped deactivation, then triggers reconciliation and
+conditional DVR lineup reload. Other sources' catalog state is unaffected.
+
+### Partial Failure Behavior
+
+When syncing multiple sources, each source is fetched independently:
+
+| Outcome | Job Status | DVR Reload | Summary |
+|---------|-----------|------------|---------|
+| All sources succeed | `success` | Triggers | `playlist_sources attempted=N succeeded=N failed=0` |
+| Some sources succeed | `success` (with warnings) | Triggers | `playlist_sources attempted=N succeeded=M failed=K` + failed source list |
+| All sources fail | `error` | Skipped | `playlist_sources attempted=N succeeded=0 failed=N` |
+
+A failing source does not deactivate catalog items from other sources.
+Source-scoped deactivation ensures that only items belonging to the
+currently-refreshing source are marked inactive when not seen in the
+latest fetch.
+
+### Prometheus Metric Breaking Changes
+
+Multi-source support adds a `playlist_source` label dimension to
+playlist sync metrics. Existing dashboard queries and alert rules that
+reference these metrics must be updated to account for the new label:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `playlist_sync_source_duration_seconds` | histogram | `playlist_source` | Per-source fetch+upsert duration |
+| `playlist_sync_source_errors_total` | counter | `playlist_source` | Per-source fetch/parse/upsert errors |
+| `playlist_sync_source_items` | gauge | `playlist_source` | Items processed per source in last sync |
+| `stream_virtual_tuner_utilization_ratio` | gauge | `playlist_source` | Per-source tuner pool utilization (in-use / configured) |
+
+Migration steps for Prometheus consumers:
+
+1. Update dashboard queries to aggregate across the new label where
+   total-system metrics are needed:
+   ```promql
+   sum(rate(playlist_sync_source_errors_total[5m]))
+   ```
+2. Add per-source breakdown panels for granular monitoring:
+   ```promql
+   sum by (playlist_source) (rate(playlist_sync_source_duration_seconds_sum[5m]))
+   ```
+3. Update alert rules to either aggregate or filter by source as
+   appropriate for the alert's intent.
+
+### Scheduler Contention and Freshness Metrics
+
+Scheduled automation overlaps now use coalesced deferred catch-up with bounded
+backoff. The following metrics provide contention/freshness visibility:
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `job_scheduler_events_total` | counter | `job_name`, `event` | Scheduler start/skip/deferred lifecycle events (`started`, `skipped_already_running`, `deferred_enqueued`, `deferred_started`, etc.). |
+| `job_scheduler_deferred_pending` | gauge | `job_name` | `1` when a deferred catch-up run is pending for the job. |
+| `job_scheduler_deferred_backoff_seconds` | gauge | `job_name` | Current deferred retry backoff duration. |
+| `job_scheduler_deferred_age_seconds` | gauge | `job_name` | Age of the pending deferred catch-up run. |
+| `job_scheduler_last_success_timestamp_seconds` | gauge | `job_name` | Unix timestamp of the last successful schedule-triggered run. |
+| `job_scheduler_freshness_seconds` | gauge | `job_name` | Current age since the last successful schedule-triggered run. |
+
+### Discovery Tuner-Count Cap
+
+Both client-facing discovery surfaces cap the advertised tuner count at
+`255`:
+
+- **UDP discovery**: `TunerCount` response tag is encoded as a single
+  `uint8` byte — values above 255 are capped.
+- **`/discover.json`**: `TunerCount` JSON field is capped at `255` for
+  DVR client compatibility (Channels DVR, Plex, Jellyfin).
+
+The real per-source and aggregate tuner totals are visible only in
+`/api/admin/tuners` (the `virtual_tuners` array and summary fields).
+
+When the internal sum of enabled source tuner counts exceeds 255, a
+startup log event is emitted indicating that discovery tuner-count
+capping is active. This does not affect stream capacity — virtual tuner
+pools enforce the real per-source limits internally.
+
+### Known Limitations
+
+| Limitation | Details | Future Work |
+|------------|---------|-------------|
+| Shared cron schedule | All sources share one `playlist_sync.cron` schedule. Per-source scheduling is deferred. | Per-source cron expressions |
+| Shared refresh worker pool | Source refresh parallelism is bounded globally per run (`playlist_sync_source_concurrency`, max `16`), not per-source class/provider. | Adaptive concurrency by provider/source class |
+| No hard source count limit | There is no enforced maximum number of playlist sources. Operators with many sources accept longer sync windows and should monitor per-source sync duration metrics. | Operational guidance only |
+
+## Operator Migration: Legacy to Multi-Source
+
+### Legacy Database Bootstrap
+
+On first startup with multi-source code against a legacy database:
+
+1. Migration `007_playlist_sources.sql` creates the `playlist_sources`
+   table.
+2. `ensurePlaylistSourcesSchema` seeds the primary source (`source_id=1`)
+   from legacy settings:
+   - URL from persisted `playlist.url` setting (or `PLAYLIST_URL` env).
+   - Tuner count from effective startup config (`cfg.TunerCount`).
+   - `source_key` is set to the well-known constant `"primary"`.
+   - `name` defaults to `"Primary"`.
+3. Existing `playlist_items` rows have `playlist_source_id` defaulting
+   to `1`, pointing to the auto-seeded primary source.
+
+No manual migration is required — existing one-source databases start
+and stream without changes.
+
+### CLI/Environment Variable Compatibility
+
+Legacy arguments continue to work and map to the primary source:
+
+| Legacy Argument | Maps To |
+|----------------|---------|
+| `--playlist-url` / `PLAYLIST_URL` | Primary source URL |
+| `--tuner-count` / `TUNER_COUNT` | Primary source tuner count |
+
+Additional sources are added via:
+
+- `--playlist-source "url=<url>,tuners=<count>[,name=<label>][,enabled=<bool>]"` (repeatable)
+- `PLAYLIST_SOURCES` environment variable (semicolon-separated entries)
+
+If only legacy arguments are supplied, behavior remains single-source.
+
+### Automation API Compatibility
+
+`GET /api/admin/automation` returns both:
+
+- `playlist_url` — alias to primary source URL (backward compatible)
+- `playlist_sources` — full array of all sources (new canonical shape)
+
+`PUT /api/admin/automation` accepts both:
+
+- Payloads with `playlist_url` update the primary source URL.
+- Payloads with `playlist_sources` update the full source list.
+- Both can coexist in the same payload — `playlist_sources` takes
+  precedence when present.
+
+### Rollback Strategy
+
+To revert from multi-source to single-source operation:
+
+1. **Disable extra sources**: Set `enabled=0` on all non-primary sources
+   via the API (`PUT /api/admin/playlist-sources/{sourceID}`) or
+   automation UI. The primary source (`source_id=1`) cannot be deleted.
+2. **Remove CLI arguments**: Stop passing `--playlist-source` or
+   `PLAYLIST_SOURCES`. Legacy `--playlist-url` and `--tuner-count`
+   continue to control the primary source.
+3. **Run a sync**: Trigger `POST /api/admin/jobs/playlist-sync/run` to
+   reconcile the catalog with only the primary source active.
+
+The `playlist_sources` table and non-primary source catalog items remain
+in the database but are inert when disabled. No destructive schema
+rollback is needed.
+
+If a full database rollback is required (downgrading to pre-multi-source
+code), restore a pre-migration database backup. The migration is
+additive — it does not modify existing tables — so the original schema
+is preserved in backups taken before the migration ran.
+
 ## Troubleshooting
 
 ### Discovery Does Not Find Device
@@ -997,13 +1199,13 @@ Operational recommendation:
 
 ### Streams Fail To Start
 
-- HTTP `503`: all tuners are in use. Increase `TUNER_COUNT` or reduce concurrent playback.
+- HTTP `503`: all tuners are in use. In multi-source deployments, check per-source pool utilization in `/api/admin/tuners` (`virtual_tuners` array) — a single source pool may be exhausted while others have capacity. Increase the bottleneck source's `tuner_count` or reduce concurrent playback on that source.
 - HTTP `502`: upstream URL unavailable or ffmpeg process failed.
 - In ffmpeg modes, validate `FFMPEG_PATH` and local ffmpeg installation.
 - For analyzer/profile-probe failures, validate `FFPROBE_PATH` (or `--ffprobe-path`) and confirm the selected value in startup logs (`ffprobe_path`).
 - For `ffmpeg-copy` startup-timeout errors, increase `STARTUP_TIMEOUT` and/or tune startup detection (`FFMPEG_STARTUP_PROBESIZE_BYTES`, `FFMPEG_STARTUP_ANALYZEDURATION`) so ffmpeg emits initial bytes before failover deadline.
 - If initial startup frequently times out on random-access gating but recovery continuity still needs strict cutover behavior, keep `STARTUP_RANDOM_ACCESS_RECOVERY_ONLY=true` (the default) so random-access enforcement applies only during recovery cycles.
-- Startup expects both video and audio components. If startup inventory reports an explicit component-incomplete state (`video_only` or `audio_only`), startup is rejected. Inspect diagnostics in logs and `/api/admin/tuners` (`source_startup_component_state`, `source_startup_video_streams`, `source_startup_audio_streams`). For random-access startup, compare `source_startup_probe_raw_bytes` vs `source_startup_probe_trimmed_bytes` and monitor `source_startup_probe_cutover_offset`/`source_startup_probe_dropped_bytes` to see how much pre-IDR data is discarded before stream handoff.
+- Startup expects both video and audio components. Startup is accepted only when inventory reaches `video_audio`; `video_only`, `audio_only`, `undetected`, and `unknown` startup component states are all treated as startup failures. Inspect diagnostics in logs and `/api/admin/tuners` (`source_startup_component_state`, `source_startup_video_streams`, `source_startup_audio_streams`). For random-access startup, compare `source_startup_probe_raw_bytes` vs `source_startup_probe_trimmed_bytes` and monitor `source_startup_probe_cutover_offset`/`source_startup_probe_dropped_bytes` to see how much pre-IDR data is discarded before stream handoff.
 - High random-access cutover (>=75% dropped from startup probe) emits `shared session startup probe cutover warning` log events with bounded coalescing metadata (`source_startup_probe_cutover_warn_logs_coalesced`) to reduce repetitive log spam under rapid recovery churn.
 - The runtime automatically retries once with relaxed startup probe/analyze settings (`source_startup_retry_relaxed_probe=true`) when startup detection initially appears component-incomplete. Startup is accepted only when inventory reaches `video_audio`; if the relaxed retry fails or still reports incomplete inventory, startup fails and failover continues.
 - If DVR logs show disconnects after no data for several seconds, reduce `BUFFER_PUBLISH_FLUSH_INTERVAL`, confirm producer pacing (`PRODUCER_READRATE=1`), and confirm recovery keepalive remains enabled (`RECOVERY_FILLER_ENABLED=true`, default). For picky clients, try `RECOVERY_FILLER_MODE=slate_av` (decodable filler) or `RECOVERY_FILLER_MODE=psi` before `null`.

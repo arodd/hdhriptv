@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS dynamic_channel_queries (
   name          TEXT NOT NULL DEFAULT '',
   group_name    TEXT NOT NULL DEFAULT '',
   group_names_json TEXT NOT NULL DEFAULT '[]',
+  source_ids_json TEXT NOT NULL DEFAULT '[]',
   search_query  TEXT NOT NULL DEFAULT '',
+  search_regex  INTEGER NOT NULL DEFAULT 0,
   order_index   INTEGER NOT NULL,
   last_count    INTEGER NOT NULL DEFAULT 0,
   truncated_by  INTEGER NOT NULL DEFAULT 0,
@@ -58,7 +60,9 @@ CREATE TABLE IF NOT EXISTS published_channels (
   dynamic_sources_enabled INTEGER NOT NULL DEFAULT 0,
   dynamic_group_name TEXT NOT NULL DEFAULT '',
   dynamic_group_names_json TEXT NOT NULL DEFAULT '[]',
+  dynamic_source_ids_json TEXT NOT NULL DEFAULT '[]',
   dynamic_search_query TEXT NOT NULL DEFAULT '',
+  dynamic_search_regex INTEGER NOT NULL DEFAULT 0,
   created_at    INTEGER NOT NULL,
   updated_at    INTEGER NOT NULL
 );

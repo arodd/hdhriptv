@@ -1,0 +1,40 @@
+{{define "shared-js-group-helpers"}}
+function normalizeGroupNameValue(raw) {
+  return String(raw || "").trim();
+}
+
+function normalizeGroupNameList(raw) {
+  const deduped = new Map();
+  for (const value of raw || []) {
+    const trimmed = normalizeGroupNameValue(value);
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (deduped.has(key)) {
+      continue;
+    }
+    deduped.set(key, trimmed);
+  }
+  return Array.from(deduped.entries())
+    .sort((a, b) => {
+      if (a[0] === b[0]) {
+        return a[1].localeCompare(b[1]);
+      }
+      return a[0].localeCompare(b[0]);
+    })
+    .map((entry) => entry[1]);
+}
+
+function normalizeGroupName(raw) {
+  if (raw && typeof raw === "object") {
+    if (typeof raw.name === "string") {
+      return raw.name.trim();
+    }
+    if (typeof raw.Name === "string") {
+      return raw.Name.trim();
+    }
+  }
+  return "";
+}
+{{end}}

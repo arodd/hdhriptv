@@ -10,11 +10,13 @@ import (
 )
 
 const (
-	playlistActiveGroupNameOrderIndex = "idx_playlist_active_group_name_name_item"
-	playlistActiveNameOrderIndex      = "idx_playlist_active_name_item"
+	playlistActiveGroupNameOrderIndex  = "idx_playlist_active_group_name_name_item"
+	playlistActiveNameOrderIndex       = "idx_playlist_active_name_item"
+	playlistSourceActiveNameOrderIndex = "idx_playlist_source_active_name_item"
 )
 
 type catalogFilterQuerySpec struct {
+	SourceIDs   []int64
 	GroupNames  []string
 	SearchQuery string
 	SearchRegex bool
@@ -71,7 +73,13 @@ func (s *Store) ListActiveItemKeysByChannelKey(ctx context.Context, channelKey s
 // catalog group+search filters.
 // Matching semantics intentionally mirror the /api/items query behavior.
 func (s *Store) ListActiveItemKeysByCatalogFilter(ctx context.Context, groupNames []string, searchQuery string, searchRegex bool) ([]string, error) {
-	spec, err := buildCatalogFilterQuerySpecWithLimits(groupNames, searchQuery, searchRegex, s.catalogSearchLimits)
+	return s.ListActiveItemKeysByCatalogFilterBySourceIDs(ctx, nil, groupNames, searchQuery, searchRegex)
+}
+
+// ListActiveItemKeysByCatalogFilterBySourceIDs returns active playlist item keys
+// matching catalog source+group+search filters.
+func (s *Store) ListActiveItemKeysByCatalogFilterBySourceIDs(ctx context.Context, sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool) ([]string, error) {
+	spec, err := buildCatalogFilterQuerySpecWithSourceIDsAndLimits(sourceIDs, groupNames, searchQuery, searchRegex, s.catalogSearchLimits)
 	if err != nil {
 		return nil, err
 	}
@@ -81,7 +89,7 @@ func (s *Store) ListActiveItemKeysByCatalogFilter(ctx context.Context, groupName
 		ORDER BY name ASC, item_key ASC`
 	rows, err := s.db.QueryContext(ctx, query, spec.Args...)
 	if err != nil {
-		return nil, fmt.Errorf("query active item keys by catalog filter groups=%v search=%q search_regex=%t: %w", spec.GroupNames, spec.SearchQuery, spec.SearchRegex, err)
+		return nil, fmt.Errorf("query active item keys by catalog filter source_ids=%v groups=%v search=%q search_regex=%t: %w", spec.SourceIDs, spec.GroupNames, spec.SearchQuery, spec.SearchRegex, err)
 	}
 	defer rows.Close()
 
@@ -101,22 +109,43 @@ func (s *Store) ListActiveItemKeysByCatalogFilter(ctx context.Context, groupName
 }
 
 func buildCatalogFilterQuerySpec(groupNames []string, searchQuery string, searchRegex bool) (catalogFilterQuerySpec, error) {
-	return buildCatalogFilterQuerySpecWithLimits(groupNames, searchQuery, searchRegex, defaultCatalogSearchLimits())
+	return buildCatalogFilterQuerySpecWithSourceIDs(nil, groupNames, searchQuery, searchRegex)
+}
+
+func buildCatalogFilterQuerySpecWithSourceIDs(sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool) (catalogFilterQuerySpec, error) {
+	return buildCatalogFilterQuerySpecWithSourceIDsAndLimits(sourceIDs, groupNames, searchQuery, searchRegex, defaultCatalogSearchLimits())
 }
 
 func buildCatalogFilterQuerySpecWithLimits(groupNames []string, searchQuery string, searchRegex bool, limits CatalogSearchLimits) (catalogFilterQuerySpec, error) {
+	return buildCatalogFilterQuerySpecWithSourceIDsAndLimits(nil, groupNames, searchQuery, searchRegex, limits)
+}
+
+func buildCatalogFilterQuerySpecWithSourceIDsAndLimits(sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool, limits CatalogSearchLimits) (catalogFilterQuerySpec, error) {
+	normalizedSourceIDs := channels.NormalizeSourceIDs(sourceIDs)
+	normalizedGroupNames := channels.NormalizeGroupNames("", groupNames)
+
 	spec := catalogFilterQuerySpec{
-		GroupNames:  channels.NormalizeGroupNames("", groupNames),
+		SourceIDs:   normalizedSourceIDs,
+		GroupNames:  normalizedGroupNames,
 		SearchRegex: searchRegex,
-		Args:        make([]any, 0, len(groupNames)+4),
+		Args:        make([]any, 0, len(normalizedSourceIDs)+len(normalizedGroupNames)+4),
 		OrderIndex:  playlistActiveNameOrderIndex,
 	}
 
 	clauses := []string{"active = 1"}
+	if len(spec.SourceIDs) > 0 {
+		clauses = append(clauses, "playlist_source_id IN ("+inPlaceholders(len(spec.SourceIDs))+")")
+		for _, sourceID := range spec.SourceIDs {
+			spec.Args = append(spec.Args, sourceID)
+		}
+		spec.OrderIndex = playlistSourceActiveNameOrderIndex
+	}
 	if len(spec.GroupNames) == 1 {
 		clauses = append(clauses, "group_name = ?")
 		spec.Args = append(spec.Args, spec.GroupNames[0])
-		spec.OrderIndex = playlistActiveGroupNameOrderIndex
+		if len(spec.SourceIDs) == 0 {
+			spec.OrderIndex = playlistActiveGroupNameOrderIndex
+		}
 	} else if len(spec.GroupNames) > 1 {
 		clauses = append(clauses, "group_name IN ("+inPlaceholders(len(spec.GroupNames))+")")
 		for _, groupName := range spec.GroupNames {
@@ -147,11 +176,26 @@ func (s *Store) IterateActiveItemKeysByCatalogFilter(
 	pageSize int,
 	visit func(itemKey string) error,
 ) (int, error) {
+	return s.IterateActiveItemKeysByCatalogFilterBySourceIDs(ctx, nil, groupNames, searchQuery, searchRegex, pageSize, visit)
+}
+
+// IterateActiveItemKeysByCatalogFilterBySourceIDs iterates active catalog item
+// keys matching the provided source+group+search filter in deterministic
+// (name,item_key) order.
+func (s *Store) IterateActiveItemKeysByCatalogFilterBySourceIDs(
+	ctx context.Context,
+	sourceIDs []int64,
+	groupNames []string,
+	searchQuery string,
+	searchRegex bool,
+	pageSize int,
+	visit func(itemKey string) error,
+) (int, error) {
 	if visit == nil {
 		return 0, nil
 	}
 
-	spec, err := buildCatalogFilterQuerySpecWithLimits(groupNames, searchQuery, searchRegex, s.catalogSearchLimits)
+	spec, err := buildCatalogFilterQuerySpecWithSourceIDsAndLimits(sourceIDs, groupNames, searchQuery, searchRegex, s.catalogSearchLimits)
 	if err != nil {
 		return 0, err
 	}
@@ -221,7 +265,7 @@ func listActiveItemKeyRowsByCatalogFilterPage(
 
 	rows, err := queryer.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query active item key page by catalog filter groups=%v search=%q search_regex=%t: %w", spec.GroupNames, spec.SearchQuery, spec.SearchRegex, err)
+		return nil, fmt.Errorf("query active item key page by catalog filter source_ids=%v groups=%v search=%q search_regex=%t: %w", spec.SourceIDs, spec.GroupNames, spec.SearchQuery, spec.SearchRegex, err)
 	}
 	defer rows.Close()
 

@@ -18,9 +18,12 @@ import (
 
 	"github.com/arodd/hdhriptv/internal/channels"
 	"github.com/arodd/hdhriptv/internal/dvr"
+	"github.com/arodd/hdhriptv/internal/jobs"
 	"github.com/arodd/hdhriptv/internal/playlist"
+	"github.com/arodd/hdhriptv/internal/scheduler"
 	"github.com/arodd/hdhriptv/internal/store/sqlite"
 	"github.com/arodd/hdhriptv/internal/stream"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestAdminRoutesUIChannelsIncludesDVRMappingToggle(t *testing.T) {
@@ -63,9 +66,12 @@ func TestAdminRoutesUIChannelsIncludesDVRMappingToggle(t *testing.T) {
 		`id="dynamic-group-add"`,
 		`id="dynamic-group-clear"`,
 		`id="dynamic-group-options"`,
-		`"/api/groups?include_counts=0"`,
+		`dynamicCatalogGroupsURL()`,
 		`id="dynamic-query-list"`,
 		`group_names: groupNames`,
+		`source_ids: sourceIDs`,
+		`id="dynamic-source-toggle"`,
+		`id="dynamic-source-dropdown"`,
 		`loadPagedCollection("/api/dynamic-channels", "queries")`,
 		`formatChannelDynamicRuleStatus(ch)`,
 		`formatChannelSourceSummary(ch)`,
@@ -76,6 +82,123 @@ func TestAdminRoutesUIChannelsIncludesDVRMappingToggle(t *testing.T) {
 			t.Fatalf("GET /ui/channels missing marker %q", marker)
 		}
 	}
+}
+
+func TestAdminRoutesUIBrandIncludesVersion(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.SetUIVersion("v9.9.9-test")
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	for _, path := range []string{"/ui/catalog", "/ui/channels", "/ui/tuners"} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want %d", path, rec.Code, http.StatusOK)
+		}
+
+		if !strings.Contains(rec.Body.String(), `HDHR IPTV Admin - v9.9.9-test`) {
+			t.Fatalf("GET %s body missing versioned app title marker", path)
+		}
+	}
+}
+
+func TestAdminRoutesUICapabilityAwareNavigation(t *testing.T) {
+	t.Run("hides unavailable conditional links", func(t *testing.T) {
+		store, err := sqlite.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		defer store.Close()
+
+		channelsSvc := channels.NewService(store)
+		handler, err := NewAdminHandler(store, channelsSvc)
+		if err != nil {
+			t.Fatalf("NewAdminHandler() error = %v", err)
+		}
+
+		mux := http.NewServeMux()
+		handler.RegisterRoutes(mux, "")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/ui/catalog", nil)
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /ui/catalog status = %d, want %d", rec.Code, http.StatusOK)
+		}
+
+		body := rec.Body.String()
+		if strings.Contains(body, `href="/ui/dvr"`) {
+			t.Fatalf("GET /ui/catalog unexpectedly contains DVR nav link when DVR route is unavailable")
+		}
+		if strings.Contains(body, `href="/ui/automation"`) {
+			t.Fatalf("GET /ui/catalog unexpectedly contains Automation nav link when automation route is unavailable")
+		}
+	})
+
+	t.Run("shows available conditional links", func(t *testing.T) {
+		store, err := sqlite.Open(":memory:")
+		if err != nil {
+			t.Fatalf("Open() error = %v", err)
+		}
+		defer store.Close()
+
+		channelsSvc := channels.NewService(store)
+		runner, err := jobs.NewRunner(store)
+		if err != nil {
+			t.Fatalf("jobs.NewRunner() error = %v", err)
+		}
+		defer runner.Close()
+
+		schedulerSvc, err := scheduler.New(store, nil)
+		if err != nil {
+			t.Fatalf("scheduler.New() error = %v", err)
+		}
+
+		handler, err := NewAdminHandler(store, channelsSvc, AutomationDeps{
+			Settings:  store,
+			Scheduler: schedulerSvc,
+			Runner:    runner,
+			JobFuncs: map[string]jobs.JobFunc{
+				jobs.JobPlaylistSync:   func(context.Context, *jobs.RunContext) error { return nil },
+				jobs.JobAutoPrioritize: func(context.Context, *jobs.RunContext) error { return nil },
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewAdminHandler() error = %v", err)
+		}
+		handler.SetDVRService(&fakeDVRService{})
+
+		mux := http.NewServeMux()
+		handler.RegisterRoutes(mux, "")
+
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/ui/catalog", nil)
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET /ui/catalog status = %d, want %d", rec.Code, http.StatusOK)
+		}
+
+		body := rec.Body.String()
+		if !strings.Contains(body, `href="/ui/dvr"`) {
+			t.Fatalf("GET /ui/catalog missing DVR nav link when DVR route is available")
+		}
+		if !strings.Contains(body, `href="/ui/automation"`) {
+			t.Fatalf("GET /ui/catalog missing Automation nav link when automation route is available")
+		}
+	})
 }
 
 func TestAdminRoutesUIDynamicChannelDetailIncludesQueryID(t *testing.T) {
@@ -111,7 +234,9 @@ func TestAdminRoutesUIDynamicChannelDetailIncludesQueryID(t *testing.T) {
 		`id="query-group-add"`,
 		`id="query-group-clear"`,
 		`id="query-group-options"`,
-		`"/api/groups?include_counts=0"`,
+		`catalogGroupsURL()`,
+		`/api/groups?`,
+		`loadCatalogGroups`,
 		`group_names: groupNames`,
 		`/api/dynamic-channels/${queryID}`,
 	} {
@@ -146,6 +271,8 @@ func TestAdminRoutesUICatalogIncludesRapidSourceAddToolbar(t *testing.T) {
 
 	body := rec.Body.String()
 	for _, marker := range []string{
+		`badge.className = "source-badge"`,
+		`const srcName = itemSourceName(item);`,
 		`id="group-chip-input" type="text" list="group-options"`,
 		`id="group-chip-add"`,
 		`id="group-chip-clear"`,
@@ -161,6 +288,16 @@ func TestAdminRoutesUICatalogIncludesRapidSourceAddToolbar(t *testing.T) {
 		if !strings.Contains(body, marker) {
 			t.Fatalf("GET /ui/catalog missing marker %q", marker)
 		}
+	}
+
+	rootRec := httptest.NewRecorder()
+	rootReq := httptest.NewRequest(http.MethodGet, "/ui/", nil)
+	mux.ServeHTTP(rootRec, rootReq)
+	if rootRec.Code != http.StatusFound {
+		t.Fatalf("GET /ui/ status = %d, want %d", rootRec.Code, http.StatusFound)
+	}
+	if location := rootRec.Header().Get("Location"); location != "/ui/catalog" {
+		t.Fatalf("GET /ui/ redirect location = %q, want %q", location, "/ui/catalog")
 	}
 }
 
@@ -194,7 +331,9 @@ func TestAdminRoutesUIChannelDetailIncludesDynamicGroupChips(t *testing.T) {
 		`id="dynamic-group-add"`,
 		`id="dynamic-group-clear"`,
 		`id="dynamic-group-options"`,
-		`"/api/groups?include_counts=0"`,
+		`catalogGroupsURL()`,
+		`/api/groups?`,
+		`loadCatalogGroups`,
 		`group_names: groupNames`,
 		`dynamic_rule: dynamicRule`,
 	} {
@@ -758,6 +897,17 @@ func TestAdminRoutesChannelSourceFlow(t *testing.T) {
 	if suggestions.Groups[0].ChannelKey != "tvg:news" {
 		t.Fatalf("suggestion channel_key = %q, want tvg:news", suggestions.Groups[0].ChannelKey)
 	}
+	if len(suggestions.Groups[0].Items) == 0 {
+		t.Fatal("suggestion group items = empty, want at least one duplicate item")
+	}
+	for _, item := range suggestions.Groups[0].Items {
+		if item.PlaylistSourceID <= 0 {
+			t.Fatalf("suggestion item %q playlist_source_id = %d, want positive source id", item.ItemKey, item.PlaylistSourceID)
+		}
+		if strings.TrimSpace(item.PlaylistSourceName) == "" {
+			t.Fatalf("suggestion item %q playlist_source_name = empty, want non-empty source name", item.ItemKey)
+		}
+	}
 }
 
 func TestAdminRoutesItemsFiltersPaginationAndActiveParity(t *testing.T) {
@@ -944,6 +1094,143 @@ func TestAdminRoutesItemsFiltersPaginationAndActiveParity(t *testing.T) {
 	invalidRegexPattern := doRaw(t, mux, http.MethodGet, "/api/items?q=%28%5B&q_regex=1", nil)
 	if invalidRegexPattern.Code != http.StatusBadRequest {
 		t.Fatalf("GET /api/items invalid regex pattern status = %d, want %d", invalidRegexPattern.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAdminRoutesItemsSourceIDFiltering(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	secondary, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Secondary Items Source",
+		PlaylistURL: "http://example.com/secondary-items.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(secondary) error = %v", err)
+	}
+
+	if err := store.UpsertPlaylistItemsForSource(ctx, 1, []playlist.Item{
+		{ItemKey: "src:items:primary:news", ChannelKey: "name:items-primary-news", Name: "Primary News", Group: "News", StreamURL: "http://example.com/items-primary-news.ts"},
+		{ItemKey: "src:items:primary:sports", ChannelKey: "name:items-primary-sports", Name: "Primary Sports", Group: "Sports", StreamURL: "http://example.com/items-primary-sports.ts"},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(primary) error = %v", err)
+	}
+	if err := store.UpsertPlaylistItemsForSource(ctx, secondary.SourceID, []playlist.Item{
+		{ItemKey: "src:items:secondary:news", ChannelKey: "name:items-secondary-news", Name: "Secondary News", Group: "News", StreamURL: "http://example.com/items-secondary-news.ts"},
+		{ItemKey: "src:items:secondary:movies", ChannelKey: "name:items-secondary-movies", Name: "Secondary Movies", Group: "Movies", StreamURL: "http://example.com/items-secondary-movies.ts"},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(secondary) error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	primary, err := store.GetPlaylistSource(ctx, 1)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(primary) error = %v", err)
+	}
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	type itemResponse struct {
+		ItemKey            string `json:"item_key"`
+		PlaylistSourceID   int64  `json:"playlist_source_id"`
+		PlaylistSourceName string `json:"playlist_source_name"`
+	}
+	type itemsResponse struct {
+		Items []itemResponse `json:"items"`
+		Total int            `json:"total"`
+	}
+	fetch := func(path string) itemsResponse {
+		t.Helper()
+		var out itemsResponse
+		doJSON(t, mux, http.MethodGet, path, nil, http.StatusOK, &out)
+		return out
+	}
+
+	secondaryOnly := fetch(fmt.Sprintf("/api/items?source_ids=%d&limit=20&offset=0", secondary.SourceID))
+	if secondaryOnly.Total != 2 || len(secondaryOnly.Items) != 2 {
+		t.Fatalf("secondaryOnly total/len = %d/%d, want 2/2", secondaryOnly.Total, len(secondaryOnly.Items))
+	}
+	if secondaryOnly.Items[0].ItemKey != "src:items:secondary:movies" || secondaryOnly.Items[1].ItemKey != "src:items:secondary:news" {
+		t.Fatalf("secondaryOnly item order = %#v, want [src:items:secondary:movies src:items:secondary:news]", []string{secondaryOnly.Items[0].ItemKey, secondaryOnly.Items[1].ItemKey})
+	}
+	for _, item := range secondaryOnly.Items {
+		if item.PlaylistSourceID != secondary.SourceID {
+			t.Fatalf("secondaryOnly item %q playlist_source_id = %d, want %d", item.ItemKey, item.PlaylistSourceID, secondary.SourceID)
+		}
+		if item.PlaylistSourceName != secondary.Name {
+			t.Fatalf("secondaryOnly item %q playlist_source_name = %q, want %q", item.ItemKey, item.PlaylistSourceName, secondary.Name)
+		}
+	}
+
+	combined := fetch(fmt.Sprintf("/api/items?source_ids=1,%d&limit=20&offset=0", secondary.SourceID))
+	if combined.Total != 4 || len(combined.Items) != 4 {
+		t.Fatalf("combined total/len = %d/%d, want 4/4", combined.Total, len(combined.Items))
+	}
+	wantCombined := []string{
+		"src:items:secondary:movies",
+		"src:items:primary:news",
+		"src:items:secondary:news",
+		"src:items:primary:sports",
+	}
+	gotCombined := []string{
+		combined.Items[0].ItemKey,
+		combined.Items[1].ItemKey,
+		combined.Items[2].ItemKey,
+		combined.Items[3].ItemKey,
+	}
+	if strings.Join(gotCombined, ",") != strings.Join(wantCombined, ",") {
+		t.Fatalf("combined item order = %#v, want %#v", gotCombined, wantCombined)
+	}
+	for _, item := range combined.Items {
+		switch item.ItemKey {
+		case "src:items:secondary:movies", "src:items:secondary:news":
+			if item.PlaylistSourceID != secondary.SourceID {
+				t.Fatalf("combined item %q playlist_source_id = %d, want %d", item.ItemKey, item.PlaylistSourceID, secondary.SourceID)
+			}
+			if item.PlaylistSourceName != secondary.Name {
+				t.Fatalf("combined item %q playlist_source_name = %q, want %q", item.ItemKey, item.PlaylistSourceName, secondary.Name)
+			}
+		case "src:items:primary:news", "src:items:primary:sports":
+			if item.PlaylistSourceID != primary.SourceID {
+				t.Fatalf("combined item %q playlist_source_id = %d, want %d", item.ItemKey, item.PlaylistSourceID, primary.SourceID)
+			}
+			if item.PlaylistSourceName != primary.Name {
+				t.Fatalf("combined item %q playlist_source_name = %q, want %q", item.ItemKey, item.PlaylistSourceName, primary.Name)
+			}
+		default:
+			t.Fatalf("unexpected item in combined response: %q", item.ItemKey)
+		}
+	}
+
+	emptySourceFilter := fetch("/api/items?source_ids=&limit=20&offset=0")
+	if emptySourceFilter.Total != 4 || len(emptySourceFilter.Items) != 4 {
+		t.Fatalf("emptySourceFilter total/len = %d/%d, want 4/4", emptySourceFilter.Total, len(emptySourceFilter.Items))
+	}
+
+	newsScoped := fetch(fmt.Sprintf("/api/items?source_ids=%d&group=News&limit=20&offset=0", secondary.SourceID))
+	if newsScoped.Total != 1 || len(newsScoped.Items) != 1 || newsScoped.Items[0].ItemKey != "src:items:secondary:news" {
+		t.Fatalf("newsScoped = %+v, want only src:items:secondary:news", newsScoped)
+	}
+
+	for _, path := range []string{
+		"/api/items?source_ids=0",
+		"/api/items?source_ids=abc",
+		"/api/items?source_ids=1,not-a-number",
+	} {
+		rec := doRaw(t, mux, http.MethodGet, path, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("GET %s status = %d, want %d", path, rec.Code, http.StatusBadRequest)
+		}
 	}
 }
 
@@ -1327,6 +1614,148 @@ func TestAdminRoutesGroupsPaginationAndValidation(t *testing.T) {
 		if rec.Code != http.StatusBadRequest {
 			t.Fatalf("GET %s status = %d, want %d", path, rec.Code, http.StatusBadRequest)
 		}
+	}
+}
+
+func TestAdminRoutesGroupsSourceIDFiltering(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	secondary, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Secondary Groups Source",
+		PlaylistURL: "http://example.com/secondary-groups.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(secondary) error = %v", err)
+	}
+
+	if err := store.UpsertPlaylistItemsForSource(ctx, 1, []playlist.Item{
+		{ItemKey: "src:groups:primary:news", ChannelKey: "name:primary-news", Name: "Primary News", Group: "News", StreamURL: "http://example.com/primary-news.ts"},
+		{ItemKey: "src:groups:primary:sports", ChannelKey: "name:primary-sports", Name: "Primary Sports", Group: "Sports", StreamURL: "http://example.com/primary-sports.ts"},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(primary) error = %v", err)
+	}
+	if err := store.UpsertPlaylistItemsForSource(ctx, secondary.SourceID, []playlist.Item{
+		{ItemKey: "src:groups:secondary:news", ChannelKey: "name:secondary-news", Name: "Secondary News", Group: "News", StreamURL: "http://example.com/secondary-news.ts"},
+		{ItemKey: "src:groups:secondary:movies", ChannelKey: "name:secondary-movies", Name: "Secondary Movies", Group: "Movies", StreamURL: "http://example.com/secondary-movies.ts"},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(secondary) error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	type group struct {
+		Name  string `json:"name"`
+		Count int    `json:"count"`
+	}
+	type groupsResponse struct {
+		Groups []group `json:"groups"`
+		Total  int     `json:"total"`
+	}
+
+	var secondaryOnly groupsResponse
+	doJSON(
+		t,
+		mux,
+		http.MethodGet,
+		fmt.Sprintf("/api/groups?source_ids=%d", secondary.SourceID),
+		nil,
+		http.StatusOK,
+		&secondaryOnly,
+	)
+	if secondaryOnly.Total != 2 {
+		t.Fatalf("secondaryOnly total = %d, want 2", secondaryOnly.Total)
+	}
+	if len(secondaryOnly.Groups) != 2 {
+		t.Fatalf("len(secondaryOnly groups) = %d, want 2", len(secondaryOnly.Groups))
+	}
+	if secondaryOnly.Groups[0].Name != "Movies" || secondaryOnly.Groups[1].Name != "News" {
+		t.Fatalf("secondaryOnly group names = [%q,%q], want [Movies,News]", secondaryOnly.Groups[0].Name, secondaryOnly.Groups[1].Name)
+	}
+	if secondaryOnly.Groups[0].Count != 1 || secondaryOnly.Groups[1].Count != 1 {
+		t.Fatalf("secondaryOnly counts = [%d,%d], want [1,1]", secondaryOnly.Groups[0].Count, secondaryOnly.Groups[1].Count)
+	}
+
+	var combined groupsResponse
+	doJSON(
+		t,
+		mux,
+		http.MethodGet,
+		fmt.Sprintf("/api/groups?source_ids=1,%d", secondary.SourceID),
+		nil,
+		http.StatusOK,
+		&combined,
+	)
+	if combined.Total != 3 {
+		t.Fatalf("combined total = %d, want 3", combined.Total)
+	}
+	if len(combined.Groups) != 3 {
+		t.Fatalf("len(combined groups) = %d, want 3", len(combined.Groups))
+	}
+	if combined.Groups[0].Name != "Movies" || combined.Groups[1].Name != "News" || combined.Groups[2].Name != "Sports" {
+		t.Fatalf("combined group names = %#v, want [Movies News Sports]", combined.Groups)
+	}
+
+	for _, path := range []string{
+		"/api/groups?source_ids=0",
+		"/api/groups?source_ids=abc",
+		"/api/groups?source_ids=1,not-a-number",
+	} {
+		rec := doRaw(t, mux, http.MethodGet, path, nil)
+		if rec.Code != http.StatusBadRequest {
+			t.Fatalf("GET %s status = %d, want %d", path, rec.Code, http.StatusBadRequest)
+		}
+	}
+}
+
+func TestAdminRoutesGroupsSourceIDFilteringUnsupportedReturnsContractError(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.catalog = catalogWithoutSourceScopedSupport{CatalogStore: handler.catalog}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var payload struct {
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Operation string `json:"operation"`
+		Parameter string `json:"parameter"`
+		Detail    string `json:"detail"`
+	}
+	doJSON(t, mux, http.MethodGet, "/api/groups?source_ids=1", nil, http.StatusNotImplemented, &payload)
+	if payload.Error != "source_scoped_operation_unsupported" {
+		t.Fatalf("error = %q, want source_scoped_operation_unsupported", payload.Error)
+	}
+	if payload.Parameter != "source_ids" {
+		t.Fatalf("parameter = %q, want source_ids", payload.Parameter)
+	}
+	if payload.Operation != "groups_list" {
+		t.Fatalf("operation = %q, want groups_list", payload.Operation)
+	}
+	if !strings.Contains(payload.Detail, "source-scoped group backend support") {
+		t.Fatalf("detail = %q, want source-scoped group backend support message", payload.Detail)
 	}
 }
 
@@ -3224,6 +3653,427 @@ func TestAdminRoutesDynamicRuleCreateAndUpdateWarningForTruncatedQuery(t *testin
 	}
 }
 
+func TestAdminRoutesChannelDynamicRuleSourceScopeUnsupportedReturnsContractError(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:scope:primary",
+			ChannelKey: "tvg:scope",
+			Name:       "Scope Primary",
+			Group:      "Scope",
+			StreamURL:  "http://example.com/scope-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.catalog = catalogWithoutSourceScopedSupport{CatalogStore: handler.catalog}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	type unsupportedResponse struct {
+		Error     string `json:"error"`
+		Message   string `json:"message"`
+		Operation string `json:"operation"`
+		Parameter string `json:"parameter"`
+		Detail    string `json:"detail"`
+	}
+
+	var createUnsupported unsupportedResponse
+	doJSON(t, mux, http.MethodPost, "/api/channels", map[string]any{
+		"item_key": "src:scope:primary",
+		"dynamic_rule": map[string]any{
+			"enabled":      true,
+			"search_query": "scope",
+			"source_ids":   []int64{1},
+		},
+	}, http.StatusNotImplemented, &createUnsupported)
+	if createUnsupported.Operation != "channel_dynamic_rule_create" {
+		t.Fatalf("create operation = %q, want channel_dynamic_rule_create", createUnsupported.Operation)
+	}
+	if createUnsupported.Error != "source_scoped_operation_unsupported" {
+		t.Fatalf("create error = %q, want source_scoped_operation_unsupported", createUnsupported.Error)
+	}
+	if createUnsupported.Parameter != "source_ids" {
+		t.Fatalf("create parameter = %q, want source_ids", createUnsupported.Parameter)
+	}
+
+	var created channels.Channel
+	doJSON(t, mux, http.MethodPost, "/api/channels", map[string]any{
+		"item_key": "src:scope:primary",
+		"dynamic_rule": map[string]any{
+			"enabled":      true,
+			"search_query": "scope",
+		},
+	}, http.StatusOK, &created)
+
+	var updateUnsupported unsupportedResponse
+	doJSON(t, mux, http.MethodPatch, fmt.Sprintf("/api/channels/%d", created.ChannelID), map[string]any{
+		"dynamic_rule": map[string]any{
+			"enabled":      true,
+			"search_query": "scope",
+			"source_ids":   []int64{1},
+		},
+	}, http.StatusNotImplemented, &updateUnsupported)
+	if updateUnsupported.Operation != "channel_dynamic_rule_update" {
+		t.Fatalf("update operation = %q, want channel_dynamic_rule_update", updateUnsupported.Operation)
+	}
+	if updateUnsupported.Error != "source_scoped_operation_unsupported" {
+		t.Fatalf("update error = %q, want source_scoped_operation_unsupported", updateUnsupported.Error)
+	}
+}
+
+func TestAdminRoutesDynamicChannelQuerySourceScopeUnsupportedReturnsContractError(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:scope:primary",
+			ChannelKey: "tvg:scope",
+			Name:       "Scope Primary",
+			Group:      "Scope",
+			StreamURL:  "http://example.com/scope-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	baseChannels := channels.NewService(store)
+	unsupportedChannels := dynamicBlockCapabilityUnsupportedChannelsService{ChannelsService: baseChannels}
+
+	handler, err := NewAdminHandler(store, unsupportedChannels)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	type unsupportedResponse struct {
+		Error     string `json:"error"`
+		Operation string `json:"operation"`
+		Parameter string `json:"parameter"`
+	}
+
+	var createUnsupported unsupportedResponse
+	doJSON(t, mux, http.MethodPost, "/api/dynamic-channels", map[string]any{
+		"name":         "Scoped Query",
+		"enabled":      true,
+		"search_query": "scope",
+		"source_ids":   []int64{1},
+	}, http.StatusNotImplemented, &createUnsupported)
+	if createUnsupported.Operation != "dynamic_channel_query_create" {
+		t.Fatalf("create operation = %q, want dynamic_channel_query_create", createUnsupported.Operation)
+	}
+	if createUnsupported.Error != "source_scoped_operation_unsupported" {
+		t.Fatalf("create error = %q, want source_scoped_operation_unsupported", createUnsupported.Error)
+	}
+	if createUnsupported.Parameter != "source_ids" {
+		t.Fatalf("create parameter = %q, want source_ids", createUnsupported.Parameter)
+	}
+
+	var created struct {
+		QueryID int64 `json:"query_id"`
+	}
+	doJSON(t, mux, http.MethodPost, "/api/dynamic-channels", map[string]any{
+		"name":         "Unscoped Query",
+		"enabled":      true,
+		"search_query": "scope",
+	}, http.StatusOK, &created)
+	if created.QueryID <= 0 {
+		t.Fatalf("created query_id = %d, want > 0", created.QueryID)
+	}
+
+	var updateUnsupported unsupportedResponse
+	doJSON(t, mux, http.MethodPatch, fmt.Sprintf("/api/dynamic-channels/%d", created.QueryID), map[string]any{
+		"source_ids": []int64{1},
+	}, http.StatusNotImplemented, &updateUnsupported)
+	if updateUnsupported.Operation != "dynamic_channel_query_update" {
+		t.Fatalf("update operation = %q, want dynamic_channel_query_update", updateUnsupported.Operation)
+	}
+	if updateUnsupported.Error != "source_scoped_operation_unsupported" {
+		t.Fatalf("update error = %q, want source_scoped_operation_unsupported", updateUnsupported.Error)
+	}
+	if updateUnsupported.Parameter != "source_ids" {
+		t.Fatalf("update parameter = %q, want source_ids", updateUnsupported.Parameter)
+	}
+}
+
+func TestAdminRoutesDynamicChannelQuerySourceScopeUsesBlockCapability(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:scope:primary",
+			ChannelKey: "tvg:scope",
+			Name:       "Scope Primary",
+			Group:      "Scope",
+			StreamURL:  "http://example.com/scope-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	observedChannels := &syncObservedChannelsService{
+		base: channels.NewService(store),
+	}
+
+	handler, err := NewAdminHandler(store, observedChannels)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	var created struct {
+		QueryID    int64   `json:"query_id"`
+		SourceIDs  []int64 `json:"source_ids"`
+		SearchTerm string  `json:"search_query"`
+	}
+	doJSON(t, mux, http.MethodPost, "/api/dynamic-channels", map[string]any{
+		"name":         "Scoped Query",
+		"enabled":      true,
+		"search_query": "scope",
+		"source_ids":   []int64{1},
+	}, http.StatusOK, &created)
+	if created.QueryID <= 0 {
+		t.Fatalf("created query_id = %d, want > 0", created.QueryID)
+	}
+	if len(created.SourceIDs) != 1 || created.SourceIDs[0] != 1 {
+		t.Fatalf("created source_ids = %#v, want [1]", created.SourceIDs)
+	}
+	if created.SearchTerm != "scope" {
+		t.Fatalf("created search_query = %q, want scope", created.SearchTerm)
+	}
+}
+
+func TestAdminRoutesDynamicChannelQueryRejectsInvalidBodySourceIDs(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:scope:primary",
+			ChannelKey: "tvg:scope",
+			Name:       "Scope Primary",
+			Group:      "Scope",
+			StreamURL:  "http://example.com/scope-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	createInvalid := doRaw(t, mux, http.MethodPost, "/api/dynamic-channels", map[string]any{
+		"name":         "Scoped Query",
+		"enabled":      true,
+		"search_query": "scope",
+		"source_ids":   []int64{0, -1},
+	})
+	if createInvalid.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/dynamic-channels invalid source_ids status = %d, want %d", createInvalid.Code, http.StatusBadRequest)
+	}
+
+	var created struct {
+		QueryID int64 `json:"query_id"`
+	}
+	doJSON(t, mux, http.MethodPost, "/api/dynamic-channels", map[string]any{
+		"name":         "Scoped Query",
+		"enabled":      true,
+		"search_query": "scope",
+		"source_ids":   []int64{1},
+	}, http.StatusOK, &created)
+	if created.QueryID <= 0 {
+		t.Fatalf("created query_id = %d, want > 0", created.QueryID)
+	}
+
+	updateInvalid := doRaw(t, mux, http.MethodPatch, fmt.Sprintf("/api/dynamic-channels/%d", created.QueryID), map[string]any{
+		"source_ids": []int64{-7},
+	})
+	if updateInvalid.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH /api/dynamic-channels/{queryID} invalid source_ids status = %d, want %d", updateInvalid.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAdminRoutesChannelDynamicRuleRejectsInvalidBodySourceIDs(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:scope:primary",
+			ChannelKey: "tvg:scope",
+			Name:       "Scope Primary",
+			Group:      "Scope",
+			StreamURL:  "http://example.com/scope-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	createInvalid := doRaw(t, mux, http.MethodPost, "/api/channels", map[string]any{
+		"item_key": "src:scope:primary",
+		"dynamic_rule": map[string]any{
+			"enabled":      true,
+			"search_query": "scope",
+			"source_ids":   []int64{0},
+		},
+	})
+	if createInvalid.Code != http.StatusBadRequest {
+		t.Fatalf("POST /api/channels invalid dynamic_rule.source_ids status = %d, want %d", createInvalid.Code, http.StatusBadRequest)
+	}
+
+	var created channels.Channel
+	doJSON(t, mux, http.MethodPost, "/api/channels", map[string]any{
+		"item_key": "src:scope:primary",
+		"dynamic_rule": map[string]any{
+			"enabled":      true,
+			"search_query": "scope",
+			"source_ids":   []int64{1},
+		},
+	}, http.StatusOK, &created)
+	if created.ChannelID <= 0 {
+		t.Fatalf("created channel_id = %d, want > 0", created.ChannelID)
+	}
+
+	updateInvalid := doRaw(t, mux, http.MethodPatch, fmt.Sprintf("/api/channels/%d", created.ChannelID), map[string]any{
+		"dynamic_rule": map[string]any{
+			"enabled":      true,
+			"search_query": "scope",
+			"source_ids":   []int64{-9},
+		},
+	})
+	if updateInvalid.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH /api/channels/{channelID} invalid dynamic_rule.source_ids status = %d, want %d", updateInvalid.Code, http.StatusBadRequest)
+	}
+}
+
+func TestAdminRoutesReorderSourcesMapsWrappedSourceOrderDriftToBadRequest(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	baseChannels := channels.NewService(store)
+	channelsSvc := sourceOrderDriftReorderChannelsService{
+		ChannelsService: baseChannels,
+		reorderErr:      fmt.Errorf("reorder guard rejected request: %w", channels.ErrSourceOrderDrift),
+	}
+
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	rec := doRaw(t, mux, http.MethodPatch, "/api/channels/12/sources/reorder", map[string]any{
+		"source_ids": []int64{3, 2, 1},
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH /api/channels/{channelID}/sources/reorder status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+	if !strings.Contains(rec.Body.String(), channels.ErrSourceOrderDrift.Error()) {
+		t.Fatalf("PATCH /api/channels/{channelID}/sources/reorder body = %q, want source-order drift sentinel text", rec.Body.String())
+	}
+}
+
+func TestAdminDynamicChannelImmediateSyncUnsupportedSourceScopeIncrementsMetric(t *testing.T) {
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	handler, err := NewAdminHandler(store, channelsSvc)
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+	handler.catalog = catalogWithoutSourceScopedSupport{CatalogStore: handler.catalog}
+
+	metric := dynamicChannelImmediateSyncFailuresMetric.WithLabelValues("list_active_item_keys", "source_scoped_catalog_unsupported")
+	before := testutil.ToFloat64(metric)
+
+	channel := channels.Channel{
+		ChannelID:   42,
+		GuideNumber: "10042",
+		DynamicRule: channels.DynamicSourceRule{
+			Enabled:     true,
+			SourceIDs:   []int64{2},
+			SearchQuery: "scope",
+		},
+	}
+	queuedWhileRunning, canceledRunning := handler.enqueueDynamicChannelSync(channel, true)
+	if queuedWhileRunning {
+		t.Fatal("enqueueDynamicChannelSync queued_while_running = true, want false on first run")
+	}
+	if canceledRunning {
+		t.Fatal("enqueueDynamicChannelSync canceled_running = true, want false on first run")
+	}
+
+	waitForCondition(t, 2*time.Second, "dynamic sync unsupported-source metric increment", func() bool {
+		return testutil.ToFloat64(metric) >= before+1
+	})
+
+	handler.Close()
+}
+
 func TestAdminRoutesDynamicSyncCreateReturnsPromptlyWhileSyncWorkerBlocked(t *testing.T) {
 	ctx := context.Background()
 
@@ -4671,15 +5521,38 @@ func TestAdminRoutesTunerStatusSnapshot(t *testing.T) {
 			TunerCount:  2,
 			InUseCount:  1,
 			IdleCount:   1,
+			VirtualTuners: []stream.VirtualTunerStatus{
+				{
+					PlaylistSourceID:    1,
+					PlaylistSourceName:  "Primary",
+					PlaylistSourceOrder: 0,
+					TunerCount:          1,
+					InUseCount:          0,
+					IdleCount:           1,
+					ActiveSessionCount:  0,
+				},
+				{
+					PlaylistSourceID:    2,
+					PlaylistSourceName:  "Backup A",
+					PlaylistSourceOrder: 1,
+					TunerCount:          1,
+					InUseCount:          1,
+					IdleCount:           0,
+					ActiveSessionCount:  1,
+				},
+			},
 			Tuners: []stream.TunerStatus{
 				{
-					TunerID:         0,
-					Kind:            "client",
-					GuideNumber:     "101",
-					GuideName:       "News",
-					SourceID:        10,
-					SourceItemKey:   "src:news:primary",
-					SourceStreamURL: "http://example.com/news.ts",
+					TunerID:            0,
+					PlaylistSourceID:   2,
+					PlaylistSourceName: "Backup A",
+					VirtualTunerSlot:   0,
+					Kind:               "client",
+					GuideNumber:        "101",
+					GuideName:          "News",
+					SourceID:           10,
+					SourceItemKey:      "src:news:primary",
+					SourceStreamURL:    "http://example.com/news.ts",
 					Subscribers: []stream.SubscriberStats{
 						{
 							SubscriberID: 1,
@@ -4691,11 +5564,14 @@ func TestAdminRoutesTunerStatusSnapshot(t *testing.T) {
 			},
 			ClientStreams: []stream.ClientStreamStatus{
 				{
-					TunerID:      0,
-					GuideNumber:  "101",
-					SubscriberID: 1,
-					ClientAddr:   "192.168.1.100:50000",
-					ConnectedAt:  now.Add(-30 * time.Second),
+					TunerID:            0,
+					PlaylistSourceID:   2,
+					PlaylistSourceName: "Backup A",
+					VirtualTunerSlot:   0,
+					GuideNumber:        "101",
+					SubscriberID:       1,
+					ClientAddr:         "192.168.1.100:50000",
+					ConnectedAt:        now.Add(-30 * time.Second),
 				},
 			},
 			SessionHistory: []stream.SharedSessionHistory{
@@ -4729,8 +5605,35 @@ func TestAdminRoutesTunerStatusSnapshot(t *testing.T) {
 	if payload.Tuners[0].GuideNumber != "101" {
 		t.Fatalf("payload.tuners[0].guide_number = %q, want 101", payload.Tuners[0].GuideNumber)
 	}
+	if got, want := payload.Tuners[0].PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("payload.tuners[0].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := payload.Tuners[0].PlaylistSourceName, "Backup A"; got != want {
+		t.Fatalf("payload.tuners[0].playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := payload.Tuners[0].VirtualTunerSlot, 0; got != want {
+		t.Fatalf("payload.tuners[0].virtual_tuner_slot = %d, want %d", got, want)
+	}
 	if got := len(payload.ClientStreams); got != 1 {
 		t.Fatalf("len(payload.client_streams) = %d, want 1", got)
+	}
+	if got, want := payload.ClientStreams[0].PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("payload.client_streams[0].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := payload.ClientStreams[0].PlaylistSourceName, "Backup A"; got != want {
+		t.Fatalf("payload.client_streams[0].playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := payload.ClientStreams[0].VirtualTunerSlot, 0; got != want {
+		t.Fatalf("payload.client_streams[0].virtual_tuner_slot = %d, want %d", got, want)
+	}
+	if got, want := len(payload.VirtualTuners), 2; got != want {
+		t.Fatalf("len(payload.virtual_tuners) = %d, want %d", got, want)
+	}
+	if got, want := payload.VirtualTuners[1].PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("payload.virtual_tuners[1].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := payload.VirtualTuners[1].ActiveSessionCount, 1; got != want {
+		t.Fatalf("payload.virtual_tuners[1].active_session_count = %d, want %d", got, want)
 	}
 	if got := len(payload.SessionHistory); got != 1 {
 		t.Fatalf("len(payload.session_history) = %d, want 1", got)
@@ -6770,6 +7673,102 @@ func TestAdminRoutesDVRSyncDetachedFromClientCancellation(t *testing.T) {
 	}
 }
 
+func TestAdminRoutesDVRSyncUsesRunnerOverlapLockDomainWhenAutomationConfigured(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	channelsSvc := channels.NewService(store)
+	runner, err := jobs.NewRunner(store)
+	if err != nil {
+		t.Fatalf("NewRunner() error = %v", err)
+	}
+	defer runner.Close()
+
+	schedulerSvc, err := scheduler.New(store, nil)
+	if err != nil {
+		t.Fatalf("scheduler.New() error = %v", err)
+	}
+
+	handler, err := NewAdminHandler(store, channelsSvc, AutomationDeps{
+		Settings:  store,
+		Scheduler: schedulerSvc,
+		Runner:    runner,
+		JobFuncs: map[string]jobs.JobFunc{
+			jobs.JobPlaylistSync:   func(context.Context, *jobs.RunContext) error { return nil },
+			jobs.JobAutoPrioritize: func(context.Context, *jobs.RunContext) error { return nil },
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewAdminHandler() error = %v", err)
+	}
+
+	fakeDVR := &fakeDVRService{
+		syncResult: dvr.SyncResult{
+			Provider: "channels",
+			BaseURL:  "http://channels.lan:8089",
+		},
+		syncDelay:     300 * time.Millisecond,
+		syncStartedCh: make(chan struct{}, 4),
+		syncDoneCh:    make(chan struct{}, 4),
+	}
+	handler.SetDVRService(fakeDVR)
+
+	mux := http.NewServeMux()
+	handler.RegisterRoutes(mux, "")
+
+	firstRespCh := make(chan *httptest.ResponseRecorder, 1)
+	go func() {
+		firstRespCh <- doRaw(t, mux, http.MethodPost, "/api/admin/dvr/sync", map[string]any{
+			"dry_run": false,
+		})
+	}()
+
+	select {
+	case <-fakeDVR.syncStartedCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first runner-backed DVR sync start")
+	}
+
+	conflictRec := doRaw(t, mux, http.MethodPost, "/api/admin/dvr/sync", map[string]any{
+		"dry_run": true,
+	})
+	if conflictRec.Code != http.StatusConflict {
+		t.Fatalf("overlap POST /api/admin/dvr/sync status = %d, want %d, body=%s", conflictRec.Code, http.StatusConflict, conflictRec.Body.String())
+	}
+
+	select {
+	case <-fakeDVR.syncStartedCh:
+		t.Fatal("overlapping request invoked dvr.Sync(), want runner overlap rejection before service call")
+	case <-time.After(150 * time.Millisecond):
+	}
+
+	var firstRec *httptest.ResponseRecorder
+	select {
+	case firstRec = <-firstRespCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for first DVR sync response")
+	}
+	if firstRec.Code != http.StatusOK {
+		t.Fatalf("first POST /api/admin/dvr/sync status = %d, want %d, body=%s", firstRec.Code, http.StatusOK, firstRec.Body.String())
+	}
+
+	runs, err := runner.ListRuns(ctx, jobs.JobDVRLineupSync, 5, 0)
+	if err != nil {
+		t.Fatalf("ListRuns(dvr_lineup_sync) error = %v", err)
+	}
+	if len(runs) == 0 {
+		t.Fatal("dvr_lineup_sync runs = 0, want manual run persisted via runner")
+	}
+	if runs[0].TriggeredBy != jobs.TriggerManual {
+		t.Fatalf("dvr_lineup_sync triggered_by = %q, want %q", runs[0].TriggeredBy, jobs.TriggerManual)
+	}
+}
+
 func TestAdminRoutesDVRReverseSyncDetachedFromClientCancellation(t *testing.T) {
 	fakeDVR := &fakeDVRService{
 		reverseSyncResult: dvr.ReverseSyncResult{
@@ -7928,6 +8927,30 @@ func (snapshotOnlyTunerStatusProvider) TunerStatusSnapshot() stream.TunerStatusS
 	return stream.TunerStatusSnapshot{}
 }
 
+type catalogWithoutSourceScopedSupport struct {
+	CatalogStore
+}
+
+type dynamicBlockCapabilityUnsupportedChannelsService struct {
+	ChannelsService
+}
+
+func (dynamicBlockCapabilityUnsupportedChannelsService) SupportsSourceScopedDynamicChannelBlocks() bool {
+	return false
+}
+
+type sourceOrderDriftReorderChannelsService struct {
+	ChannelsService
+	reorderErr error
+}
+
+func (s sourceOrderDriftReorderChannelsService) ReorderSources(ctx context.Context, channelID int64, sourceIDs []int64) error {
+	if s.reorderErr != nil {
+		return s.reorderErr
+	}
+	return s.ChannelsService.ReorderSources(ctx, channelID, sourceIDs)
+}
+
 type catalogWarningErrorStore struct {
 	CatalogStore
 	warningErr   error
@@ -8090,6 +9113,14 @@ func (s *syncObservedChannelsService) ReorderDynamicGeneratedChannels(ctx contex
 
 func (s *syncObservedChannelsService) SyncDynamicChannelBlocks(ctx context.Context) (channels.DynamicChannelSyncResult, error) {
 	return s.base.SyncDynamicChannelBlocks(ctx)
+}
+
+func (s *syncObservedChannelsService) SupportsSourceScopedDynamicChannelBlocks() bool {
+	capability, ok := s.base.(sourceScopedDynamicChannelBlocksCapability)
+	if !ok {
+		return false
+	}
+	return capability.SupportsSourceScopedDynamicChannelBlocks()
 }
 
 func (s *syncObservedChannelsService) ListSources(ctx context.Context, channelID int64, enabledOnly bool) ([]channels.Source, error) {
@@ -8427,6 +9458,14 @@ type blockingSyncChannelsService struct {
 	// Channel source sync (SyncDynamicSources) control.
 	blockSourceSyncStarted chan struct{}
 	blockSourceSyncRelease chan struct{}
+}
+
+func (b *blockingSyncChannelsService) SupportsSourceScopedDynamicChannelBlocks() bool {
+	capability, ok := b.ChannelsService.(sourceScopedDynamicChannelBlocksCapability)
+	if !ok {
+		return false
+	}
+	return capability.SupportsSourceScopedDynamicChannelBlocks()
 }
 
 func (b *blockingSyncChannelsService) SyncDynamicChannelBlocks(ctx context.Context) (channels.DynamicChannelSyncResult, error) {

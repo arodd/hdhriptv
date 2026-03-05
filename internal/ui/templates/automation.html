@@ -15,6 +15,9 @@
       --brand-soft: #eaf2ff;
       --danger: #b42318;
       --ok: #0a7c34;
+      --teal: #0e7c6b;
+      --teal-soft: #e6f7f4;
+      --teal-border: #7ec4b8;
     }
 
     * { box-sizing: border-box; }
@@ -77,6 +80,21 @@
       border-radius: 12px;
       box-shadow: 0 6px 20px rgba(16, 25, 42, 0.08);
       overflow: hidden;
+    }
+
+    .panel-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--border);
+      background: #fafdff;
+    }
+
+    .panel-header h2 {
+      margin: 0;
+      font-size: 1rem;
     }
 
     .panel h2 {
@@ -160,6 +178,18 @@
       color: #1c4a87;
     }
 
+    button.danger {
+      border-color: #efc8c4;
+      background: #fff5f4;
+      color: var(--danger);
+    }
+
+    button.teal {
+      border-color: var(--teal-border);
+      background: var(--teal-soft);
+      color: var(--teal);
+    }
+
     button:disabled {
       opacity: 0.5;
       cursor: default;
@@ -184,6 +214,154 @@
       border-color: #b7e3c2;
       background: #effcf4;
       color: var(--ok);
+    }
+
+    .status.warn {
+      border-color: #f7d9a7;
+      background: #fff8eb;
+      color: #8a5a1f;
+    }
+
+    /* Source card rows */
+    .source-card {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 12px;
+      display: grid;
+      gap: 8px;
+      background: #fbfdff;
+      transition: border-color 150ms ease;
+    }
+
+    .source-card:hover {
+      border-color: #b0c6e8;
+    }
+
+    .source-card.disabled {
+      opacity: 0.65;
+      background: #f8f9fb;
+    }
+
+    .source-card.create {
+      border-style: dashed;
+      border-color: var(--teal-border);
+      background: #f5fcfa;
+    }
+
+    .source-card-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .source-card-title {
+      font-weight: 600;
+      font-size: 0.94rem;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+
+    .source-card-title .primary-tag {
+      display: inline-block;
+      border: 1px solid var(--teal-border);
+      background: var(--teal-soft);
+      color: var(--teal);
+      border-radius: 999px;
+      padding: 1px 7px;
+      font-size: 0.72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .source-card-actions {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .source-card-fields {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto auto;
+      gap: 8px;
+      align-items: end;
+    }
+
+    .source-card-fields .field {
+      display: grid;
+      gap: 4px;
+    }
+
+    .source-card-fields .field label {
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .source-card-fields .field input {
+      font-size: 0.88rem;
+      padding: 6px 8px;
+      min-height: 32px;
+    }
+
+    .source-card-create-hint {
+      font-size: 0.82rem;
+      color: var(--muted);
+    }
+
+    .source-card-sync {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-size: 0.82rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+
+    .source-sync-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .source-sync-spinner {
+      display: inline-block;
+      width: 12px;
+      height: 12px;
+      border: 2px solid var(--border);
+      border-top-color: var(--brand);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .tuner-cap-notice {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 10px;
+      border: 1px solid #f2daad;
+      border-radius: 8px;
+      background: #fff9eb;
+      color: #8f5a02;
+      font-size: 0.84rem;
+    }
+
+    .tuner-summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 0.88rem;
+      color: var(--muted);
+      flex-wrap: wrap;
+    }
+
+    .tuner-summary strong {
+      color: var(--text);
     }
 
     .meta-grid {
@@ -271,37 +449,56 @@
       .meta-grid {
         grid-template-columns: 1fr;
       }
+
+      .source-card-fields {
+        grid-template-columns: 1fr;
+      }
     }
   </style>
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog">Catalog</a>
       <a href="/ui/channels">Channels</a>
       <a href="/ui/merge">Merge Suggestions</a>
       <a href="/ui/tuners">Tuners</a>
-      <a href="/ui/dvr">DVR</a>
-      <a href="/ui/automation" class="active">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation" class="active">Automation</a>{{end}}
     </nav>
   </header>
 
   <main>
+    <div id="status" class="status" hidden></div>
+
+    <!-- Panel 1: Playlist Sources -->
+    <section class="panel">
+      <div class="panel-header">
+        <h2>Playlist Sources</h2>
+        <div class="toolbar">
+          <button id="add-source-btn" class="teal" type="button">Add Source</button>
+          <button id="sync-all-btn" class="secondary" type="button">Sync All</button>
+        </div>
+      </div>
+      <div class="panel-body">
+        <div id="sources-empty" class="empty" hidden>No playlist sources configured.</div>
+        <div id="source-list"></div>
+        <div id="tuner-summary" class="tuner-summary"></div>
+        <div id="tuner-cap-notice" class="tuner-cap-notice" hidden></div>
+      </div>
+    </section>
+
+    <!-- Panel 2: Scheduler & Analyzer Settings -->
     <section class="panel">
       <h2>Automation Settings</h2>
       <div class="panel-body">
-        <div id="status" class="status" hidden></div>
-
         <div class="grid-two">
-          <div class="row">
-            <label for="playlist-url">Playlist URL</label>
-            <input id="playlist-url" type="text" placeholder="https://provider.example/playlist.m3u">
-          </div>
           <div class="row">
             <label for="timezone">Scheduler Timezone</label>
             <input id="timezone" type="text" placeholder="America/Chicago">
           </div>
+          <div></div>
         </div>
 
         <div class="grid-two">
@@ -363,7 +560,6 @@
         <div class="toolbar">
           <button id="save-btn" class="primary" type="button">Save Settings</button>
           <button id="reload-btn" type="button">Reload</button>
-          <button id="run-playlist-sync-btn" class="secondary" type="button">Run Playlist Sync Now</button>
           <button id="run-auto-prioritize-btn" class="secondary" type="button">Run Auto-prioritize Now</button>
           <button id="clear-all-source-health-btn" class="secondary" type="button">Clear All Source Health + Cooldowns</button>
           <button id="clear-auto-prioritize-cache-btn" class="secondary" type="button">Clear Auto-prioritize Cache</button>
@@ -431,8 +627,12 @@
     const statusEl = document.getElementById("status");
     const runsBodyEl = document.getElementById("runs-body");
     const runsEmptyEl = document.getElementById("runs-empty");
+    const sourceListEl = document.getElementById("source-list");
+    const sourcesEmptyEl = document.getElementById("sources-empty");
+    const tunerSummaryEl = document.getElementById("tuner-summary");
+    const tunerCapNoticeEl = document.getElementById("tuner-cap-notice");
+    const addSourceBtn = document.getElementById("add-source-btn");
 
-    const playlistUrlEl = document.getElementById("playlist-url");
     const timezoneEl = document.getElementById("timezone");
     const playlistEnabledEl = document.getElementById("playlist-sync-enabled");
     const playlistCronEl = document.getElementById("playlist-sync-cron");
@@ -455,20 +655,55 @@
     const autoLastStatusEl = document.getElementById("auto-last-status");
 
     let pollTimer = null;
+    let sources = [];
+    let syncingSourceIDs = new Set();
+    let sourceDraft = buildEmptySourceDraft();
 
-    function showStatus(message, level = "info") {
-      statusEl.hidden = false;
-      statusEl.classList.remove("error", "ok");
-      if (level === "error") {
-        statusEl.classList.add("error");
-      } else if (level === "ok") {
-        statusEl.classList.add("ok");
+    {{template "shared-js-show-status"}}
+    {{template "shared-js-api"}}
+
+    function escapeHTML(value) {
+      return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#39;");
+    }
+
+    function isPlaylistSourceRuntimeApplyFailure(err) {
+      const payload = err?.payload;
+      return Boolean(
+        payload &&
+        payload.error === "playlist_source_runtime_apply_failed" &&
+        payload.persisted === true &&
+        payload.runtime_applied === false
+      );
+    }
+
+    async function reconcilePlaylistSourceRuntimeApplyFailure(err, fallbackOperation) {
+      if (!isPlaylistSourceRuntimeApplyFailure(err)) {
+        return false;
       }
-      statusEl.textContent = message;
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 4500);
+
+      const payload = err.payload || {};
+      const operation = String(payload.operation || fallbackOperation || "playlist source mutation").trim();
+      const runtimeError = String(payload.runtime_error || "").trim();
+      const runtimeDetail = runtimeError ? ` Runtime reload error: ${runtimeError}.` : "";
+
+      let refreshed = false;
+      try {
+        await Promise.all([loadSources(), refreshState(), refreshRuns()]);
+        refreshed = true;
+      } catch (refreshErr) {
+        console.error("failed to refresh automation state after runtime apply failure", refreshErr);
+      }
+
+      const refreshDetail = refreshed
+        ? " Reloaded persisted state so UI matches current database values."
+        : " Reload failed; use Reload to fetch persisted state.";
+      showStatus(`Warning: ${operation} persisted, but runtime apply failed.${runtimeDetail}${refreshDetail}`, "warn");
+      return true;
     }
 
     function unixToText(value) {
@@ -490,26 +725,316 @@
       return `#${run.run_id} ${start}`;
     }
 
-    async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `request failed (${resp.status})`);
-      }
-      if (resp.status === 204) {
-        return null;
-      }
-      return resp.json();
+    function buildEmptySourceDraft() {
+      return {
+        name: "",
+        playlist_url: "",
+        tuner_count: 2,
+        enabled: true,
+      };
     }
 
-    function loadStateToForm(data) {
-      playlistUrlEl.value = data.playlist_url || "";
-      timezoneEl.value = data.timezone || "";
+    function syncSourceDraftFromDOM() {
+      const card = sourceListEl.querySelector(".source-card.draft");
+      if (!card) {
+        return;
+      }
+      const nameInput = card.querySelector(".source-draft-name-input");
+      const urlInput = card.querySelector(".source-draft-url-input");
+      const tunerInput = card.querySelector(".source-draft-tuner-input");
+      const enabledToggle = card.querySelector(".source-draft-enabled-toggle");
+      const parsedTuners = Number.parseInt(tunerInput?.value ?? "", 10);
+      sourceDraft = {
+        name: nameInput?.value ?? sourceDraft.name,
+        playlist_url: urlInput?.value ?? sourceDraft.playlist_url,
+        tuner_count: Number.isFinite(parsedTuners) && parsedTuners > 0 ? parsedTuners : 1,
+        enabled: !!enabledToggle?.checked,
+      };
+    }
 
+    function renderSources() {
+      syncSourceDraftFromDOM();
+      sourceListEl.innerHTML = "";
+      sourcesEmptyEl.hidden = sources.length > 0;
+
+      let totalTuners = 0;
+      let enabledTuners = 0;
+
+      const draftCard = document.createElement("div");
+      draftCard.className = "source-card create draft";
+      draftCard.innerHTML = `
+        <div class="source-card-header">
+          <div class="source-card-title">
+            <span>New Source</span>
+          </div>
+          <div class="source-card-actions">
+            <label class="checkbox-row" style="font-weight:normal;font-size:0.84rem">
+              <input type="checkbox" class="source-draft-enabled-toggle" ${sourceDraft.enabled ? "checked" : ""}>
+              Enabled
+            </label>
+          </div>
+        </div>
+        <div class="source-card-create-hint">Fill out this card, then click Add Source.</div>
+        <div class="source-card-fields">
+          <div class="field">
+            <label>Name</label>
+            <input type="text" class="source-draft-name-input" value="${escapeHTML(sourceDraft.name)}">
+          </div>
+          <div class="field">
+            <label>Playlist URL</label>
+            <input type="text" class="source-draft-url-input" value="${escapeHTML(sourceDraft.playlist_url)}" placeholder="http://example.com/playlist.m3u">
+          </div>
+          <div class="field">
+            <label>Tuners</label>
+            <input type="number" min="1" class="source-draft-tuner-input" value="${sourceDraft.tuner_count}" style="width:80px">
+          </div>
+          <div class="field"></div>
+        </div>
+      `;
+      sourceListEl.appendChild(draftCard);
+
+      for (const src of sources) {
+        totalTuners += src.tuner_count;
+        if (src.enabled) {
+          enabledTuners += src.tuner_count;
+        }
+
+        const card = document.createElement("div");
+        card.className = "source-card" + (src.enabled ? "" : " disabled");
+        card.dataset.sourceId = src.source_id;
+
+        const isPrimary = src.source_id === 1;
+        const syncing = syncingSourceIDs.has(src.source_id);
+        const primaryTag = isPrimary ? `<span class="primary-tag">Primary</span>` : "";
+
+        card.innerHTML = `
+          <div class="source-card-header">
+            <div class="source-card-title">
+              <span>${escapeHTML(src.name)}</span>
+              ${primaryTag}
+            </div>
+            <div class="source-card-actions">
+              <label class="checkbox-row" style="font-weight:normal;font-size:0.84rem">
+                <input type="checkbox" class="source-enabled-toggle" data-source-id="${src.source_id}" ${src.enabled ? "checked" : ""}>
+                Enabled
+              </label>
+              <button type="button" class="teal source-sync-btn" data-source-id="${src.source_id}" ${syncing ? "disabled" : ""}>
+                ${syncing ? '<span class="source-sync-spinner"></span>' : "Sync Now"}
+              </button>
+              <button type="button" class="danger source-delete-btn" data-source-id="${src.source_id}" ${isPrimary ? 'disabled title="Primary source cannot be deleted"' : ""}>
+                Delete
+              </button>
+            </div>
+          </div>
+          <div class="source-card-fields">
+            <div class="field">
+              <label>Name</label>
+              <input type="text" class="source-name-input" data-source-id="${src.source_id}" value="${escapeHTML(src.name)}">
+            </div>
+            <div class="field">
+              <label>Playlist URL</label>
+              <input type="text" class="source-url-input" data-source-id="${src.source_id}" value="${escapeHTML(src.playlist_url)}">
+            </div>
+            <div class="field">
+              <label>Tuners</label>
+              <input type="number" min="1" class="source-tuner-input" data-source-id="${src.source_id}" value="${src.tuner_count}" style="width:80px">
+            </div>
+            <div class="field" style="align-self:end">
+              <button type="button" class="primary source-save-btn" data-source-id="${src.source_id}">Save</button>
+            </div>
+          </div>
+        `;
+
+        sourceListEl.appendChild(card);
+      }
+
+      tunerSummaryEl.innerHTML = `Total tuners: <strong>${totalTuners}</strong> (${enabledTuners} from enabled sources)`;
+
+      if (enabledTuners > 255) {
+        tunerCapNoticeEl.hidden = false;
+        tunerCapNoticeEl.textContent = `Discovery tuner count is capped at 255 for client compatibility. Internal capacity: ${enabledTuners}. Advertised: 255.`;
+      } else {
+        tunerCapNoticeEl.hidden = true;
+      }
+    }
+
+    async function loadSources() {
+      try {
+        const data = await api("/api/admin/playlist-sources");
+        sources = Array.isArray(data) ? data : (data.sources || data.playlist_sources || []);
+      } catch (err) {
+        console.error("failed to load playlist sources", err);
+        sources = [];
+      }
+      renderSources();
+    }
+
+    sourceListEl.addEventListener("click", async (e) => {
+      const btn = e.target.closest("button");
+      if (!btn) {
+        return;
+      }
+
+      const sourceId = Number(btn.dataset.sourceId);
+      if (!Number.isFinite(sourceId) || sourceId <= 0) {
+        return;
+      }
+
+      if (btn.classList.contains("source-sync-btn")) {
+        try {
+          syncingSourceIDs.add(sourceId);
+          renderSources();
+          const data = await api(`/api/admin/jobs/playlist-sync/run?source_id=${sourceId}`, { method: "POST" });
+          showStatus(`Sync queued for source #${sourceId} (run #${data.run_id})`, "ok");
+          startPolling();
+          await refreshRuns();
+        } catch (err) {
+          showStatus(err.message || "per-source sync failed", "error");
+        } finally {
+          syncingSourceIDs.delete(sourceId);
+          renderSources();
+        }
+        return;
+      }
+
+      if (btn.classList.contains("source-delete-btn")) {
+        if (sourceId === 1) {
+          return;
+        }
+        const confirmed = window.confirm(`Delete playlist source #${sourceId}? This cannot be undone.`);
+        if (!confirmed) {
+          return;
+        }
+        try {
+          await api(`/api/admin/playlist-sources/${sourceId}`, { method: "DELETE" });
+          showStatus(`Playlist source #${sourceId} deleted`, "ok");
+          await loadSources();
+        } catch (err) {
+          if (await reconcilePlaylistSourceRuntimeApplyFailure(err, "delete_playlist_source")) {
+            return;
+          }
+          showStatus(err.message || "delete failed", "error");
+        }
+        return;
+      }
+
+      if (btn.classList.contains("source-save-btn")) {
+        const card = btn.closest(".source-card");
+        const nameInput = card.querySelector(".source-name-input");
+        const urlInput = card.querySelector(".source-url-input");
+        const tunerInput = card.querySelector(".source-tuner-input");
+        const enabledToggle = card.querySelector(".source-enabled-toggle");
+
+        const payload = {
+          name: nameInput.value.trim(),
+          playlist_url: urlInput.value.trim(),
+          tuner_count: Number.parseInt(tunerInput.value, 10) || 1,
+          enabled: enabledToggle.checked,
+        };
+
+        try {
+          await api(`/api/admin/playlist-sources/${sourceId}`, {
+            method: "PUT",
+            body: JSON.stringify(payload),
+          });
+          showStatus(`Source "${payload.name}" saved`, "ok");
+          await loadSources();
+        } catch (err) {
+          if (await reconcilePlaylistSourceRuntimeApplyFailure(err, "update_playlist_source")) {
+            return;
+          }
+          showStatus(err.message || "save source failed", "error");
+        }
+        return;
+      }
+    });
+
+    sourceListEl.addEventListener("change", async (e) => {
+      const toggle = e.target.closest(".source-enabled-toggle");
+      if (!toggle) {
+        return;
+      }
+      const sourceId = Number(toggle.dataset.sourceId);
+      try {
+        await api(`/api/admin/playlist-sources/${sourceId}`, {
+          method: "PUT",
+          body: JSON.stringify({ enabled: toggle.checked }),
+        });
+        showStatus(`Source #${sourceId} ${toggle.checked ? "enabled" : "disabled"}`, "ok");
+        await loadSources();
+      } catch (err) {
+        if (await reconcilePlaylistSourceRuntimeApplyFailure(err, "update_playlist_source")) {
+          return;
+        }
+        showStatus(err.message || "toggle failed", "error");
+        toggle.checked = !toggle.checked;
+      }
+    });
+
+    addSourceBtn.addEventListener("click", async () => {
+      syncSourceDraftFromDOM();
+
+      const payload = {
+        name: String(sourceDraft?.name ?? "").trim(),
+        playlist_url: String(sourceDraft?.playlist_url ?? "").trim(),
+        tuner_count: Number(sourceDraft?.tuner_count) || 1,
+        enabled: !!sourceDraft?.enabled,
+      };
+
+      const nameInput = sourceListEl.querySelector(".source-draft-name-input");
+      const urlInput = sourceListEl.querySelector(".source-draft-url-input");
+      const tunerInput = sourceListEl.querySelector(".source-draft-tuner-input");
+
+      if (!payload.name) {
+        showStatus("Source name is required", "error");
+        nameInput?.focus();
+        return;
+      }
+      if (!payload.playlist_url) {
+        showStatus("Playlist URL is required", "error");
+        urlInput?.focus();
+        return;
+      }
+      if (payload.tuner_count < 1) {
+        showStatus("Tuners must be at least 1", "error");
+        tunerInput?.focus();
+        return;
+      }
+
+      addSourceBtn.disabled = true;
+      sourceDraft = payload;
+      try {
+        await api("/api/admin/playlist-sources", {
+          method: "POST",
+          body: JSON.stringify(payload),
+        });
+        showStatus(`New source "${payload.name}" added`, "ok");
+        await loadSources();
+        sourceDraft = buildEmptySourceDraft();
+        renderSources();
+      } catch (err) {
+        if (await reconcilePlaylistSourceRuntimeApplyFailure(err, "create_playlist_source")) {
+          return;
+        }
+        showStatus(err.message || "add source failed", "error");
+      } finally {
+        addSourceBtn.disabled = false;
+      }
+    });
+
+    document.getElementById("sync-all-btn").addEventListener("click", async () => {
+      try {
+        const data = await api("/api/admin/jobs/playlist-sync/run", { method: "POST" });
+        showStatus(`Playlist sync (all sources) queued (run #${data.run_id})`, "ok");
+        startPolling();
+        await Promise.all([refreshState(), refreshRuns()]);
+      } catch (err) {
+        showStatus(err.message || "sync all failed", "error");
+      }
+    });
+
+    function loadSchedulerToForm(data) {
+      timezoneEl.value = data.timezone || "";
       playlistEnabledEl.checked = !!data.playlist_sync?.enabled;
       playlistCronEl.value = data.playlist_sync?.cron_spec || "";
       autoEnabledEl.checked = !!data.auto_prioritize?.enabled;
@@ -532,9 +1057,8 @@
       autoLastStatusEl.textContent = data.auto_prioritize?.last_run?.status || "-";
     }
 
-    function collectPayload() {
+    function collectSchedulerPayload() {
       return {
-        playlist_url: playlistUrlEl.value.trim(),
         timezone: timezoneEl.value.trim(),
         playlist_sync: {
           enabled: playlistEnabledEl.checked,
@@ -558,7 +1082,7 @@
 
     async function refreshState() {
       const data = await api("/api/admin/automation");
-      loadStateToForm(data);
+      loadSchedulerToForm(data);
     }
 
     function renderRuns(runs) {
@@ -574,12 +1098,12 @@
 
         tr.innerHTML = `
           <td class="cell-tight">${run.run_id}</td>
-          <td class="cell-tight">${run.job_name}</td>
-          <td class="cell-status">${run.status || "-"}</td>
+          <td class="cell-tight">${escapeHTML(run.job_name)}</td>
+          <td class="cell-status">${escapeHTML(run.status || "-")}</td>
           <td class="cell-tight">${unixToText(run.started_at)}</td>
           <td class="cell-tight">${unixToText(run.finished_at)}</td>
           <td class="cell-tight">${progressText}</td>
-          <td class="wrap cell-summary">${summary || err || "-"}</td>
+          <td class="wrap cell-summary">${escapeHTML(summary || err || "-")}</td>
         `;
         runsBodyEl.appendChild(tr);
       }
@@ -628,7 +1152,7 @@
 
     async function init() {
       try {
-        await Promise.all([refreshState(), refreshRuns()]);
+        await Promise.all([loadSources(), refreshState(), refreshRuns()]);
       } catch (err) {
         console.error(err);
         showStatus(err.message || "failed to load automation state", "error");
@@ -637,14 +1161,14 @@
 
     document.getElementById("save-btn").addEventListener("click", async () => {
       try {
-        const payload = collectPayload();
+        const payload = collectSchedulerPayload();
         const data = await api("/api/admin/automation", {
           method: "PUT",
           body: JSON.stringify(payload),
         });
-        loadStateToForm(data);
+        loadSchedulerToForm(data);
         await refreshRuns();
-        showStatus("Automation settings saved", "ok");
+        showStatus("Scheduler & analyzer settings saved", "ok");
       } catch (err) {
         console.error(err);
         showStatus(err.message || "save failed", "error");
@@ -653,20 +1177,11 @@
 
     document.getElementById("reload-btn").addEventListener("click", async () => {
       try {
-        await Promise.all([refreshState(), refreshRuns()]);
-        showStatus("Automation settings reloaded", "ok");
+        await Promise.all([loadSources(), refreshState(), refreshRuns()]);
+        showStatus("Settings reloaded", "ok");
       } catch (err) {
         console.error(err);
         showStatus(err.message || "reload failed", "error");
-      }
-    });
-
-    document.getElementById("run-playlist-sync-btn").addEventListener("click", async () => {
-      try {
-        await runJob("/api/admin/jobs/playlist-sync/run", "Playlist sync");
-      } catch (err) {
-        console.error(err);
-        showStatus(err.message || "playlist sync run failed", "error");
       }
     });
 

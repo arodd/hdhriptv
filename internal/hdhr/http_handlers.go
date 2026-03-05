@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/arodd/hdhriptv/internal/channels"
@@ -39,7 +40,7 @@ type Handler struct {
 	friendlyName string
 	deviceID     string
 	deviceAuth   string
-	tunerCount   int
+	tunerCount   atomic.Int32
 
 	contentDirectoryUpdateIDCacheMu    sync.Mutex
 	contentDirectoryUpdateIDCacheValue int
@@ -62,14 +63,34 @@ func NewHandler(cfg Config, channelsProvider ChannelsProvider) *Handler {
 		contentDirectoryUpdateIDCacheTTL = defaultContentDirectoryUpdateIDCacheTTL
 	}
 
-	return &Handler{
+	handler := &Handler{
 		channelsProvider:                 channelsProvider,
 		friendlyName:                     friendlyName,
 		deviceID:                         strings.ToUpper(strings.TrimSpace(cfg.DeviceID)),
 		deviceAuth:                       strings.TrimSpace(cfg.DeviceAuth),
-		tunerCount:                       cfg.TunerCount,
 		contentDirectoryUpdateIDCacheTTL: contentDirectoryUpdateIDCacheTTL,
 	}
+	handler.SetDiscoveryAdvertisedTunerCount(cfg.TunerCount)
+	return handler
+}
+
+func capDiscoveryAdvertisedTunerCount(tunerCount int) int {
+	if tunerCount > 255 {
+		return 255
+	}
+	if tunerCount < 1 {
+		return 1
+	}
+	return tunerCount
+}
+
+// SetDiscoveryAdvertisedTunerCount updates the tuner count exposed by
+// /discover.json. Values are capped to HDHomeRun-compatible bounds [1,255].
+func (h *Handler) SetDiscoveryAdvertisedTunerCount(tunerCount int) {
+	if h == nil {
+		return
+	}
+	h.tunerCount.Store(int32(capDiscoveryAdvertisedTunerCount(tunerCount)))
 }
 
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
@@ -99,7 +120,7 @@ func (h *Handler) DiscoverJSON(w http.ResponseWriter, r *http.Request) {
 		FirmwareName: "hdhomerun_dvr_atsc3",
 		// Keep firmware stable across restarts to mirror physical HDHomeRun payloads.
 		FirmwareVersion: "20250815",
-		TunerCount:      h.tunerCount,
+		TunerCount:      int(h.tunerCount.Load()),
 	}
 
 	writeJSON(w, http.StatusOK, resp)

@@ -1,0 +1,95 @@
+{{define "shared-css-chips"}}
+    .group-picker {
+      width: 100%;
+      border: 1px solid #dce5f5;
+      border-radius: 10px;
+      background: #f8fbff;
+      padding: 8px;
+      display: grid;
+      gap: 8px;
+    }
+
+    .group-picker-label {
+      color: var(--muted);
+      font-size: 0.82rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.03em;
+    }
+
+    .selected-groups {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      min-height: 26px;
+    }
+
+    .group-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #aac5f0;
+      background: #e9f2ff;
+      color: #1f4e92;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.82rem;
+    }
+
+    .group-chip button {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 0.85rem;
+      line-height: 1;
+      color: #1f4e92;
+      cursor: pointer;
+    }
+
+    .group-picker-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .group-picker-controls input[type="text"] {
+      min-width: 200px;
+      flex: 1;
+    }
+
+    .source-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      border: 1px solid #7ec4b8;
+      background: #e6f7f4;
+      color: #156b5a;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.82rem;
+    }
+
+    .source-chip button {
+      border: none;
+      background: transparent;
+      padding: 0;
+      font-size: 0.85rem;
+      line-height: 1;
+      color: #156b5a;
+      cursor: pointer;
+    }
+
+    .source-badge {
+      display: inline-block;
+      border: 1px solid #7ec4b8;
+      background: #e6f7f4;
+      color: #156b5a;
+      border-radius: 999px;
+      padding: 1px 7px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      vertical-align: middle;
+      white-space: nowrap;
+    }
+{{end}}

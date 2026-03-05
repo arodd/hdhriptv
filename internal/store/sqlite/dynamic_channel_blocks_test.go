@@ -1082,6 +1082,110 @@ func TestSyncDynamicChannelBlocksSupportsMultiGroupFilters(t *testing.T) {
 	}
 }
 
+func TestSyncDynamicChannelBlocksSupportsSourceIDFilters(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	secondary, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Secondary Dynamic Source",
+		PlaylistURL: "http://example.com/secondary-dynamic.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(secondary) error = %v", err)
+	}
+
+	filtered, err := store.CreateDynamicChannelQuery(ctx, channels.DynamicChannelQueryCreate{
+		Name:        "Prime Secondary",
+		GroupName:   "News",
+		SourceIDs:   []int64{secondary.SourceID, secondary.SourceID, -1, 0},
+		SearchQuery: "prime shared",
+	})
+	if err != nil {
+		t.Fatalf("CreateDynamicChannelQuery(filtered) error = %v", err)
+	}
+	if len(filtered.SourceIDs) != 1 || filtered.SourceIDs[0] != secondary.SourceID {
+		t.Fatalf("filtered.SourceIDs = %#v, want [%d]", filtered.SourceIDs, secondary.SourceID)
+	}
+
+	allSources, err := store.CreateDynamicChannelQuery(ctx, channels.DynamicChannelQueryCreate{
+		Name:        "Prime All Sources",
+		GroupName:   "News",
+		SearchQuery: "prime shared",
+	})
+	if err != nil {
+		t.Fatalf("CreateDynamicChannelQuery(all sources) error = %v", err)
+	}
+	if len(allSources.SourceIDs) != 0 {
+		t.Fatalf("allSources.SourceIDs = %#v, want empty", allSources.SourceIDs)
+	}
+
+	if err := store.UpsertPlaylistItemsForSource(ctx, primaryPlaylistSourceID, []playlist.Item{
+		{
+			ItemKey:    "src:source-filter:primary:prime",
+			ChannelKey: "name:source-filter-primary-prime",
+			Name:       "Prime Shared Alpha",
+			Group:      "News",
+			StreamURL:  "http://example.com/source-filter-primary-prime.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(primary) error = %v", err)
+	}
+	if err := store.UpsertPlaylistItemsForSource(ctx, secondary.SourceID, []playlist.Item{
+		{
+			ItemKey:    "src:source-filter:secondary:prime",
+			ChannelKey: "name:source-filter-secondary-prime",
+			Name:       "Prime Shared Zeta",
+			Group:      "News",
+			StreamURL:  "http://example.com/source-filter-secondary-prime.ts",
+		},
+		{
+			ItemKey:    "src:source-filter:secondary:nonmatch",
+			ChannelKey: "name:source-filter-secondary-nonmatch",
+			Name:       "Secondary Other",
+			Group:      "News",
+			StreamURL:  "http://example.com/source-filter-secondary-other.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(secondary) error = %v", err)
+	}
+
+	syncResult, err := store.SyncDynamicChannelBlocks(ctx)
+	if err != nil {
+		t.Fatalf("SyncDynamicChannelBlocks() error = %v", err)
+	}
+	if syncResult.QueriesProcessed != 2 || syncResult.QueriesEnabled != 2 {
+		t.Fatalf("syncResult query stats = %+v, want processed=2 enabled=2", syncResult)
+	}
+
+	filteredRows, err := loadGeneratedChannelsForTest(ctx, store, filtered.QueryID)
+	if err != nil {
+		t.Fatalf("loadGeneratedChannelsForTest(filtered) error = %v", err)
+	}
+	if len(filteredRows) != 1 {
+		t.Fatalf("len(filteredRows) = %d, want 1", len(filteredRows))
+	}
+	if filteredRows[0].ItemKey != "src:source-filter:secondary:prime" {
+		t.Fatalf("filtered row item_key = %q, want secondary prime item", filteredRows[0].ItemKey)
+	}
+
+	allRows, err := loadGeneratedChannelsForTest(ctx, store, allSources.QueryID)
+	if err != nil {
+		t.Fatalf("loadGeneratedChannelsForTest(all sources) error = %v", err)
+	}
+	if len(allRows) != 2 {
+		t.Fatalf("len(allRows) = %d, want 2", len(allRows))
+	}
+	if allRows[0].ItemKey != "src:source-filter:primary:prime" || allRows[1].ItemKey != "src:source-filter:secondary:prime" {
+		t.Fatalf("allRows item keys = [%s %s], want [src:source-filter:primary:prime src:source-filter:secondary:prime]", allRows[0].ItemKey, allRows[1].ItemKey)
+	}
+}
+
 func TestSyncDynamicChannelBlocksSupportsOrSearchQuery(t *testing.T) {
 	ctx := context.Background()
 

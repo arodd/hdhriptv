@@ -230,7 +230,7 @@ func (h *AdminHandler) handleDVRSync(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := h.detachedDVRContext(r.Context())
 	defer cancel()
 
-	result, err := h.dvr.Sync(ctx, req)
+	result, err := h.runDVRSync(ctx, req)
 	if err != nil {
 		writeDVRError(w, err, "run dvr sync")
 		return
@@ -248,6 +248,65 @@ func (h *AdminHandler) handleDVRSync(w http.ResponseWriter, r *http.Request) {
 		"duration_ms", result.DurationMS,
 	)
 	writeJSON(w, http.StatusOK, result)
+}
+
+type dvrSyncRunOutcome struct {
+	result dvr.SyncResult
+	err    error
+}
+
+func (h *AdminHandler) runDVRSync(ctx context.Context, req dvr.SyncRequest) (dvr.SyncResult, error) {
+	if h != nil && h.automation != nil && h.automation.Runner != nil {
+		return h.runDVRSyncViaRunner(ctx, req)
+	}
+	return h.dvr.Sync(ctx, req)
+}
+
+func (h *AdminHandler) runDVRSyncViaRunner(ctx context.Context, req dvr.SyncRequest) (dvr.SyncResult, error) {
+	if h == nil || h.automation == nil || h.automation.Runner == nil {
+		return dvr.SyncResult{}, fmt.Errorf("dvr sync runner is not configured")
+	}
+
+	outcomeCh := make(chan dvrSyncRunOutcome, 1)
+	_, err := h.automation.Runner.Start(ctx, jobs.JobDVRLineupSync, jobs.TriggerManual, func(jobCtx context.Context, run *jobs.RunContext) error {
+		result, syncErr := h.dvr.Sync(jobCtx, req)
+		if syncErr != nil {
+			select {
+			case outcomeCh <- dvrSyncRunOutcome{err: syncErr}:
+			default:
+			}
+			return syncErr
+		}
+		if run != nil {
+			summary := fmt.Sprintf(
+				"updated=%d cleared=%d unchanged=%d unresolved=%d warnings=%d",
+				result.UpdatedCount,
+				result.ClearedCount,
+				result.UnchangedCount,
+				result.UnresolvedCount,
+				len(result.Warnings),
+			)
+			_ = run.SetSummary(jobCtx, summary)
+		}
+		select {
+		case outcomeCh <- dvrSyncRunOutcome{result: result}:
+		default:
+		}
+		return nil
+	})
+	if err != nil {
+		return dvr.SyncResult{}, err
+	}
+
+	select {
+	case outcome := <-outcomeCh:
+		if outcome.err != nil {
+			return dvr.SyncResult{}, outcome.err
+		}
+		return outcome.result, nil
+	case <-ctx.Done():
+		return dvr.SyncResult{}, ctx.Err()
+	}
 }
 
 func (h *AdminHandler) handleDVRReverseSync(w http.ResponseWriter, r *http.Request) {
@@ -420,6 +479,9 @@ func writeDVRError(w http.ResponseWriter, err error, action string) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	case errors.Is(err, dvr.ErrSyncAlreadyRunning):
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	case errors.Is(err, jobs.ErrAlreadyRunning):
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	case errors.Is(err, dvr.ErrUnsupportedProvider):

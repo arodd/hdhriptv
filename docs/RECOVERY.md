@@ -34,7 +34,17 @@ The `STALL_POLICY` setting determines the recovery strategy. Three modes are sup
 
 Tries alternate sources first, preferring sources that are not currently on cooldown. Sources are ordered by availability (ready sources before cooling-down sources), recent failure history, fail count, success count, operator priority, and source ID.
 
-When no alternate sources are eligible for startup (all on cooldown or only one source exists), `failover_source` automatically **downgrades to `restart_same`** behavior, retrying the current source. This is logged with reason `no_alternate_sources` and a `restart_same_fallback` tag.
+Startup-eligible alternates are candidates with a non-empty stream URL, no
+active source cooldown, and source-pool tuner availability. Source-pool
+availability is preemption-aware: a full pool remains startup-eligible when
+it has reclaimable preemptible leases (probe or idle-client) in that same
+pool.
+
+When no alternate sources are startup-eligible (for example all alternates are
+cooling, missing URLs, or in non-reclaimable full pools), `failover_source`
+automatically **downgrades to `restart_same`** behavior, retrying the current
+source. This is logged with reason `no_alternate_sources` and a
+`restart_same_fallback` tag.
 
 Short-lived recovery penalties are tracked per-source. Sources that repeatedly fail quickly during recovery receive transient cooldown penalties (base 1s, max 12s, reset window 45s, state TTL 2m) to avoid thrashing.
 
@@ -442,36 +452,14 @@ The direct cycle-ending failure (the source that was actively streaming when the
 - `non_timeout`: close returned a non-timeout error that should be treated as actionable.
 - `non_timeout_benign_fontconfig_canceled`: close returned a known cancellation-adjacent benign FontConfig signature and is intentionally downgraded to DEBUG.
 
-## Known Limitations / Active Remediation
+## Known Limitations
 
-> Last validated: 2026-02-17
+> Last validated: 2026-03-04
 
-The following open issues affect the recovery subsystem and are tracked in dedicated TODO files:
-
-- `TODO-stream-shared-session-recovery-stale-last-publish-false-stall-loop.md` — Recovery cycles can self-trigger `stall` from stale pump `LastPublishAt` before first publish of the new source cycle
-- `TODO-stream-shared-session-trigger-recovery-control-plane-consistency.md` — Accepted recovery triggers can route to stale session owners, producing false `not found`, `already pending`, or stale success outcomes
-- `TODO-stream-shared-session-manual-recovery-lifecycle-consistency.md` — Accepted manual recovery requests can be silently dropped, stale-acked, replayed, or misclassified as `source_eof`
-- `TODO-stream-recovery-restart-same-disabled-current-source-retry-bypass.md` — `restart_same` and fallback-to-current paths can retry disabled sources absent from enabled candidate queries
-- `TODO-stream-recovery-keepalive-terminal-failure-false-live-transition-boundary.md` — Terminal recovery failure still emits `keepalive_to_live` boundary signaling even when no replacement live source is selected
-- `TODO-stream-recovery-alternate-startup-idle-cancel-stale-penalty-reattach-race.md` — Idle-guard startup cancellations can record alternate short-lived penalties when subscribers reattach before post-attempt lifecycle guards run
-- `TODO-stream-source-profile-persistence-and-recovery-inference-convergence.md` — Stale `LastProbeAt` clobber and profile persist retry gaps can leave persisted profile diagnostics stale until later successful probes
-- `TODO-stream-blocking-close-startup-abort-lifecycle-convergence.md` — Blocked close/read/wait paths can pin recovery lifecycle convergence across direct, ffmpeg, prober, startup, and pump flows
-
-### Top 3 Current Risks
-
-**1. False stall loop** (failure mode: stall)
-Stale prior-cycle `LastPublishAt` timestamps can trigger immediate false stalls before any data flows in new recovery cycles, causing rapid recovery churn and premature session termination.
-- `TODO-stream-shared-session-recovery-stale-last-publish-false-stall-loop.md`
-
-**2. Control-plane consistency** (failure mode: control-plane)
-Recovery trigger routing can target stale session owners, and manual recovery requests can be silently dropped or misclassified, leaving operators unable to reliably intervene during recovery events.
-- `TODO-stream-shared-session-trigger-recovery-control-plane-consistency.md`
-- `TODO-stream-shared-session-manual-recovery-lifecycle-consistency.md`
-
-**3. Source selection drift** (failure mode: persistence)
-Disabled sources can be retried via `restart_same` fallback, and stale alternate penalties can accumulate from lifecycle race windows.
-- `TODO-stream-recovery-restart-same-disabled-current-source-retry-bypass.md`
-- `TODO-stream-recovery-alternate-startup-idle-cancel-stale-penalty-reattach-race.md`
+This document no longer carries a static "active remediation" list. Recovery
+follow-up work is tracked in internal coordination TODO artifacts and reflected
+in `CHANGELOG.md` when delivered. For current behavior, rely on the recovery
+telemetry and troubleshooting guidance in this document.
 
 ## Troubleshooting
 

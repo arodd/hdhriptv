@@ -356,11 +356,161 @@ func TestTunerStatusSnapshotJSONIncludesDrainWaitWhenZero(t *testing.T) {
 	}
 }
 
+func TestBuildVirtualTunerStatusSnapshotIncludesPerSourceCounts(t *testing.T) {
+	manager := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 2, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 3, Enabled: true, OrderIndex: 1},
+	})
+	lease, err := manager.AcquireClientForSource(context.Background(), 2, "101", "client-a")
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(source=2) error = %v", err)
+	}
+	defer lease.Release()
+
+	snapshot := buildVirtualTunerStatusSnapshot(manager, map[int64]int{
+		1: 1,
+		2: 2,
+	})
+	if got := len(snapshot); got != 2 {
+		t.Fatalf("len(buildVirtualTunerStatusSnapshot) = %d, want 2", got)
+	}
+
+	if got, want := snapshot[0].PlaylistSourceID, int64(1); got != want {
+		t.Fatalf("snapshot[0].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := snapshot[0].PlaylistSourceName, "Primary"; got != want {
+		t.Fatalf("snapshot[0].playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := snapshot[0].TunerCount, 2; got != want {
+		t.Fatalf("snapshot[0].tuner_count = %d, want %d", got, want)
+	}
+	if got, want := snapshot[0].InUseCount, 0; got != want {
+		t.Fatalf("snapshot[0].in_use_count = %d, want %d", got, want)
+	}
+	if got, want := snapshot[0].IdleCount, 2; got != want {
+		t.Fatalf("snapshot[0].idle_count = %d, want %d", got, want)
+	}
+	if got, want := snapshot[0].ActiveSessionCount, 1; got != want {
+		t.Fatalf("snapshot[0].active_session_count = %d, want %d", got, want)
+	}
+
+	if got, want := snapshot[1].PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("snapshot[1].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := snapshot[1].PlaylistSourceName, "Backup"; got != want {
+		t.Fatalf("snapshot[1].playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := snapshot[1].TunerCount, 3; got != want {
+		t.Fatalf("snapshot[1].tuner_count = %d, want %d", got, want)
+	}
+	if got, want := snapshot[1].InUseCount, 1; got != want {
+		t.Fatalf("snapshot[1].in_use_count = %d, want %d", got, want)
+	}
+	if got, want := snapshot[1].IdleCount, 2; got != want {
+		t.Fatalf("snapshot[1].idle_count = %d, want %d", got, want)
+	}
+	if got, want := snapshot[1].ActiveSessionCount, 2; got != want {
+		t.Fatalf("snapshot[1].active_session_count = %d, want %d", got, want)
+	}
+}
+
+func TestBuildVirtualTunerStatusSnapshotIncludesRetainedDisabledSource(t *testing.T) {
+	manager := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: true, OrderIndex: 1},
+	})
+	backupLease, err := manager.AcquireClientForSource(context.Background(), 2, "101", "client-a")
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(source=2) error = %v", err)
+	}
+	defer backupLease.Release()
+
+	manager.Reconfigure([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: false, OrderIndex: 1},
+	})
+
+	snapshot := buildVirtualTunerStatusSnapshot(manager, map[int64]int{
+		1: 0,
+		2: 1,
+	})
+	if got := len(snapshot); got != 2 {
+		t.Fatalf("len(buildVirtualTunerStatusSnapshot) = %d, want 2", got)
+	}
+
+	var backupRow VirtualTunerStatus
+	for _, row := range snapshot {
+		if row.PlaylistSourceID == 2 {
+			backupRow = row
+			break
+		}
+	}
+	if got, want := backupRow.PlaylistSourceName, "Backup"; got != want {
+		t.Fatalf("backup row playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := backupRow.TunerCount, 1; got != want {
+		t.Fatalf("backup row tuner_count = %d, want %d", got, want)
+	}
+	if got, want := backupRow.InUseCount, 1; got != want {
+		t.Fatalf("backup row in_use_count = %d, want %d", got, want)
+	}
+	if got, want := backupRow.IdleCount, 0; got != want {
+		t.Fatalf("backup row idle_count = %d, want %d", got, want)
+	}
+	if got, want := backupRow.ActiveSessionCount, 1; got != want {
+		t.Fatalf("backup row active_session_count = %d, want %d", got, want)
+	}
+}
+
+func TestTunerStatusSnapshotIncludesPlaylistSourceIdentityFields(t *testing.T) {
+	manager := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 2, Enabled: true, OrderIndex: 1},
+	})
+
+	lease, err := manager.AcquireClientForSource(context.Background(), 2, "101", "client-a")
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(source=2) error = %v", err)
+	}
+	defer lease.Release()
+
+	handler := &Handler{
+		tuners:   manager,
+		sessions: &SessionManager{},
+	}
+	snapshot := handler.TunerStatusSnapshot()
+
+	if got, want := len(snapshot.Tuners), 1; got != want {
+		t.Fatalf("len(snapshot.tuners) = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Tuners[0].PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("snapshot.tuners[0].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := snapshot.Tuners[0].PlaylistSourceName, "Backup"; got != want {
+		t.Fatalf("snapshot.tuners[0].playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := snapshot.Tuners[0].VirtualTunerSlot, 0; got != want {
+		t.Fatalf("snapshot.tuners[0].virtual_tuner_slot = %d, want %d", got, want)
+	}
+	if got, want := len(snapshot.VirtualTuners), 2; got != want {
+		t.Fatalf("len(snapshot.virtual_tuners) = %d, want %d", got, want)
+	}
+	if got, want := snapshot.VirtualTuners[1].PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("snapshot.virtual_tuners[1].playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := snapshot.VirtualTuners[1].InUseCount, 1; got != want {
+		t.Fatalf("snapshot.virtual_tuners[1].in_use_count = %d, want %d", got, want)
+	}
+}
+
 func TestApplySharedSessionStatusCopiesStreamDetails(t *testing.T) {
 	dst := &TunerStatus{}
 	startedAt := time.Unix(1_770_000_000, 0).UTC()
 	stoppedAt := startedAt.Add(1500 * time.Millisecond)
 	session := SharedSessionStats{
+		PlaylistSourceID:                     42,
+		PlaylistSourceName:                   "Backup A",
+		VirtualTunerSlot:                     3,
 		SourceStartupProbeRawBytes:           2048,
 		SourceStartupProbeTrimmedBytes:       512,
 		SourceStartupProbeCutoverOffset:      1536,
@@ -397,6 +547,16 @@ func TestApplySharedSessionStatusCopiesStreamDetails(t *testing.T) {
 	}
 
 	applySharedSessionStatus(dst, session)
+
+	if got, want := dst.PlaylistSourceID, int64(42); got != want {
+		t.Fatalf("dst.playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := dst.PlaylistSourceName, "Backup A"; got != want {
+		t.Fatalf("dst.playlist_source_name = %q, want %q", got, want)
+	}
+	if got, want := dst.VirtualTunerSlot, 3; got != want {
+		t.Fatalf("dst.virtual_tuner_slot = %d, want %d", got, want)
+	}
 
 	if got, want := dst.SourceStartupProbeRawBytes, 2048; got != want {
 		t.Fatalf("dst.source_startup_probe_raw_bytes = %d, want %d", got, want)

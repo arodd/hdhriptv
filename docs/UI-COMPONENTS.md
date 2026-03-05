@@ -30,7 +30,22 @@ func ParseTemplates() (*template.Template, error) {
 }
 ```
 
-All 9 templates are parsed into a single `*template.Template` at server startup. Each page is a **standalone, self-contained HTML file** — there is no shared layout, no partials, and no template inheritance. The navigation bar (`<header class="topbar">`) is duplicated in every template with the appropriate `class="active"` link set per page.
+All templates are parsed into a single `*template.Template` at server startup. Each page is a standalone HTML file that consumes shared Go `{{template}}` partials for common CSS and JavaScript utilities. The navigation bar (`<header class="topbar">`) is duplicated in every template with the appropriate `class="active"` link set per page.
+
+### Shared Template Partials (MU0 Extraction)
+
+Common CSS and JavaScript utilities have been extracted into Go `{{template}}` partials to eliminate inline duplication:
+
+| Partial | Contents | Consumers |
+|---------|----------|-----------|
+| Status banner | `showStatus()` function with info/error/ok styling | All pages |
+| API helper | `api(path, options)` fetch wrapper | All pages except Tuners |
+| Paged collection | `loadPagedCollection(path, key, pageLimit)` auto-paginator | Catalog, Channels, Channel Detail, Dynamic Channel Detail |
+| Group name helpers | `normalizeGroupNameList()`, `normalizeGroupNameValue()` | Catalog, Channels, Channel Detail |
+| Chip picker CSS | Shared chip/badge styles for filter chips and source badges | All pages using filter chips |
+| Search warning | `formatSearchWarningSummary()` for token-mode truncation display | Catalog, Channel Detail, Dynamic Channel Detail, Channels |
+
+Partials are defined as `{{define "partial_name"}}...{{end}}` blocks in dedicated template files and consumed via `{{template "partial_name"}}` in page templates.
 
 Template data is minimal. The Go handler passes a `map[string]any` with:
 - `Title` — page `<title>` (every page)
@@ -66,8 +81,8 @@ Route registration happens in `admin_routes.go:259-274`.
 **Purpose:** Browse the imported IPTV playlist catalog, search/filter items, and create channels or add sources from catalog entries.
 
 **Layout:**
-- **Left sidebar** — "Groups" panel listing all playlist groups with item counts. Clicking a group toggles it as a multi-select filter (rendered as removable chips above the item list). An "All groups" button clears the filter.
-- **Main panel** — "Catalog" panel with search bar, catalog group chip picker, and paginated item list.
+- **Left sidebar** — "Groups" panel listing all playlist groups with item counts. Clicking a group toggles it as a multi-select filter (rendered as removable chips above the item list). An "All groups" button clears the filter. Below the groups panel, a **Source Filter** picker allows selecting one or more playlist sources (teal chips). When source filters are active, the groups panel narrows to show only groups present in the selected sources.
+- **Main panel** — "Catalog" panel with search bar, catalog group chip picker, and paginated item list. Each catalog item row includes a teal badge indicating which playlist source it belongs to (e.g., "Primary", "Backup A").
 
 **Key interactions:**
 - **Search** — Text input with optional "Regex mode" checkbox. Token mode supports `|`/`OR` disjuncts and `-term`/`!term` exclusions. Regex mode treats the full query as a case-insensitive regex pattern.
@@ -78,8 +93,8 @@ Route registration happens in `admin_routes.go:259-274`.
 - **Create Dynamic Channel** — A "Create Dynamic Channel From Filters" button builds a `dynamic_rule` from the current search query and group filters, then creates a channel via `POST /api/channels`.
 
 **API endpoints used:**
-- `GET /api/groups` — paginated via `loadPagedCollection()`
-- `GET /api/items?group=...&q=...&q_regex=...&limit=...&offset=...` — server-side pagination
+- `GET /api/groups` — paginated via `loadPagedCollection()`; supports `source_ids` query for source-scoped group listing
+- `GET /api/items?group=...&q=...&q_regex=...&source_ids=...&limit=...&offset=...` — server-side pagination with optional source filtering
 - `GET /api/channels` — loaded in full to populate target channel dropdown
 - `POST /api/channels` — create channel
 - `POST /api/channels/{id}/sources` — add source to target channel
@@ -143,13 +158,13 @@ Route registration happens in `admin_routes.go:259-274`.
 1. **Channel Details** — Displays channel metadata (ID, guide number, guide name, mode). Edit form with:
    - Guide name input
    - Enabled checkbox
-   - Dynamic source rule editor: enable toggle, multi-select group picker with `<datalist>` autocomplete, search query input, regex mode toggle, and a live hint showing the current rule summary
+   - Dynamic source rule editor: enable toggle, multi-select group picker with `<datalist>` autocomplete, **dropdown-with-checkboxes source picker** (teal/green chips, numeric `source_id` values), search query input, regex mode toggle, and a live hint showing the current rule summary
    - Save Channel / Clear Health + Cooldowns / Reload buttons
 
 2. **Add Source** — Simple form with item_key input and "Allow cross-channel attach" checkbox.
 
 3. **Sources** — Ordered list of source cards showing:
-   - Source ID, priority index, item_key
+   - Source ID, priority index, item_key, **teal badge indicating playlist source origin** (e.g., "Primary", "Backup A")
    - Full metadata: tvg_name, association type, enabled/disabled, success/fail counts, timestamps (last_ok, last_fail, cooldown_until, last_probe), stream profile (resolution, FPS, video/audio codec, bitrate)
    - Stream URL
    - Actions: Move Up/Down, Enable/Disable, Remove
@@ -177,7 +192,7 @@ Route registration happens in `admin_routes.go:259-274`.
 
 **Sections:**
 
-1. **Dynamic Block Configuration** — Metadata display (query ID, guide number range, order index, enabled/disabled, mode, groups, generated count, truncation). Edit form with name, multi-select group picker, search query, regex toggle, enabled checkbox. Save Block / Reload / Delete Block / Back to Channels.
+1. **Dynamic Block Configuration** — Metadata display (query ID, guide number range, order index, enabled/disabled, mode, groups, generated count, truncation). Edit form with name, multi-select group picker, **dropdown-with-checkboxes source picker** (teal/green chips, numeric `source_id` values — empty means all sources), search query, regex toggle, enabled checkbox. Save Block / Reload / Delete Block / Back to Channels.
 
 2. **Generated Channels (Block Sorting)** — Lists channels materialized from catalog matches. Each row shows guide number, guide name, channel_key, dynamic_item_key, position. Reorder with Top/Up/Down/Bottom/Move To... buttons.
 
@@ -206,7 +221,7 @@ Route registration happens in `admin_routes.go:259-274`.
 2. **Groups** — Paginated list of duplicate groups. Each group card shows:
    - Header: channel_key and item count
    - Actions: "Create From First" (creates channel from first item) and "Create + Add All Sources" (creates channel from first item, attaches remaining items as sources)
-   - Table: Name, Group, tvg-id, item_key columns with per-item "Create Channel" button
+   - Table: Name, Group, tvg-id, item_key columns with per-item "Create Channel" button and teal source badge indicating playlist source origin
 
 **API endpoints used:**
 - `GET /api/suggestions/duplicates?min=...&q=...&limit=...&offset=...` — server-side paginated
@@ -230,7 +245,9 @@ Route registration happens in `admin_routes.go:259-274`.
    - Each card has: label, value, severity badge (ok/warn/danger), and help tooltip
    - Card border/background changes based on severity (`severity-ok`, `severity-warn`, `severity-danger` CSS classes)
 
-3. **Active Sessions** (full-width) — Table with columns: Tuner, State (with colored tags), Channel, Source, Throughput, Subscribers, Last Push, Actions (Trigger Recovery button). Rows are selectable — clicking a row populates the "Selected Active Session" detail aside.
+   **Per-Source Tuner Table** — Below KPI grid, a compact table with one row per playlist source pool. Columns: source name, configured tuners, in-use, idle, active session count. Uses utilization-based color coding (green/yellow/red).
+
+3. **Active Sessions** (full-width) — Table with columns: Tuner, State (with colored tags), Channel, Source, Pool (playlist source name), Throughput, Subscribers, Last Push, Actions (Trigger Recovery button). Rows are selectable — clicking a row populates the "Selected Active Session" detail aside.
 
 4. **Client Streams** (8/12 grid) — Grouped by session using collapsible `<details>` elements. Each group shows subscriber count and a table of client connections. The panel header includes a **Resolve IP** checkbox that opt-in enables reverse-DNS hostname display for both live client rows and history subscriber rows.
 
@@ -238,7 +255,7 @@ Route registration happens in `admin_routes.go:259-274`.
 
 6. **Shared Session History** (full-width) — Master-detail layout:
    - Left pane: Filterable/searchable list of historical sessions with status/errors/recovery filters. Each item shows channel, source, status tag, timestamps, and terminal reason.
-   - Right pane: Tabbed detail view (Summary/Sources/Clients/Alerts tabs) for the selected history entry with full session lifecycle data.
+   - Right pane: Tabbed detail view (Summary/Sources/Subscribers/Recovery tabs) for the selected history entry with full session lifecycle data.
 
 **Key patterns:**
 - Auto-refresh polls `GET /api/admin/tuners` every 3 seconds when enabled (checkbox defaults to checked)
@@ -292,27 +309,42 @@ Route registration happens in `admin_routes.go:259-274`.
 
 ### Automation (`/ui/automation`)
 
-**Template:** `automation.html` — Single-column, three panels.
+**Template:** `automation.html` — Split-panel layout.
 
-**Purpose:** Configure and run automated jobs: playlist sync and auto-prioritize.
+**Purpose:** Manage playlist sources and configure automated jobs: playlist sync and auto-prioritize.
 
 **Sections:**
 
-1. **Automation Settings** — Two-column form grid with:
-   - Playlist URL, Scheduler Timezone
+1. **Playlist Sources Panel** (top) — Always-visible card rows for each playlist source, matching the `channel_detail` source-row pattern. Each source card shows:
+   - Source name (editable text), Playlist URL (editable text), Tuner count (editable number, `>= 1`), Enabled toggle
+   - Delete button (disabled for primary source with tooltip)
+   - Per-row **Sync Now** button that triggers per-source sync (`POST /api/admin/jobs/playlist-sync/run?source_id=X`)
+   - Per-source sync action status inline: in-progress spinner while a per-row sync request is active; terminal run/result visibility is provided by **Current Schedule State** and **Recent Job Runs**
+   - Global **Sync All** button for all enabled sources
+   - Computed total tuner count with visual indicator when capped at 255 for discovery
+   - **Add Source** button appends a new card row with defaults
+   - Inline validation for duplicate names and URLs
+
+2. **Scheduler & Analyzer Panel** (below) — Two-column form grid with:
+   - Scheduler Timezone
    - Playlist Sync: cron expression + enabled checkbox
    - Auto-prioritize: cron expression + enabled checkbox
    - Analyzer settings: probe timeout (ms), analyze duration (us), probe size (bytes), bitrate mode (metadata/sample/metadata_then_sample), sample seconds, enabled-only checkbox, top-N per channel
-   - Actions: Save Settings, Reload, Run Playlist Sync Now, Run Auto-prioritize Now, Clear All Source Health + Cooldowns, Clear Auto-prioritize Cache
+   - Actions: Save Settings, Reload, Run Auto-prioritize Now, Clear All Source Health + Cooldowns, Clear Auto-prioritize Cache
 
-2. **Current Schedule State** — 3x2 metadata grid showing next run, last run, and last status for both playlist sync and auto-prioritize jobs.
+3. **Current Schedule State** — 3x2 metadata grid showing next run, last run, and last status for both playlist sync and auto-prioritize jobs.
 
-3. **Recent Job Runs** — Table with columns: Run ID, Job, Status, Started, Finished, Progress, Summary/Error. When a job has `status: "running"`, a 2-second polling interval starts automatically and stops when no running jobs remain.
+4. **Recent Job Runs** — Table with columns: Run ID, Job, Status, Started, Finished, Progress, Summary/Error. When a job has `status: "running"`, a 2-second polling interval starts automatically and stops when no running jobs remain.
 
 **API endpoints used:**
-- `GET /api/admin/automation` — current config and schedule state
-- `PUT /api/admin/automation` — save settings
-- `POST /api/admin/jobs/playlist-sync/run` — trigger playlist sync
+- `GET /api/admin/automation` — current config, playlist sources, and schedule state
+- `PUT /api/admin/automation` — save settings (including `playlist_sources` array)
+- `GET /api/admin/playlist-sources` — list all playlist sources
+- `POST /api/admin/playlist-sources` — create a new source
+- `PUT /api/admin/playlist-sources/{sourceID}` — update source fields
+- `DELETE /api/admin/playlist-sources/{sourceID}` — delete non-primary source
+- `POST /api/admin/jobs/playlist-sync/run` — trigger playlist sync (all sources)
+- `POST /api/admin/jobs/playlist-sync/run?source_id=N` — trigger per-source sync
 - `POST /api/admin/jobs/auto-prioritize/run` — trigger auto-prioritize
 - `POST /api/admin/jobs/auto-prioritize/cache/clear` — clear analyzer cache
 - `POST /api/channels/sources/health/clear` — clear all source health
@@ -391,7 +423,7 @@ Every page exposes a `showStatus(...)` function that shows a timed banner (2.5�
 
 | Page | Load pattern | Mutation pattern |
 |---|---|---|
-| Catalog | Groups + Channels loaded in full; items paginated server-side | `POST /api/channels`, `POST /api/channels/{id}/sources` |
+| Catalog | Groups + Channels loaded in full (groups support `source_ids` scoping); items paginated server-side with optional `source_ids` filter | `POST /api/channels`, `POST /api/channels/{id}/sources` |
 | Channels | Channels + dynamic queries loaded in full via `loadPagedCollection()`; DVR mappings loaded separately | `POST/PATCH/DELETE /api/channels/*`, `POST/PATCH/DELETE /api/dynamic-channels/*`, `PUT /api/channels/{id}/dvr` |
 | Channel Detail | Channel found from full list; sources paginated | `PATCH /api/channels/{id}`, source CRUD via `/api/channels/{id}/sources/*` |
 | Dynamic Channel Detail | Single query fetched by ID; generated channels paginated | `PATCH/DELETE /api/dynamic-channels/{id}`, reorder via `PATCH /api/dynamic-channels/{id}/channels/reorder` |
@@ -416,7 +448,10 @@ if h.dvr != nil {
 - **DVR page** — Only served when `AdminHandler.dvr` is non-nil (a `DVRService` was injected via `SetDVRService()`). The corresponding DVR API routes under `/api/admin/dvr/*` and `/api/channels/*/dvr` are also conditionally registered.
 - **Automation page** — Only served when `AdminHandler.automation` is non-nil (an `AutomationDeps` was passed to `NewAdminHandler()`). The automation API routes under `/api/admin/automation`, `/api/admin/jobs/*` are also conditionally registered.
 
-The navigation bar in every template **always includes links to all pages** (Catalog, Channels, Merge, Tuners, DVR, Automation) regardless of whether the DVR and Automation routes are actually registered. Visiting an unregistered route returns a 404.
+The navigation bar always includes core links (Catalog, Channels, Merge, Tuners).
+Conditional links are capability-aware:
+- `DVR` link is rendered only when `DVRService` is configured and `/ui/dvr` is registered.
+- `Automation` link is rendered only when `AutomationDeps` is configured and `/ui/automation` is registered.
 
 On the Channels page, DVR-related UI elements (lineup discovery, sync buttons, per-channel mapping editor) gracefully degrade when the DVR API returns errors — `state.dvrAvailable` is set to `false` and DVR controls are disabled with an "unavailable" message.
 

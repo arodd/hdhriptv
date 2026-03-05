@@ -26,7 +26,22 @@ type Session struct {
 	ClientAddr  string
 	Kind        string
 	StartedAt   time.Time
-	leaseToken  uint64
+	// PlaylistSourceID/Name identify which virtual source pool owns this lease.
+	PlaylistSourceID   int64
+	PlaylistSourceName string
+	// VirtualTunerSlot is the slot index inside the source-local pool.
+	VirtualTunerSlot int
+	leaseToken       uint64
+}
+
+// VirtualTunerPoolSnapshot reports one source-level virtual tuner pool.
+type VirtualTunerPoolSnapshot struct {
+	PlaylistSourceID    int64
+	PlaylistSourceName  string
+	PlaylistSourceOrder int
+	TunerCount          int
+	InUseCount          int
+	IdleCount           int
 }
 
 // Pool tracks active tuner sessions and enforces a max concurrent stream count.
@@ -47,6 +62,11 @@ type Pool struct {
 // Lease represents an acquired tuner slot.
 type Lease struct {
 	ID int
+	// PlaylistSourceID/Name identify which virtual source pool owns this lease.
+	PlaylistSourceID   int64
+	PlaylistSourceName string
+	// VirtualTunerSlot is the slot index inside the source-local pool.
+	VirtualTunerSlot int
 
 	once      sync.Once
 	token     uint64
@@ -95,8 +115,32 @@ func (p *Pool) AcquireClient(ctx context.Context, guideNumber, clientAddr string
 	return p.acquire(ctx, guideNumber, clientAddr, sessionKindClient, nil, true)
 }
 
+// AcquireClientForSource keeps API parity with VirtualTunerManager. The base
+// single-pool implementation ignores source selection and acquires from the
+// shared pool.
+func (p *Pool) AcquireClientForSource(
+	ctx context.Context,
+	_ int64,
+	guideNumber,
+	clientAddr string,
+) (*Lease, error) {
+	return p.AcquireClient(ctx, guideNumber, clientAddr)
+}
+
 func (p *Pool) AcquireProbe(ctx context.Context, label string, cancel context.CancelCauseFunc) (*Lease, error) {
 	return p.acquire(ctx, "probe:"+label, "auto-prioritize", sessionKindProbe, cancel, false)
+}
+
+// AcquireProbeForSource keeps API parity with VirtualTunerManager. The base
+// single-pool implementation ignores source selection and acquires from the
+// shared pool.
+func (p *Pool) AcquireProbeForSource(
+	ctx context.Context,
+	_ int64,
+	label string,
+	cancel context.CancelCauseFunc,
+) (*Lease, error) {
+	return p.AcquireProbe(ctx, label, cancel)
 }
 
 func (p *Pool) acquire(
@@ -275,12 +319,16 @@ func (p *Pool) acquire(
 	}
 	leaseToken := p.nextLeaseToken
 	p.sessions[id] = Session{
-		ID:          id,
-		GuideNumber: guideNumber,
-		ClientAddr:  clientAddr,
-		Kind:        kind,
-		StartedAt:   time.Now().UTC(),
-		leaseToken:  leaseToken,
+		ID:                 id,
+		GuideNumber:        guideNumber,
+		ClientAddr:         clientAddr,
+		Kind:               kind,
+		StartedAt:          time.Now().UTC(),
+		PlaylistSourceID:   defaultPlaylistSourceID,
+		PlaylistSourceName: defaultPlaylistSourceName,
+		// Base single-pool mode uses one implicit source pool.
+		VirtualTunerSlot: id,
+		leaseToken:       leaseToken,
 	}
 	if kind == sessionKindProbe && cancel != nil {
 		p.cancels[id] = cancel
@@ -302,8 +350,11 @@ func (p *Pool) acquire(
 	)
 
 	return &Lease{
-		ID:    id,
-		token: leaseToken,
+		ID:                 id,
+		PlaylistSourceID:   defaultPlaylistSourceID,
+		PlaylistSourceName: defaultPlaylistSourceName,
+		VirtualTunerSlot:   id,
+		token:              leaseToken,
 		releaseFn: func() {
 			releasedAt := time.Now().UTC()
 			p.mu.Lock()
@@ -515,11 +566,72 @@ func (p *Pool) InUseCount() int {
 	return len(p.sessions)
 }
 
+// InUseCountForSource keeps API parity with VirtualTunerManager. The base
+// single-pool implementation reports global in-use count for any source.
+func (p *Pool) InUseCountForSource(_ int64) int {
+	return p.InUseCount()
+}
+
 func (p *Pool) Capacity() int {
 	if p == nil {
 		return 0
 	}
 	return cap(p.free)
+}
+
+// CapacityForSource keeps API parity with VirtualTunerManager. The base
+// single-pool implementation reports global capacity for any source.
+func (p *Pool) CapacityForSource(_ int64) int {
+	return p.Capacity()
+}
+
+// hasPreemptibleLeaseForSource keeps API parity with VirtualTunerManager.
+// The base single-pool implementation is source-agnostic.
+func (p *Pool) hasPreemptibleLeaseForSource(_ int64) bool {
+	if p == nil {
+		return false
+	}
+
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for id, sess := range p.sessions {
+		switch sess.Kind {
+		case sessionKindProbe:
+			if cancel, ok := p.cancels[id]; ok && cancel != nil {
+				return true
+			}
+		case sessionKindClient:
+			if preemptFn, ok := p.clientPreempts[id]; ok && preemptFn != nil {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// VirtualTunerSnapshot reports a single implicit pool for legacy one-pool mode.
+func (p *Pool) VirtualTunerSnapshot() []VirtualTunerPoolSnapshot {
+	if p == nil {
+		return nil
+	}
+	tunerCount := p.Capacity()
+	inUseCount := p.InUseCount()
+	idleCount := tunerCount - inUseCount
+	if idleCount < 0 {
+		idleCount = 0
+	}
+
+	return []VirtualTunerPoolSnapshot{
+		{
+			PlaylistSourceID:    defaultPlaylistSourceID,
+			PlaylistSourceName:  defaultPlaylistSourceName,
+			PlaylistSourceOrder: 0,
+			TunerCount:          tunerCount,
+			InUseCount:          inUseCount,
+			IdleCount:           idleCount,
+		},
+	}
 }
 
 func (p *Pool) failoverSettleDelayWhenFull() time.Duration {
@@ -552,6 +664,12 @@ func (p *Pool) failoverSettleDelayWhenFull() time.Duration {
 		return 0
 	}
 	return remaining
+}
+
+// failoverSettleDelayWhenFullForSource keeps API parity with
+// VirtualTunerManager. The base single-pool implementation is source-agnostic.
+func (p *Pool) failoverSettleDelayWhenFullForSource(_ int64) time.Duration {
+	return p.failoverSettleDelayWhenFull()
 }
 
 func (p *Pool) tryTakeFree() (int, bool) {

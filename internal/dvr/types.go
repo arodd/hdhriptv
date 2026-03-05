@@ -78,6 +78,7 @@ type ReverseSyncResult struct {
 
 const (
 	ReloadStatusDisabled = "disabled"
+	ReloadStatusFailed   = "failed"
 	ReloadStatusReloaded = "reloaded"
 	ReloadStatusPartial  = "partial"
 	ReloadStatusSkipped  = "skipped"
@@ -88,8 +89,11 @@ const (
 type ReloadOutcome struct {
 	Reloaded          bool                    `json:"reloaded"`
 	Skipped           bool                    `json:"skipped"`
+	Failed            bool                    `json:"failed"`
 	Status            string                  `json:"status"`
 	SkipReasons       []string                `json:"skip_reasons,omitempty"`
+	FailureReasons    []string                `json:"failure_reasons,omitempty"`
 	ReloadedProviders []ProviderType          `json:"reloaded_providers,omitempty"`
 	SkippedProviders  map[ProviderType]string `json:"skipped_providers,omitempty"`
+	FailedProviders   map[ProviderType]string `json:"failed_providers,omitempty"`
 }

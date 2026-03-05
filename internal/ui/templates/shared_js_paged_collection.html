@@ -1,0 +1,39 @@
+{{define "shared-js-load-paged-collection"}}
+async function loadPagedCollection(path, key, pageLimit = 200) {
+  const items = [];
+  let offset = 0;
+  let total = -1;
+
+  while (true) {
+    const params = new URLSearchParams({
+      limit: String(pageLimit),
+      offset: String(offset),
+    });
+    const separator = path.includes("?") ? "&" : "?";
+    const data = await api(`${path}${separator}${params.toString()}`);
+    const page = Array.isArray(data?.[key]) ? data[key] : [];
+    const reportedTotal = Number(data?.total);
+    if (Number.isFinite(reportedTotal) && reportedTotal >= 0) {
+      total = reportedTotal;
+    }
+
+    items.push(...page);
+    if (page.length === 0) {
+      break;
+    }
+
+    const reportedLimit = Number(data?.limit);
+    const step = Number.isFinite(reportedLimit) && reportedLimit > 0 ? reportedLimit : page.length;
+    if (step <= 0) {
+      break;
+    }
+    offset += step;
+
+    if (total >= 0 && offset >= total) {
+      break;
+    }
+  }
+
+  return items;
+}
+{{end}}

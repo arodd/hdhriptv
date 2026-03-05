@@ -671,6 +671,113 @@ func TestGetSource(t *testing.T) {
 	}
 }
 
+func TestGetAndListSourcesIncludePlaylistSourceMetadata(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	secondary, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Secondary Metadata Source",
+		PlaylistURL: "http://example.com/secondary-metadata.m3u",
+		TunerCount:  7,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(secondary) error = %v", err)
+	}
+
+	if err := store.UpsertPlaylistItemsForSource(ctx, primaryPlaylistSourceID, []playlist.Item{
+		{
+			ItemKey:    "src:metadata:primary",
+			ChannelKey: "tvg:metadata",
+			Name:       "Metadata Primary",
+			Group:      "News",
+			StreamURL:  "http://example.com/metadata-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(primary) error = %v", err)
+	}
+	if err := store.UpsertPlaylistItemsForSource(ctx, secondary.SourceID, []playlist.Item{
+		{
+			ItemKey:    "src:metadata:secondary",
+			ChannelKey: "tvg:metadata",
+			Name:       "Metadata Secondary",
+			Group:      "News",
+			StreamURL:  "http://example.com/metadata-secondary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(secondary) error = %v", err)
+	}
+
+	channel, err := store.CreateChannelFromItem(ctx, "src:metadata:primary", "", "", nil, 100)
+	if err != nil {
+		t.Fatalf("CreateChannelFromItem() error = %v", err)
+	}
+	added, err := store.AddSource(ctx, channel.ChannelID, "src:metadata:secondary", false)
+	if err != nil {
+		t.Fatalf("AddSource(secondary) error = %v", err)
+	}
+
+	sources, err := store.ListSources(ctx, channel.ChannelID, false)
+	if err != nil {
+		t.Fatalf("ListSources() error = %v", err)
+	}
+	if len(sources) != 2 {
+		t.Fatalf("len(ListSources()) = %d, want 2", len(sources))
+	}
+
+	var (
+		primaryFound   bool
+		secondaryFound bool
+	)
+	for _, src := range sources {
+		switch src.ItemKey {
+		case "src:metadata:primary":
+			primaryFound = true
+			if src.PlaylistSourceID != primaryPlaylistSourceID {
+				t.Fatalf("primary PlaylistSourceID = %d, want %d", src.PlaylistSourceID, primaryPlaylistSourceID)
+			}
+			if strings.TrimSpace(src.PlaylistSourceName) == "" {
+				t.Fatal("primary PlaylistSourceName is empty, want seeded primary source name")
+			}
+			if src.PlaylistSourceTuners <= 0 {
+				t.Fatalf("primary PlaylistSourceTuners = %d, want > 0", src.PlaylistSourceTuners)
+			}
+		case "src:metadata:secondary":
+			secondaryFound = true
+			if src.PlaylistSourceID != secondary.SourceID {
+				t.Fatalf("secondary PlaylistSourceID = %d, want %d", src.PlaylistSourceID, secondary.SourceID)
+			}
+			if src.PlaylistSourceName != secondary.Name {
+				t.Fatalf("secondary PlaylistSourceName = %q, want %q", src.PlaylistSourceName, secondary.Name)
+			}
+			if src.PlaylistSourceTuners != secondary.TunerCount {
+				t.Fatalf("secondary PlaylistSourceTuners = %d, want %d", src.PlaylistSourceTuners, secondary.TunerCount)
+			}
+		}
+	}
+	if !primaryFound || !secondaryFound {
+		t.Fatalf("expected both primary and secondary sources, got %#v", sources)
+	}
+
+	gotSecondary, err := store.GetSource(ctx, channel.ChannelID, added.SourceID, false)
+	if err != nil {
+		t.Fatalf("GetSource(secondary) error = %v", err)
+	}
+	if gotSecondary.PlaylistSourceID != secondary.SourceID {
+		t.Fatalf("GetSource secondary PlaylistSourceID = %d, want %d", gotSecondary.PlaylistSourceID, secondary.SourceID)
+	}
+	if gotSecondary.PlaylistSourceName != secondary.Name {
+		t.Fatalf("GetSource secondary PlaylistSourceName = %q, want %q", gotSecondary.PlaylistSourceName, secondary.Name)
+	}
+	if gotSecondary.PlaylistSourceTuners != secondary.TunerCount {
+		t.Fatalf("GetSource secondary PlaylistSourceTuners = %d, want %d", gotSecondary.PlaylistSourceTuners, secondary.TunerCount)
+	}
+}
+
 func BenchmarkListSourcesHotPath(b *testing.B) {
 	ctx := context.Background()
 
@@ -1207,6 +1314,62 @@ func TestUpdateChannelAndSource(t *testing.T) {
 	}
 }
 
+func TestSourceMutationOperationsReturnErrChannelNotFoundForMissingChannel(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:missing-channel:primary",
+			ChannelKey: "tvg:missing-channel",
+			Name:       "Missing Channel Primary",
+			Group:      "Missing",
+			StreamURL:  "http://example.com/missing-channel-primary.ts",
+		},
+		{
+			ItemKey:    "src:missing-channel:backup",
+			ChannelKey: "tvg:missing-channel",
+			Name:       "Missing Channel Backup",
+			Group:      "Missing",
+			StreamURL:  "http://example.com/missing-channel-backup.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channel, err := store.CreateChannelFromItem(ctx, "src:missing-channel:primary", "", "", nil, 100)
+	if err != nil {
+		t.Fatalf("CreateChannelFromItem() error = %v", err)
+	}
+	backupSource, err := store.AddSource(ctx, channel.ChannelID, "src:missing-channel:backup", false)
+	if err != nil {
+		t.Fatalf("AddSource(backup) error = %v", err)
+	}
+
+	const missingChannelID int64 = 999999
+
+	err = store.DeleteSource(ctx, missingChannelID, backupSource.SourceID)
+	if !errors.Is(err, channels.ErrChannelNotFound) {
+		t.Fatalf("DeleteSource(missing channel) error = %v, want ErrChannelNotFound", err)
+	}
+
+	err = store.ReorderSources(ctx, missingChannelID, []int64{})
+	if !errors.Is(err, channels.ErrChannelNotFound) {
+		t.Fatalf("ReorderSources(missing channel, empty source_ids) error = %v, want ErrChannelNotFound", err)
+	}
+
+	enabled := true
+	_, err = store.UpdateSource(ctx, missingChannelID, backupSource.SourceID, &enabled)
+	if !errors.Is(err, channels.ErrChannelNotFound) {
+		t.Fatalf("UpdateSource(missing channel) error = %v, want ErrChannelNotFound", err)
+	}
+}
+
 func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 	ctx := context.Background()
 
@@ -1236,6 +1399,7 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 		&channels.DynamicSourceRule{
 			Enabled:     true,
 			GroupName:   "US News",
+			SourceIDs:   []int64{3, 0, 3, 2},
 			SearchQuery: "fox kmsp",
 		},
 		100,
@@ -1251,6 +1415,9 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 	}
 	if len(created.DynamicRule.GroupNames) != 1 || created.DynamicRule.GroupNames[0] != "US News" {
 		t.Fatalf("created.DynamicRule.GroupNames = %#v, want [US News]", created.DynamicRule.GroupNames)
+	}
+	if len(created.DynamicRule.SourceIDs) != 2 || created.DynamicRule.SourceIDs[0] != 2 || created.DynamicRule.SourceIDs[1] != 3 {
+		t.Fatalf("created.DynamicRule.SourceIDs = %#v, want [2 3]", created.DynamicRule.SourceIDs)
 	}
 	if created.DynamicRule.SearchQuery != "fox kmsp" {
 		t.Fatalf("created.DynamicRule.SearchQuery = %q, want %q", created.DynamicRule.SearchQuery, "fox kmsp")
@@ -1279,6 +1446,9 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 	if !list[0].DynamicRule.Enabled {
 		t.Fatal("listed channel dynamic enabled = false, want true")
 	}
+	if len(list[0].DynamicRule.SourceIDs) != 2 || list[0].DynamicRule.SourceIDs[0] != 2 || list[0].DynamicRule.SourceIDs[1] != 3 {
+		t.Fatalf("listed dynamic SourceIDs = %#v, want [2 3]", list[0].DynamicRule.SourceIDs)
+	}
 	if list[0].DynamicRule.SearchRegex {
 		t.Fatal("listed channel dynamic search_regex = true, want false default")
 	}
@@ -1296,6 +1466,9 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 	if len(guide.DynamicRule.GroupNames) != 1 || guide.DynamicRule.GroupNames[0] != "US News" {
 		t.Fatalf("guide lookup dynamic group_names = %#v, want [US News]", guide.DynamicRule.GroupNames)
 	}
+	if len(guide.DynamicRule.SourceIDs) != 2 || guide.DynamicRule.SourceIDs[0] != 2 || guide.DynamicRule.SourceIDs[1] != 3 {
+		t.Fatalf("guide lookup dynamic source_ids = %#v, want [2 3]", guide.DynamicRule.SourceIDs)
+	}
 
 	updated, err := store.UpdateChannel(
 		ctx,
@@ -1305,6 +1478,7 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 		&channels.DynamicSourceRule{
 			Enabled:     false,
 			GroupName:   "US Local",
+			SourceIDs:   []int64{4, 4, 0, -5},
 			SearchQuery: "fox",
 		},
 	)
@@ -1319,6 +1493,9 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 	}
 	if len(updated.DynamicRule.GroupNames) != 1 || updated.DynamicRule.GroupNames[0] != "US Local" {
 		t.Fatalf("updated.DynamicRule.GroupNames = %#v, want [US Local]", updated.DynamicRule.GroupNames)
+	}
+	if len(updated.DynamicRule.SourceIDs) != 1 || updated.DynamicRule.SourceIDs[0] != 4 {
+		t.Fatalf("updated.DynamicRule.SourceIDs = %#v, want [4]", updated.DynamicRule.SourceIDs)
 	}
 	if updated.DynamicRule.SearchQuery != "fox" {
 		t.Fatalf("updated.DynamicRule.SearchQuery = %q, want fox", updated.DynamicRule.SearchQuery)
@@ -1335,6 +1512,7 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 		&channels.DynamicSourceRule{
 			Enabled:     true,
 			GroupName:   "US Local",
+			SourceIDs:   []int64{1, 4},
 			SearchQuery: "fox",
 			SearchRegex: true,
 		},
@@ -1344,6 +1522,9 @@ func TestCreateAndUpdateChannelDynamicRule(t *testing.T) {
 	}
 	if !updatedRegex.DynamicRule.SearchRegex {
 		t.Fatal("updatedRegex.DynamicRule.SearchRegex = false, want true")
+	}
+	if len(updatedRegex.DynamicRule.SourceIDs) != 2 || updatedRegex.DynamicRule.SourceIDs[0] != 1 || updatedRegex.DynamicRule.SourceIDs[1] != 4 {
+		t.Fatalf("updatedRegex.DynamicRule.SourceIDs = %#v, want [1 4]", updatedRegex.DynamicRule.SourceIDs)
 	}
 }
 
@@ -1705,6 +1886,48 @@ func TestSyncDynamicSourcesDoesNotMutateMatchedKeysInput(t *testing.T) {
 	}
 }
 
+func TestSyncDynamicSourcesRejectsMissingMatchedItemKey(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	if err := store.UpsertPlaylistItems(ctx, []playlist.Item{
+		{
+			ItemKey:    "src:news:primary",
+			ChannelKey: "tvg:news",
+			Name:       "News Primary",
+			Group:      "News",
+			StreamURL:  "http://example.com/news-primary.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItems() error = %v", err)
+	}
+
+	channel, err := store.CreateChannelFromItem(ctx, "src:news:primary", "", "", nil, 100)
+	if err != nil {
+		t.Fatalf("CreateChannelFromItem() error = %v", err)
+	}
+
+	if _, err := store.SyncDynamicSources(ctx, channel.ChannelID, []string{"src:news:missing"}); !errors.Is(err, channels.ErrItemNotFound) {
+		t.Fatalf("SyncDynamicSources(missing item) error = %v, want ErrItemNotFound", err)
+	}
+
+	sources, err := store.ListSources(ctx, channel.ChannelID, false)
+	if err != nil {
+		t.Fatalf("ListSources() error = %v", err)
+	}
+	if len(sources) != 1 {
+		t.Fatalf("len(ListSources) after failed sync = %d, want 1", len(sources))
+	}
+	if got := sources[0].ItemKey; got != "src:news:primary" {
+		t.Fatalf("remaining source item_key = %q, want src:news:primary", got)
+	}
+}
+
 func TestSyncDynamicSourcesByCatalogFilterPagedAddRemoveRetain(t *testing.T) {
 	ctx := context.Background()
 
@@ -1758,6 +1981,7 @@ func TestSyncDynamicSourcesByCatalogFilterPagedAddRemoveRetain(t *testing.T) {
 	firstSync, firstMatched, err := store.SyncDynamicSourcesByCatalogFilter(
 		ctx,
 		channel.ChannelID,
+		nil,
 		[]string{"News"},
 		"backup | alt",
 		false,
@@ -1777,6 +2001,7 @@ func TestSyncDynamicSourcesByCatalogFilterPagedAddRemoveRetain(t *testing.T) {
 	secondSync, secondMatched, err := store.SyncDynamicSourcesByCatalogFilter(
 		ctx,
 		channel.ChannelID,
+		nil,
 		[]string{"News"},
 		"alt",
 		false,
@@ -1855,6 +2080,7 @@ func TestSyncDynamicSourcesByCatalogFilterRejectsMatchesOverLimit(t *testing.T) 
 	_, _, err = store.SyncDynamicSourcesByCatalogFilter(
 		ctx,
 		channel.ChannelID,
+		nil,
 		[]string{"News"},
 		"fox kmsp",
 		false,
@@ -1936,6 +2162,14 @@ func TestListDuplicateSuggestions(t *testing.T) {
 	}
 	if !strings.HasPrefix(groups[0].Items[0].ItemKey, "src:news:") {
 		t.Fatalf("first suggestion item_key = %q, want src:news:*", groups[0].Items[0].ItemKey)
+	}
+	for _, item := range groups[0].Items {
+		if item.PlaylistSourceID != primaryPlaylistSourceID {
+			t.Fatalf("suggestion item %q playlist_source_id = %d, want %d", item.ItemKey, item.PlaylistSourceID, primaryPlaylistSourceID)
+		}
+		if strings.TrimSpace(item.PlaylistSourceName) == "" {
+			t.Fatalf("suggestion item %q playlist_source_name = empty, want non-empty source name", item.ItemKey)
+		}
 	}
 }
 

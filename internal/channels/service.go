@@ -39,6 +39,7 @@ type DynamicSourceRule struct {
 	Enabled     bool     `json:"enabled"`
 	GroupName   string   `json:"group_name"`
 	GroupNames  []string `json:"group_names,omitempty"`
+	SourceIDs   []int64  `json:"source_ids"`
 	SearchQuery string   `json:"search_query"`
 	SearchRegex bool     `json:"search_regex,omitempty"`
 }
@@ -52,27 +53,30 @@ type DynamicSourceSyncResult struct {
 
 // Source is an ordered failover source attached to a channel.
 type Source struct {
-	SourceID          int64   `json:"source_id"`
-	ChannelID         int64   `json:"channel_id"`
-	ItemKey           string  `json:"item_key"`
-	TVGName           string  `json:"tvg_name,omitempty"`
-	StreamURL         string  `json:"stream_url,omitempty"`
-	PriorityIndex     int     `json:"priority_index"`
-	Enabled           bool    `json:"enabled"`
-	AssociationType   string  `json:"association_type"`
-	LastOKAt          int64   `json:"last_ok_at,omitempty"`
-	LastFailAt        int64   `json:"last_fail_at,omitempty"`
-	LastFailReason    string  `json:"last_fail_reason,omitempty"`
-	SuccessCount      int     `json:"success_count"`
-	FailCount         int     `json:"fail_count"`
-	CooldownUntil     int64   `json:"cooldown_until"`
-	LastProbeAt       int64   `json:"last_probe_at,omitempty"`
-	ProfileWidth      int     `json:"profile_width,omitempty"`
-	ProfileHeight     int     `json:"profile_height,omitempty"`
-	ProfileFPS        float64 `json:"profile_fps,omitempty"`
-	ProfileVideoCodec string  `json:"profile_video_codec,omitempty"`
-	ProfileAudioCodec string  `json:"profile_audio_codec,omitempty"`
-	ProfileBitrateBPS int64   `json:"profile_bitrate_bps,omitempty"`
+	SourceID             int64   `json:"source_id"`
+	ChannelID            int64   `json:"channel_id"`
+	ItemKey              string  `json:"item_key"`
+	TVGName              string  `json:"tvg_name,omitempty"`
+	StreamURL            string  `json:"stream_url,omitempty"`
+	PlaylistSourceID     int64   `json:"playlist_source_id,omitempty"`
+	PlaylistSourceName   string  `json:"playlist_source_name,omitempty"`
+	PlaylistSourceTuners int     `json:"playlist_source_tuner_count,omitempty"`
+	PriorityIndex        int     `json:"priority_index"`
+	Enabled              bool    `json:"enabled"`
+	AssociationType      string  `json:"association_type"`
+	LastOKAt             int64   `json:"last_ok_at,omitempty"`
+	LastFailAt           int64   `json:"last_fail_at,omitempty"`
+	LastFailReason       string  `json:"last_fail_reason,omitempty"`
+	SuccessCount         int     `json:"success_count"`
+	FailCount            int     `json:"fail_count"`
+	CooldownUntil        int64   `json:"cooldown_until"`
+	LastProbeAt          int64   `json:"last_probe_at,omitempty"`
+	ProfileWidth         int     `json:"profile_width,omitempty"`
+	ProfileHeight        int     `json:"profile_height,omitempty"`
+	ProfileFPS           float64 `json:"profile_fps,omitempty"`
+	ProfileVideoCodec    string  `json:"profile_video_codec,omitempty"`
+	ProfileAudioCodec    string  `json:"profile_audio_codec,omitempty"`
+	ProfileBitrateBPS    int64   `json:"profile_bitrate_bps,omitempty"`
 }
 
 // SourceProfileUpdate carries persisted stream-profile metadata for one source.
@@ -88,13 +92,15 @@ type SourceProfileUpdate struct {
 
 // DuplicateItem is one catalog item included in a duplicate suggestion group.
 type DuplicateItem struct {
-	ItemKey   string `json:"item_key"`
-	Name      string `json:"name"`
-	GroupName string `json:"group_name"`
-	TVGID     string `json:"tvg_id,omitempty"`
-	TVGLogo   string `json:"tvg_logo,omitempty"`
-	StreamURL string `json:"stream_url,omitempty"`
-	Active    bool   `json:"active"`
+	ItemKey            string `json:"item_key"`
+	Name               string `json:"name"`
+	GroupName          string `json:"group_name"`
+	TVGID              string `json:"tvg_id,omitempty"`
+	TVGLogo            string `json:"tvg_logo,omitempty"`
+	StreamURL          string `json:"stream_url,omitempty"`
+	PlaylistSourceID   int64  `json:"playlist_source_id,omitempty"`
+	PlaylistSourceName string `json:"playlist_source_name,omitempty"`
+	Active             bool   `json:"active"`
 }
 
 // DuplicateGroup is a grouped set of catalog items sharing the same channel key.
@@ -144,11 +150,15 @@ type bulkSourceLister interface {
 }
 
 type dynamicCatalogFilterSyncStore interface {
-	SyncDynamicSourcesByCatalogFilter(ctx context.Context, channelID int64, groupNames []string, searchQuery string, searchRegex bool, pageSize int, maxMatches int) (DynamicSourceSyncResult, int, error)
+	SyncDynamicSourcesByCatalogFilter(ctx context.Context, channelID int64, sourceIDs []int64, groupNames []string, searchQuery string, searchRegex bool, pageSize int, maxMatches int) (DynamicSourceSyncResult, int, error)
 }
 
 type dynamicGeneratedGuideNameRefresher interface {
 	RefreshDynamicGeneratedGuideNames(ctx context.Context) (int, error)
+}
+
+type sourceScopedDynamicChannelBlocksCapabilityStore interface {
+	SupportsSourceScopedDynamicChannelBlocks() bool
 }
 
 // Service provides business operations for published channels and source mappings.
@@ -417,6 +427,23 @@ func (s *Service) SyncDynamicSourcesByCatalogFilter(
 	pageSize int,
 	maxMatches int,
 ) (DynamicSourceSyncResult, int, error) {
+	return s.SyncDynamicSourcesByCatalogFilterWithSourceIDs(ctx, channelID, nil, groupNames, searchQuery, searchRegex, pageSize, maxMatches)
+}
+
+// SyncDynamicSourcesByCatalogFilterWithSourceIDs synchronizes dynamic sources
+// for one channel by streaming catalog-filter matches in bounded pages when
+// supported by the backing store, optionally scoping matches to playlist
+// source IDs.
+func (s *Service) SyncDynamicSourcesByCatalogFilterWithSourceIDs(
+	ctx context.Context,
+	channelID int64,
+	sourceIDs []int64,
+	groupNames []string,
+	searchQuery string,
+	searchRegex bool,
+	pageSize int,
+	maxMatches int,
+) (DynamicSourceSyncResult, int, error) {
 	if s == nil || s.store == nil {
 		return DynamicSourceSyncResult{}, 0, errors.New("channels service is not configured")
 	}
@@ -429,8 +456,9 @@ func (s *Service) SyncDynamicSourcesByCatalogFilter(
 	}
 
 	groupNames = NormalizeGroupNames("", groupNames)
+	sourceIDs = NormalizeSourceIDs(sourceIDs)
 	searchQuery = strings.TrimSpace(searchQuery)
-	return syncStore.SyncDynamicSourcesByCatalogFilter(ctx, channelID, groupNames, searchQuery, searchRegex, pageSize, maxMatches)
+	return syncStore.SyncDynamicSourcesByCatalogFilter(ctx, channelID, sourceIDs, groupNames, searchQuery, searchRegex, pageSize, maxMatches)
 }
 
 func (s *Service) SyncDynamicChannelBlocks(ctx context.Context) (DynamicChannelSyncResult, error) {
@@ -438,6 +466,19 @@ func (s *Service) SyncDynamicChannelBlocks(ctx context.Context) (DynamicChannelS
 		return DynamicChannelSyncResult{}, errors.New("channels service is not configured")
 	}
 	return s.store.SyncDynamicChannelBlocks(ctx)
+}
+
+// SupportsSourceScopedDynamicChannelBlocks reports whether the backing store
+// can materialize dynamic channel blocks with source-scoped query filters.
+func (s *Service) SupportsSourceScopedDynamicChannelBlocks() bool {
+	if s == nil || s.store == nil {
+		return false
+	}
+	capability, ok := s.store.(sourceScopedDynamicChannelBlocksCapabilityStore)
+	if !ok {
+		return false
+	}
+	return capability.SupportsSourceScopedDynamicChannelBlocks()
 }
 
 func (s *Service) RefreshDynamicGeneratedGuideNames(ctx context.Context) (int, error) {
@@ -627,11 +668,16 @@ func normalizeDynamicRuleInput(rule *DynamicSourceRule) (*DynamicSourceRule, err
 	if rule == nil {
 		return nil, nil
 	}
+	if err := ValidateSourceIDs(rule.SourceIDs, "dynamic_rule.source_ids"); err != nil {
+		return nil, err
+	}
 	groupNames := NormalizeGroupNames(rule.GroupName, rule.GroupNames)
+	sourceIDs := NormalizeSourceIDs(rule.SourceIDs)
 	normalized := DynamicSourceRule{
 		Enabled:     rule.Enabled,
 		GroupName:   GroupNameAlias(groupNames),
 		GroupNames:  groupNames,
+		SourceIDs:   sourceIDs,
 		SearchQuery: strings.TrimSpace(rule.SearchQuery),
 		SearchRegex: rule.SearchRegex,
 	}
@@ -644,12 +690,17 @@ func normalizeDynamicRuleInput(rule *DynamicSourceRule) (*DynamicSourceRule, err
 }
 
 func normalizeDynamicChannelQueryCreateInput(create DynamicChannelQueryCreate) (DynamicChannelQueryCreate, error) {
+	if err := ValidateSourceIDs(create.SourceIDs, "source_ids"); err != nil {
+		return DynamicChannelQueryCreate{}, err
+	}
 	groupNames := NormalizeGroupNames(create.GroupName, create.GroupNames)
+	sourceIDs := NormalizeSourceIDs(create.SourceIDs)
 	normalized := DynamicChannelQueryCreate{
 		Enabled:     create.Enabled,
 		Name:        strings.TrimSpace(create.Name),
 		GroupName:   GroupNameAlias(groupNames),
 		GroupNames:  groupNames,
+		SourceIDs:   sourceIDs,
 		SearchQuery: strings.TrimSpace(create.SearchQuery),
 		SearchRegex: create.SearchRegex,
 	}
@@ -679,6 +730,13 @@ func normalizeDynamicChannelQueryUpdateInput(update DynamicChannelQueryUpdate) (
 		normalized.GroupName = &alias
 		normalized.GroupNames = &groupNamesCopy
 	}
+	if update.SourceIDs != nil {
+		if err := ValidateSourceIDs(*update.SourceIDs, "source_ids"); err != nil {
+			return DynamicChannelQueryUpdate{}, err
+		}
+		sourceIDs := NormalizeSourceIDs(*update.SourceIDs)
+		normalized.SourceIDs = &sourceIDs
+	}
 	if update.SearchQuery != nil {
 		value := strings.TrimSpace(*update.SearchQuery)
 		normalized.SearchQuery = &value
@@ -687,7 +745,7 @@ func normalizeDynamicChannelQueryUpdateInput(update DynamicChannelQueryUpdate) (
 		value := *update.SearchRegex
 		normalized.SearchRegex = &value
 	}
-	if normalized.Enabled == nil && normalized.Name == nil && normalized.GroupName == nil && normalized.GroupNames == nil && normalized.SearchQuery == nil && normalized.SearchRegex == nil {
+	if normalized.Enabled == nil && normalized.Name == nil && normalized.GroupName == nil && normalized.GroupNames == nil && normalized.SourceIDs == nil && normalized.SearchQuery == nil && normalized.SearchRegex == nil {
 		return DynamicChannelQueryUpdate{}, errors.New("at least one field must be provided")
 	}
 	return normalized, nil

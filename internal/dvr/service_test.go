@@ -697,6 +697,165 @@ func TestServiceReloadLineupForPlaylistSyncOutcomeSkipsIncompleteActiveProviders
 	}
 }
 
+func TestServiceReloadLineupForPlaylistSyncOutcomeContinuesOnProviderReloadFailure(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:               1,
+			Provider:         ProviderChannels,
+			ActiveProviders:  []ProviderType{ProviderChannels, ProviderJellyfin},
+			ChannelsBaseURL:  "http://channels.example.invalid:8089",
+			JellyfinBaseURL:  "http://jellyfin.example.invalid:8096",
+			JellyfinAPIToken: "token-abc",
+		},
+	}
+	channelsProvider := &fakeProvider{
+		providerType: ProviderChannels,
+		reloadErr:    fmt.Errorf("channels reload exploded"),
+	}
+	jellyfinProvider := &fakeProvider{providerType: ProviderJellyfin}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.lineupProviderBuild = func(instance InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return jellyfinProvider, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+	svc.mappingProviderBuild = func(instance InstanceConfig, _ *http.Client) (MappingProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return jellyfinProvider, nil
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+	if !outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want true", outcome.Reloaded)
+	}
+	if outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want false", outcome.Skipped)
+	}
+	if !outcome.Failed {
+		t.Fatalf("outcome.Failed = %v, want true", outcome.Failed)
+	}
+	if got, want := outcome.Status, ReloadStatusPartial; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := outcome.ReloadedProviders, []ProviderType{ProviderJellyfin}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome.ReloadedProviders = %#v, want %#v", got, want)
+	}
+	if got, ok := outcome.FailedProviders[ProviderChannels]; !ok || !strings.Contains(got, "reload_lineup_failed: reload device lineup") {
+		t.Fatalf("outcome.FailedProviders[channels] = %q, want reload_lineup_failed reason", got)
+	}
+	if got, want := len(outcome.FailureReasons), 1; got != want {
+		t.Fatalf("len(outcome.FailureReasons) = %d, want %d", got, want)
+	}
+	if got := outcome.FailureReasons[0]; !strings.HasPrefix(got, "channels:reload_lineup_failed:") {
+		t.Fatalf("outcome.FailureReasons[0] = %q, want channels reload failure prefix", got)
+	}
+	if got, want := len(channelsProvider.reloadCalls), 1; got != want {
+		t.Fatalf("len(channelsProvider.reloadCalls) = %d, want %d", got, want)
+	}
+	if got, want := len(jellyfinProvider.reloadCalls), 1; got != want {
+		t.Fatalf("len(jellyfinProvider.reloadCalls) = %d, want %d", got, want)
+	}
+}
+
+func TestServiceReloadLineupForPlaylistSyncOutcomeReturnsFailedStatusWhenAllActiveProvidersFail(t *testing.T) {
+	t.Parallel()
+
+	store := &fakeStore{
+		instance: InstanceConfig{
+			ID:               1,
+			Provider:         ProviderChannels,
+			ActiveProviders:  []ProviderType{ProviderChannels, ProviderJellyfin},
+			ChannelsBaseURL:  "http://channels.example.invalid:8089",
+			JellyfinBaseURL:  "http://jellyfin.example.invalid:8096",
+			JellyfinAPIToken: "token-abc",
+		},
+	}
+	channelsProvider := &fakeProvider{
+		providerType: ProviderChannels,
+		reloadErr:    fmt.Errorf("channels reload exploded"),
+	}
+
+	svc, err := NewService(store, "8F07FDC6", nil)
+	if err != nil {
+		t.Fatalf("NewService() error = %v", err)
+	}
+	svc.lineupProviderBuild = func(instance InstanceConfig, _ *http.Client) (LineupReloadProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return nil, fmt.Errorf("jellyfin provider construction failed")
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+	svc.mappingProviderBuild = func(instance InstanceConfig, _ *http.Client) (MappingProvider, error) {
+		switch instance.Provider {
+		case ProviderChannels:
+			return channelsProvider, nil
+		case ProviderJellyfin:
+			return nil, fmt.Errorf("jellyfin provider construction failed")
+		default:
+			return nil, fmt.Errorf("unexpected provider %q", instance.Provider)
+		}
+	}
+
+	outcome, err := svc.ReloadLineupForPlaylistSyncOutcome(context.Background())
+	if err != nil {
+		t.Fatalf("ReloadLineupForPlaylistSyncOutcome() error = %v", err)
+	}
+	if outcome.Reloaded {
+		t.Fatalf("outcome.Reloaded = %v, want false", outcome.Reloaded)
+	}
+	if outcome.Skipped {
+		t.Fatalf("outcome.Skipped = %v, want false", outcome.Skipped)
+	}
+	if !outcome.Failed {
+		t.Fatalf("outcome.Failed = %v, want true", outcome.Failed)
+	}
+	if got, want := outcome.Status, ReloadStatusFailed; got != want {
+		t.Fatalf("outcome.Status = %q, want %q", got, want)
+	}
+	if got, want := len(outcome.FailureReasons), 2; got != want {
+		t.Fatalf("len(outcome.FailureReasons) = %d, want %d", got, want)
+	}
+	if got := outcome.FailureReasons[0]; !strings.HasPrefix(got, "channels:reload_lineup_failed:") {
+		t.Fatalf("outcome.FailureReasons[0] = %q, want channels failure prefix", got)
+	}
+	if got := outcome.FailureReasons[1]; !strings.HasPrefix(got, "jellyfin:build_provider_failed:") {
+		t.Fatalf("outcome.FailureReasons[1] = %q, want jellyfin build failure prefix", got)
+	}
+	if got, ok := outcome.FailedProviders[ProviderChannels]; !ok || !strings.Contains(got, "reload_lineup_failed:") {
+		t.Fatalf("outcome.FailedProviders[channels] = %q, want reload_lineup_failed reason", got)
+	}
+	if got, ok := outcome.FailedProviders[ProviderJellyfin]; !ok || !strings.Contains(got, "build_provider_failed:") {
+		t.Fatalf("outcome.FailedProviders[jellyfin] = %q, want build_provider_failed reason", got)
+	}
+	if got, want := len(channelsProvider.reloadCalls), 1; got != want {
+		t.Fatalf("len(channelsProvider.reloadCalls) = %d, want %d", got, want)
+	}
+}
+
 func TestServiceGetStateIncludesStoredJellyfinToken(t *testing.T) {
 	t.Parallel()
 

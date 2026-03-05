@@ -2,6 +2,7 @@ package config
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -133,6 +134,13 @@ func TestLoadDefaultStabilityProfile(t *testing.T) {
 	if cfg.StallPolicy != "failover_source" {
 		t.Fatalf("StallPolicy = %q, want failover_source", cfg.StallPolicy)
 	}
+	if cfg.PlaylistSyncSourceConcurrency != defaultPlaylistSyncSourceConcurrency {
+		t.Fatalf(
+			"PlaylistSyncSourceConcurrency = %d, want %d",
+			cfg.PlaylistSyncSourceConcurrency,
+			defaultPlaylistSyncSourceConcurrency,
+		)
+	}
 	if cfg.StallMaxFailovers != 3 {
 		t.Fatalf("StallMaxFailovers = %d, want 3", cfg.StallMaxFailovers)
 	}
@@ -243,6 +251,185 @@ func TestConfigRedactedIncludesUPnPContentDirectoryUpdateIDCacheTTL(t *testing.T
 	}
 	if redacted.TraditionalGuideStart != 275 {
 		t.Fatalf("Redacted().TraditionalGuideStart = %d, want 275", redacted.TraditionalGuideStart)
+	}
+}
+
+func TestLoadPlaylistSourceSpecsFromFlag(t *testing.T) {
+	clearConfigEnv(t)
+
+	cfg, err := Load([]string{
+		"--tuner-count=2",
+		"--playlist-source=url=http://primary-backup.example.com/playlist.m3u,tuners=3,name=Backup A",
+		"--playlist-source=url=http://tertiary.example.com/playlist.m3u,tuners=4,enabled=false",
+	})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.PrimaryTunerCount != 2 {
+		t.Fatalf("PrimaryTunerCount = %d, want 2", cfg.PrimaryTunerCount)
+	}
+	if cfg.TunerCount != 5 {
+		t.Fatalf("TunerCount = %d, want 5 from enabled sources", cfg.TunerCount)
+	}
+	if len(cfg.PlaylistSources) != 3 {
+		t.Fatalf("len(PlaylistSources) = %d, want 3", len(cfg.PlaylistSources))
+	}
+	if cfg.PlaylistSources[0].Name != "Primary" || cfg.PlaylistSources[0].TunerCount != 2 || !cfg.PlaylistSources[0].Enabled {
+		t.Fatalf("primary source = %+v, want name=Primary tuners=2 enabled=true", cfg.PlaylistSources[0])
+	}
+	if cfg.PlaylistSources[1].Name != "Backup A" || cfg.PlaylistSources[1].TunerCount != 3 || !cfg.PlaylistSources[1].Enabled {
+		t.Fatalf("secondary source = %+v, want name=Backup A tuners=3 enabled=true", cfg.PlaylistSources[1])
+	}
+	if cfg.PlaylistSources[2].Name != "Source 3" || cfg.PlaylistSources[2].TunerCount != 4 || cfg.PlaylistSources[2].Enabled {
+		t.Fatalf("tertiary source = %+v, want name=Source 3 tuners=4 enabled=false", cfg.PlaylistSources[2])
+	}
+	if cfg.DiscoveryAdvertisedTunerCount() != 5 {
+		t.Fatalf("DiscoveryAdvertisedTunerCount() = %d, want 5", cfg.DiscoveryAdvertisedTunerCount())
+	}
+	if cfg.DiscoveryTunerCountCapped() {
+		t.Fatal("DiscoveryTunerCountCapped() = true, want false")
+	}
+}
+
+func TestLoadPlaylistSourceSpecsFromEnvCapsDiscoveryCount(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv(
+		"PLAYLIST_SOURCES",
+		"url=http://source-a.example.com/playlist.m3u,tuners=200;url=http://source-b.example.com/playlist.m3u,tuners=100",
+	)
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	if cfg.PrimaryTunerCount != 2 {
+		t.Fatalf("PrimaryTunerCount = %d, want default 2", cfg.PrimaryTunerCount)
+	}
+	if cfg.TunerCount != 302 {
+		t.Fatalf("TunerCount = %d, want 302", cfg.TunerCount)
+	}
+	if cfg.DiscoveryAdvertisedTunerCount() != 255 {
+		t.Fatalf("DiscoveryAdvertisedTunerCount() = %d, want 255", cfg.DiscoveryAdvertisedTunerCount())
+	}
+	if !cfg.DiscoveryTunerCountCapped() {
+		t.Fatal("DiscoveryTunerCountCapped() = false, want true")
+	}
+	if len(cfg.PlaylistSources) != 3 {
+		t.Fatalf("len(PlaylistSources) = %d, want 3", len(cfg.PlaylistSources))
+	}
+}
+
+func TestLoadPlaylistSourcesStartupAuthoritativeFromEnvAndFlag(t *testing.T) {
+	clearConfigEnv(t)
+	t.Setenv("PLAYLIST_SOURCES_STARTUP_AUTHORITATIVE", "true")
+
+	cfg, err := Load([]string{})
+	if err != nil {
+		t.Fatalf("Load() env error = %v", err)
+	}
+	if !cfg.PlaylistSourcesStartupAuthoritative {
+		t.Fatal("PlaylistSourcesStartupAuthoritative = false, want true from env")
+	}
+
+	cfg, err = Load([]string{"--playlist-sources-startup-authoritative=false"})
+	if err != nil {
+		t.Fatalf("Load() flag override error = %v", err)
+	}
+	if cfg.PlaylistSourcesStartupAuthoritative {
+		t.Fatal("PlaylistSourcesStartupAuthoritative = true, want false from flag override")
+	}
+}
+
+func TestLoadRejectsDuplicatePlaylistSourceURL(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{
+		"--playlist-url=http://duplicate.example.com/playlist.m3u",
+		"--playlist-source=url=HTTP://DUPLICATE.EXAMPLE.COM/playlist.m3u,tuners=3",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate playlist source URL error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate playlist source url") {
+		t.Fatalf("error = %v, want duplicate playlist source URL marker", err)
+	}
+}
+
+func TestLoadRejectsDuplicatePlaylistSourceName(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{
+		"--playlist-source=url=http://source-a.example.com/playlist.m3u,tuners=2,name=Backup",
+		"--playlist-source=url=http://source-b.example.com/playlist.m3u,tuners=2,name=backup",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate playlist source name error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate playlist source name") {
+		t.Fatalf("error = %v, want duplicate playlist source name marker", err)
+	}
+}
+
+func TestLoadRejectsMalformedPlaylistSourceSpec(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{
+		"--playlist-source=url=http://missing-tuners.example.com/playlist.m3u",
+	})
+	if err == nil {
+		t.Fatal("expected malformed playlist-source error for missing tuners")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "tuners") {
+		t.Fatalf("error = %v, want tuners parse/validation marker", err)
+	}
+}
+
+func TestLoadRejectsPlaylistSourceAliasDuplicateKeys(t *testing.T) {
+	clearConfigEnv(t)
+
+	_, err := Load([]string{
+		"--playlist-source=url=http://source-a.example.com/playlist.m3u,playlist_url=http://source-b.example.com/playlist.m3u,tuners=2",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate playlist-source url key error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate key \"playlist_url\"") {
+		t.Fatalf("error = %v, want duplicate canonical playlist_url key marker", err)
+	}
+
+	_, err = Load([]string{
+		"--playlist-source=url=http://source-a.example.com/playlist.m3u,tuners=2,tuner_count=3",
+	})
+	if err == nil {
+		t.Fatal("expected duplicate playlist-source tuners key error")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "duplicate key \"tuner_count\"") {
+		t.Fatalf("error = %v, want duplicate canonical tuner_count key marker", err)
+	}
+}
+
+func TestLoadAcceptsPlaylistSyncSourceConcurrency(t *testing.T) {
+	clearConfigEnv(t)
+
+	cfg, err := Load([]string{"--playlist-sync-source-concurrency=4"})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.PlaylistSyncSourceConcurrency != 4 {
+		t.Fatalf("PlaylistSyncSourceConcurrency = %d, want 4", cfg.PlaylistSyncSourceConcurrency)
+	}
+}
+
+func TestLoadRejectsPlaylistSyncSourceConcurrencyBounds(t *testing.T) {
+	clearConfigEnv(t)
+
+	if _, err := Load([]string{"--playlist-sync-source-concurrency=0"}); err == nil {
+		t.Fatal("expected error for playlist-sync-source-concurrency=0")
+	}
+	if _, err := Load([]string{"--playlist-sync-source-concurrency=99"}); err == nil {
+		t.Fatal("expected error for playlist-sync-source-concurrency above maximum")
 	}
 }
 
@@ -1922,6 +2109,8 @@ func clearConfigEnv(t *testing.T) {
 
 	keys := []string{
 		"PLAYLIST_URL",
+		"PLAYLIST_SOURCES",
+		"PLAYLIST_SOURCES_STARTUP_AUTHORITATIVE",
 		"DB_PATH",
 		"HTTP_ADDR",
 		"HTTP_ADDR_LEGACY",

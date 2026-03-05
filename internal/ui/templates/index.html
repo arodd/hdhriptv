@@ -189,6 +189,18 @@
       font-size: 0.88rem;
     }
 
+    .status.error {
+      border-color: #f3c6cc;
+      background: #fff5f6;
+      color: #b42318;
+    }
+
+    .status.ok {
+      border-color: #b7e3c2;
+      background: #effcf4;
+      color: #0a7c34;
+    }
+
     .pagination {
       margin-top: 8px;
       padding-top: 10px;
@@ -205,6 +217,8 @@
       gap: 8px;
     }
 
+{{template "shared-css-chips"}}
+
     @media (max-width: 960px) {
       .layout {
         grid-template-columns: 1fr;
@@ -218,14 +232,14 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">HDHR IPTV Admin</div>
+    <div class="brand">{{.AppTitle}}</div>
     <nav class="topnav">
       <a href="/ui/catalog" class="active">Catalog</a>
       <a href="/ui/channels">Channels</a>
       <a href="/ui/merge">Merge Suggestions</a>
       <a href="/ui/tuners">Tuners</a>
-      <a href="/ui/dvr">DVR</a>
-      <a href="/ui/automation">Automation</a>
+      {{if .NavShowDVR}}<a href="/ui/dvr">DVR</a>{{end}}
+      {{if .NavShowAutomation}}<a href="/ui/automation">Automation</a>{{end}}
     </nav>
   </header>
 
@@ -281,6 +295,7 @@
       offset: 0,
       total: 0,
       favorites: [],
+      playlistSources: [],
     };
 
     const statusEl = document.getElementById("status");
@@ -296,39 +311,30 @@
     const paginationPrevBtn = document.getElementById("pagination-prev");
     const paginationNextBtn = document.getElementById("pagination-next");
 
-    function showStatus(message, isError = false) {
-      statusEl.hidden = false;
-      statusEl.textContent = message;
-      if (isError) {
-        statusEl.style.background = "#fff5f6";
-        statusEl.style.borderColor = "#f3c6cc";
-        statusEl.style.color = "#b42318";
-      } else {
-        statusEl.style.background = "#eef4ff";
-        statusEl.style.borderColor = "#c7d9ff";
-        statusEl.style.color = "#1d4ed8";
+    {{template "shared-js-show-status"}}
+    {{template "shared-js-api"}}
+
+    async function loadPlaylistSources() {
+      try {
+        const data = await api("/api/admin/playlist-sources");
+        state.playlistSources = data.playlist_sources || [];
+      } catch (err) {
+        console.warn("unable to load playlist sources", err);
+        state.playlistSources = [];
       }
-      window.clearTimeout(showStatus.timer);
-      showStatus.timer = window.setTimeout(() => {
-        statusEl.hidden = true;
-      }, 2500);
     }
 
-    async function api(path, options = {}) {
-      const resp = await fetch(path, {
-        headers: { "Content-Type": "application/json" },
-        ...options,
-      });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || `request failed (${resp.status})`);
+    function itemSourceName(itemKey) {
+      if (!itemKey || !itemKey.startsWith("ps:")) {
+        const primary = state.playlistSources.find((s) => s.source_id === 1);
+        return primary ? primary.name : "";
       }
-
-      if (resp.status === 204) {
-        return null;
-      }
-      return resp.json();
+      const rest = itemKey.slice(3);
+      const colonIdx = rest.indexOf(":");
+      if (colonIdx < 0) return "";
+      const sourceKey = rest.slice(0, colonIdx);
+      const match = state.playlistSources.find((s) => s.source_key === sourceKey);
+      return match ? match.name : "";
     }
 
     function normalizeGroup(raw) {
@@ -390,6 +396,13 @@
 
         const title = document.createElement("div");
         title.textContent = item.name;
+        const srcName = itemSourceName(item.item_key);
+        if (srcName) {
+          const badge = document.createElement("span");
+          badge.className = "source-badge";
+          badge.textContent = srcName;
+          title.append(" ", badge);
+        }
 
         const meta = document.createElement("div");
         meta.className = "channel-meta";
@@ -504,6 +517,7 @@
     }
 
     async function loadAll() {
+      await loadPlaylistSources();
       await Promise.all([loadGroups(), loadFavorites()]);
       await loadItems();
     }

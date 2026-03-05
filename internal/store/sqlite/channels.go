@@ -58,6 +58,8 @@ func (s *Store) CreateChannelFromItem(ctx context.Context, itemKey, guideName, c
 	dynamicGroupNames := channels.NormalizeGroupNames(dynamicRule.GroupName, dynamicRule.GroupNames)
 	dynamicGroupName := channels.GroupNameAlias(dynamicGroupNames)
 	dynamicGroupNamesJSON := marshalGroupNamesJSON(dynamicGroupNames)
+	dynamicSourceIDs := channels.NormalizeSourceIDs(dynamicRule.SourceIDs)
+	dynamicSourceIDsJSON := marshalSourceIDsJSON(dynamicSourceIDs)
 
 	guideName = strings.TrimSpace(guideName)
 	if guideName == "" {
@@ -103,13 +105,14 @@ func (s *Store) CreateChannelFromItem(ctx context.Context, itemKey, guideName, c
 			dynamic_sources_enabled,
 			dynamic_group_name,
 			dynamic_group_names_json,
+			dynamic_source_ids_json,
 			dynamic_search_query,
 			dynamic_search_regex,
 			created_at,
 			updated_at
 		)
-		VALUES (?, ?, ?, ?, ?, 1, NULL, '', ?, ?, ?, ?, ?, ?, ?)
-	`, channels.ChannelClassTraditional, channelKey, guideNumber, guideName, nextOrder, boolToInt(dynamicRule.Enabled), dynamicGroupName, dynamicGroupNamesJSON, dynamicRule.SearchQuery, boolToInt(dynamicRule.SearchRegex), now, now)
+		VALUES (?, ?, ?, ?, ?, 1, NULL, '', ?, ?, ?, ?, ?, ?, ?, ?)
+	`, channels.ChannelClassTraditional, channelKey, guideNumber, guideName, nextOrder, boolToInt(dynamicRule.Enabled), dynamicGroupName, dynamicGroupNamesJSON, dynamicSourceIDsJSON, dynamicRule.SearchQuery, boolToInt(dynamicRule.SearchRegex), now, now)
 	if err != nil {
 		return channels.Channel{}, fmt.Errorf("insert published channel: %w", err)
 	}
@@ -172,6 +175,7 @@ func (s *Store) CreateChannelFromItem(ctx context.Context, itemKey, guideName, c
 			Enabled:     dynamicRule.Enabled,
 			GroupName:   dynamicGroupName,
 			GroupNames:  dynamicGroupNames,
+			SourceIDs:   dynamicSourceIDs,
 			SearchQuery: dynamicRule.SearchQuery,
 			SearchRegex: dynamicRule.SearchRegex,
 		},
@@ -200,6 +204,10 @@ func (s *Store) DeleteChannel(ctx context.Context, channelID int64, startGuideNu
 		return fmt.Errorf("only traditional channels can be deleted")
 	}
 
+	if err := deleteChannelChildRowsTx(ctx, tx, channelID); err != nil {
+		return err
+	}
+
 	result, err := tx.ExecContext(ctx, `DELETE FROM published_channels WHERE channel_id = ?`, channelID)
 	if err != nil {
 		return fmt.Errorf("delete channel: %w", err)
@@ -213,6 +221,9 @@ func (s *Store) DeleteChannel(ctx context.Context, channelID int64, startGuideNu
 	}
 
 	if err := renumberChannelsTx(ctx, tx, startGuideNumber); err != nil {
+		return err
+	}
+	if err := runOrphanChannelChildRowPruneSafetyCheckTx(ctx, tx); err != nil {
 		return err
 	}
 
@@ -237,6 +248,7 @@ func (s *Store) ListChannels(ctx context.Context, enabledOnly bool) ([]channels.
 			COALESCE(pc.dynamic_sources_enabled, 0),
 			COALESCE(pc.dynamic_group_name, ''),
 			COALESCE(pc.dynamic_group_names_json, '[]'),
+			COALESCE(pc.dynamic_source_ids_json, '[]'),
 			COALESCE(pc.dynamic_search_query, ''),
 			COALESCE(pc.dynamic_search_regex, 0),
 			COALESCE(source_summary.source_total, 0),
@@ -276,6 +288,7 @@ func (s *Store) ListChannels(ctx context.Context, enabledOnly bool) ([]channels.
 			dynamicEnabledInt     int
 			dynamicSearchRegexInt int
 			dynamicGroupNamesJSON string
+			dynamicSourceIDsJSON  string
 		)
 		if err := rows.Scan(
 			&channel.ChannelID,
@@ -290,6 +303,7 @@ func (s *Store) ListChannels(ctx context.Context, enabledOnly bool) ([]channels.
 			&dynamicEnabledInt,
 			&channel.DynamicRule.GroupName,
 			&dynamicGroupNamesJSON,
+			&dynamicSourceIDsJSON,
 			&channel.DynamicRule.SearchQuery,
 			&dynamicSearchRegexInt,
 			&channel.SourceTotal,
@@ -303,6 +317,7 @@ func (s *Store) ListChannels(ctx context.Context, enabledOnly bool) ([]channels.
 		channel.DynamicRule.Enabled = dynamicEnabledInt != 0
 		channel.DynamicRule.SearchRegex = dynamicSearchRegexInt != 0
 		channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames = normalizeStoredGroupNames(channel.DynamicRule.GroupName, dynamicGroupNamesJSON)
+		channel.DynamicRule.SourceIDs = normalizeStoredSourceIDs(dynamicSourceIDsJSON)
 		out = append(out, channel)
 	}
 	if err := rows.Err(); err != nil {
@@ -340,6 +355,7 @@ func (s *Store) ListChannelsPaged(ctx context.Context, enabledOnly bool, limit, 
 			COALESCE(pc.dynamic_sources_enabled, 0),
 			COALESCE(pc.dynamic_group_name, ''),
 			COALESCE(pc.dynamic_group_names_json, '[]'),
+			COALESCE(pc.dynamic_source_ids_json, '[]'),
 			COALESCE(pc.dynamic_search_query, ''),
 			COALESCE(pc.dynamic_search_regex, 0),
 			COALESCE(source_summary.source_total, 0),
@@ -379,6 +395,7 @@ func (s *Store) ListChannelsPaged(ctx context.Context, enabledOnly bool, limit, 
 		dynamicEnabledInt     int
 		dynamicSearchRegexInt int
 		dynamicGroupNamesJSON string
+		dynamicSourceIDsJSON  string
 	)
 	for rows.Next() {
 		if rowCount >= len(out) {
@@ -398,6 +415,7 @@ func (s *Store) ListChannelsPaged(ctx context.Context, enabledOnly bool, limit, 
 			&dynamicEnabledInt,
 			&channel.DynamicRule.GroupName,
 			&dynamicGroupNamesJSON,
+			&dynamicSourceIDsJSON,
 			&channel.DynamicRule.SearchQuery,
 			&dynamicSearchRegexInt,
 			&channel.SourceTotal,
@@ -411,6 +429,7 @@ func (s *Store) ListChannelsPaged(ctx context.Context, enabledOnly bool, limit, 
 		channel.DynamicRule.Enabled = dynamicEnabledInt != 0
 		channel.DynamicRule.SearchRegex = dynamicSearchRegexInt != 0
 		channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames = normalizeStoredGroupNames(channel.DynamicRule.GroupName, dynamicGroupNamesJSON)
+		channel.DynamicRule.SourceIDs = normalizeStoredSourceIDs(dynamicSourceIDsJSON)
 		rowCount++
 	}
 	if err := rows.Err(); err != nil {
@@ -435,6 +454,7 @@ func (s *Store) ListLineupChannels(ctx context.Context) ([]channels.Channel, err
 			COALESCE(dynamic_sources_enabled, 0),
 			COALESCE(dynamic_group_name, ''),
 			COALESCE(dynamic_group_names_json, '[]'),
+			COALESCE(dynamic_source_ids_json, '[]'),
 			COALESCE(dynamic_search_query, ''),
 			COALESCE(dynamic_search_regex, 0)
 		FROM published_channels
@@ -454,6 +474,7 @@ func (s *Store) ListLineupChannels(ctx context.Context) ([]channels.Channel, err
 			dynamicEnabledInt     int
 			dynamicSearchRegexInt int
 			dynamicGroupNamesJSON string
+			dynamicSourceIDsJSON  string
 		)
 		if err := rows.Scan(
 			&channel.ChannelID,
@@ -468,6 +489,7 @@ func (s *Store) ListLineupChannels(ctx context.Context) ([]channels.Channel, err
 			&dynamicEnabledInt,
 			&channel.DynamicRule.GroupName,
 			&dynamicGroupNamesJSON,
+			&dynamicSourceIDsJSON,
 			&channel.DynamicRule.SearchQuery,
 			&dynamicSearchRegexInt,
 		); err != nil {
@@ -477,6 +499,7 @@ func (s *Store) ListLineupChannels(ctx context.Context) ([]channels.Channel, err
 		channel.DynamicRule.Enabled = dynamicEnabledInt != 0
 		channel.DynamicRule.SearchRegex = dynamicSearchRegexInt != 0
 		channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames = normalizeStoredGroupNames(channel.DynamicRule.GroupName, dynamicGroupNamesJSON)
+		channel.DynamicRule.SourceIDs = normalizeStoredSourceIDs(dynamicSourceIDsJSON)
 		out = append(out, channel)
 	}
 	if err := rows.Err(); err != nil {
@@ -556,6 +579,7 @@ func (s *Store) UpdateChannel(ctx context.Context, channelID int64, guideName *s
 	}
 	channel.DynamicRule.GroupNames = channels.NormalizeGroupNames(channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames)
 	channel.DynamicRule.GroupName = channels.GroupNameAlias(channel.DynamicRule.GroupNames)
+	channel.DynamicRule.SourceIDs = channels.NormalizeSourceIDs(channel.DynamicRule.SourceIDs)
 	channel.DynamicRule.SearchQuery = strings.TrimSpace(channel.DynamicRule.SearchQuery)
 	if channel.DynamicRule.SearchRegex {
 		if err := validateCatalogSearchRegexQuery(channel.DynamicRule.SearchQuery); err != nil {
@@ -563,18 +587,20 @@ func (s *Store) UpdateChannel(ctx context.Context, channelID int64, guideName *s
 		}
 	}
 	dynamicGroupNamesJSON := marshalGroupNamesJSON(channel.DynamicRule.GroupNames)
+	dynamicSourceIDsJSON := marshalSourceIDsJSON(channel.DynamicRule.SourceIDs)
 
 	if guideName != nil || enabled != nil || dynamicRule != nil {
 		if _, err := tx.ExecContext(
 			ctx,
 			`UPDATE published_channels
-			 SET guide_name = ?, enabled = ?, dynamic_sources_enabled = ?, dynamic_group_name = ?, dynamic_group_names_json = ?, dynamic_search_query = ?, dynamic_search_regex = ?, updated_at = ?
+			 SET guide_name = ?, enabled = ?, dynamic_sources_enabled = ?, dynamic_group_name = ?, dynamic_group_names_json = ?, dynamic_source_ids_json = ?, dynamic_search_query = ?, dynamic_search_regex = ?, updated_at = ?
 			 WHERE channel_id = ?`,
 			channel.GuideName,
 			boolToInt(channel.Enabled),
 			boolToInt(channel.DynamicRule.Enabled),
 			channel.DynamicRule.GroupName,
 			dynamicGroupNamesJSON,
+			dynamicSourceIDsJSON,
 			channel.DynamicRule.SearchQuery,
 			boolToInt(channel.DynamicRule.SearchRegex),
 			time.Now().Unix(),
@@ -597,6 +623,7 @@ func (s *Store) GetChannelByGuideNumber(ctx context.Context, guideNumber string)
 		dynamicEnabledInt     int
 		dynamicSearchRegexInt int
 		dynamicGroupNamesJSON string
+		dynamicSourceIDsJSON  string
 	)
 	err := s.db.QueryRowContext(
 		ctx,
@@ -613,6 +640,7 @@ func (s *Store) GetChannelByGuideNumber(ctx context.Context, guideNumber string)
 			COALESCE(dynamic_sources_enabled, 0),
 			COALESCE(dynamic_group_name, ''),
 			COALESCE(dynamic_group_names_json, '[]'),
+			COALESCE(dynamic_source_ids_json, '[]'),
 			COALESCE(dynamic_search_query, ''),
 			COALESCE(dynamic_search_regex, 0),
 			COALESCE((
@@ -654,6 +682,7 @@ func (s *Store) GetChannelByGuideNumber(ctx context.Context, guideNumber string)
 		&dynamicEnabledInt,
 		&channel.DynamicRule.GroupName,
 		&dynamicGroupNamesJSON,
+		&dynamicSourceIDsJSON,
 		&channel.DynamicRule.SearchQuery,
 		&dynamicSearchRegexInt,
 		&channel.SourceTotal,
@@ -671,6 +700,7 @@ func (s *Store) GetChannelByGuideNumber(ctx context.Context, guideNumber string)
 	channel.DynamicRule.Enabled = dynamicEnabledInt != 0
 	channel.DynamicRule.SearchRegex = dynamicSearchRegexInt != 0
 	channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames = normalizeStoredGroupNames(channel.DynamicRule.GroupName, dynamicGroupNamesJSON)
+	channel.DynamicRule.SourceIDs = normalizeStoredSourceIDs(dynamicSourceIDsJSON)
 	return channel, nil
 }
 
@@ -697,9 +727,13 @@ func (s *Store) GetSource(ctx context.Context, channelID, sourceID int64, enable
 			COALESCE(cs.profile_video_codec, ''),
 			COALESCE(cs.profile_audio_codec, ''),
 			COALESCE(cs.profile_bitrate_bps, 0),
+			COALESCE(p.playlist_source_id, 0),
+			COALESCE(ps.name, ''),
+			COALESCE(ps.tuner_count, 0),
 			COALESCE(p.tvg_name, '')
 		FROM channel_sources cs
 		LEFT JOIN playlist_items p ON p.item_key = cs.item_key
+		LEFT JOIN playlist_sources ps ON ps.source_id = p.playlist_source_id
 		WHERE cs.channel_id = ? AND cs.source_id = ?
 	`
 	if enabledOnly {
@@ -707,9 +741,10 @@ func (s *Store) GetSource(ctx context.Context, channelID, sourceID int64, enable
 	}
 
 	var (
-		src        channels.Source
-		enabledInt int
-		tvgName    string
+		src                channels.Source
+		enabledInt         int
+		tvgName            string
+		playlistSourceName string
 	)
 	err := s.db.QueryRowContext(ctx, query, channelID, sourceID).Scan(
 		&src.SourceID,
@@ -732,6 +767,9 @@ func (s *Store) GetSource(ctx context.Context, channelID, sourceID int64, enable
 		&src.ProfileVideoCodec,
 		&src.ProfileAudioCodec,
 		&src.ProfileBitrateBPS,
+		&src.PlaylistSourceID,
+		&playlistSourceName,
+		&src.PlaylistSourceTuners,
 		&tvgName,
 	)
 	if err == sql.ErrNoRows {
@@ -750,6 +788,7 @@ func (s *Store) GetSource(ctx context.Context, channelID, sourceID int64, enable
 
 	src.Enabled = enabledInt != 0
 	src.TVGName = strings.TrimSpace(tvgName)
+	src.PlaylistSourceName = strings.TrimSpace(playlistSourceName)
 	return src, nil
 }
 
@@ -776,9 +815,13 @@ func (s *Store) ListSources(ctx context.Context, channelID int64, enabledOnly bo
 			COALESCE(cs.profile_video_codec, ''),
 			COALESCE(cs.profile_audio_codec, ''),
 			COALESCE(cs.profile_bitrate_bps, 0),
+			COALESCE(p.playlist_source_id, 0),
+			COALESCE(ps.name, ''),
+			COALESCE(ps.tuner_count, 0),
 			COALESCE(p.tvg_name, '')
 		FROM channel_sources cs
 		LEFT JOIN playlist_items p ON p.item_key = cs.item_key
+		LEFT JOIN playlist_sources ps ON ps.source_id = p.playlist_source_id
 		WHERE cs.channel_id = ?
 	`
 	if enabledOnly {
@@ -794,8 +837,9 @@ func (s *Store) ListSources(ctx context.Context, channelID int64, enabledOnly bo
 
 	out := make([]channels.Source, 0, 16)
 	var (
-		enabledInt int
-		tvgName    string
+		enabledInt         int
+		tvgName            string
+		playlistSourceName string
 	)
 	for rows.Next() {
 		out = append(out, channels.Source{})
@@ -821,12 +865,16 @@ func (s *Store) ListSources(ctx context.Context, channelID int64, enabledOnly bo
 			&src.ProfileVideoCodec,
 			&src.ProfileAudioCodec,
 			&src.ProfileBitrateBPS,
+			&src.PlaylistSourceID,
+			&playlistSourceName,
+			&src.PlaylistSourceTuners,
 			&tvgName,
 		); err != nil {
 			return nil, fmt.Errorf("scan channel source: %w", err)
 		}
 		src.Enabled = enabledInt != 0
 		src.TVGName = strings.TrimSpace(tvgName)
+		src.PlaylistSourceName = strings.TrimSpace(playlistSourceName)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate channel sources: %w", err)
@@ -881,8 +929,9 @@ func (s *Store) ListSourcesByChannelIDs(ctx context.Context, channelIDs []int64,
 		}
 
 		var (
-			enabledInt int
-			tvgName    string
+			enabledInt         int
+			tvgName            string
+			playlistSourceName string
 		)
 		for rows.Next() {
 			var src channels.Source
@@ -907,6 +956,9 @@ func (s *Store) ListSourcesByChannelIDs(ctx context.Context, channelIDs []int64,
 				&src.ProfileVideoCodec,
 				&src.ProfileAudioCodec,
 				&src.ProfileBitrateBPS,
+				&src.PlaylistSourceID,
+				&playlistSourceName,
+				&src.PlaylistSourceTuners,
 				&tvgName,
 			); err != nil {
 				rows.Close()
@@ -914,6 +966,7 @@ func (s *Store) ListSourcesByChannelIDs(ctx context.Context, channelIDs []int64,
 			}
 			src.Enabled = enabledInt != 0
 			src.TVGName = strings.TrimSpace(tvgName)
+			src.PlaylistSourceName = strings.TrimSpace(playlistSourceName)
 			out[src.ChannelID] = append(out[src.ChannelID], src)
 		}
 		if err := rows.Err(); err != nil {
@@ -984,9 +1037,13 @@ func (s *Store) ListSourcesPaged(ctx context.Context, channelID int64, enabledOn
 			COALESCE(cs.profile_video_codec, ''),
 			COALESCE(cs.profile_audio_codec, ''),
 			COALESCE(cs.profile_bitrate_bps, 0),
+			COALESCE(p.playlist_source_id, 0),
+			COALESCE(ps.name, ''),
+			COALESCE(ps.tuner_count, 0),
 			COALESCE(p.tvg_name, '')
 		FROM channel_sources cs
 		LEFT JOIN playlist_items p ON p.item_key = cs.item_key
+		LEFT JOIN playlist_sources ps ON ps.source_id = p.playlist_source_id
 		WHERE cs.channel_id = ?
 	`
 	args := []any{channelID}
@@ -1005,8 +1062,9 @@ func (s *Store) ListSourcesPaged(ctx context.Context, channelID int64, enabledOn
 	out := make([]channels.Source, expectedPageCapacity(total, limit, offset))
 	rowCount := 0
 	var (
-		enabledInt int
-		tvgName    string
+		enabledInt         int
+		tvgName            string
+		playlistSourceName string
 	)
 	for rows.Next() {
 		if rowCount >= len(out) {
@@ -1034,12 +1092,16 @@ func (s *Store) ListSourcesPaged(ctx context.Context, channelID int64, enabledOn
 			&src.ProfileVideoCodec,
 			&src.ProfileAudioCodec,
 			&src.ProfileBitrateBPS,
+			&src.PlaylistSourceID,
+			&playlistSourceName,
+			&src.PlaylistSourceTuners,
 			&tvgName,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan channel source page row: %w", err)
 		}
 		src.Enabled = enabledInt != 0
 		src.TVGName = strings.TrimSpace(tvgName)
+		src.PlaylistSourceName = strings.TrimSpace(playlistSourceName)
 		rowCount++
 	}
 	if err := rows.Err(); err != nil {
@@ -1139,6 +1201,14 @@ func (s *Store) DeleteSource(ctx context.Context, channelID, sourceID int64) err
 	}
 	defer tx.Rollback()
 
+	exists, err := channelExistsTx(ctx, tx, channelID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return channels.ErrChannelNotFound
+	}
+
 	result, err := tx.ExecContext(ctx, `DELETE FROM channel_sources WHERE channel_id = ? AND source_id = ?`, channelID, sourceID)
 	if err != nil {
 		return fmt.Errorf("delete channel source: %w", err)
@@ -1183,6 +1253,14 @@ func (s *Store) ReorderSources(ctx context.Context, channelID int64, sourceIDs [
 	}
 	defer tx.Rollback()
 
+	exists, err := channelExistsTx(ctx, tx, channelID)
+	if err != nil {
+		return err
+	}
+	if !exists {
+		return channels.ErrChannelNotFound
+	}
+
 	currentIDs, err := listSourceIDsTx(ctx, tx, channelID)
 	if err != nil {
 		return err
@@ -1212,6 +1290,14 @@ func (s *Store) UpdateSource(ctx context.Context, channelID, sourceID int64, ena
 		return channels.Source{}, fmt.Errorf("begin tx: %w", err)
 	}
 	defer tx.Rollback()
+
+	exists, err := channelExistsTx(ctx, tx, channelID)
+	if err != nil {
+		return channels.Source{}, err
+	}
+	if !exists {
+		return channels.Source{}, channels.ErrChannelNotFound
+	}
 
 	source, err := getSourceByIDTx(ctx, tx, channelID, sourceID)
 	if err != nil {
@@ -1248,13 +1334,14 @@ func (s *Store) UpdateSource(ctx context.Context, channelID, sourceID int64, ena
 func (s *Store) SyncDynamicSourcesByCatalogFilter(
 	ctx context.Context,
 	channelID int64,
+	sourceIDs []int64,
 	groupNames []string,
 	searchQuery string,
 	searchRegex bool,
 	pageSize int,
 	maxMatches int,
 ) (channels.DynamicSourceSyncResult, int, error) {
-	spec, err := buildCatalogFilterQuerySpec(groupNames, searchQuery, searchRegex)
+	spec, err := buildCatalogFilterQuerySpecWithSourceIDs(sourceIDs, groupNames, searchQuery, searchRegex)
 	if err != nil {
 		return channels.DynamicSourceSyncResult{}, 0, err
 	}
@@ -1552,6 +1639,9 @@ func (s *Store) SyncDynamicSources(ctx context.Context, channelID int64, matched
 		matchedSet[itemKey] = struct{}{}
 		orderedMatches = append(orderedMatches, itemKey)
 	}
+	if err := validatePlaylistItemKeysExistTx(ctx, tx, orderedMatches); err != nil {
+		return channels.DynamicSourceSyncResult{}, err
+	}
 
 	type sourceRow struct {
 		SourceID        int64
@@ -1675,6 +1765,58 @@ func (s *Store) SyncDynamicSources(ctx context.Context, channelID int64, matched
 		return channels.DynamicSourceSyncResult{}, fmt.Errorf("commit sync dynamic sources: %w", err)
 	}
 	return result, nil
+}
+
+func validatePlaylistItemKeysExistTx(ctx context.Context, tx *sql.Tx, itemKeys []string) error {
+	if len(itemKeys) == 0 {
+		return nil
+	}
+	if tx == nil {
+		return fmt.Errorf("playlist item validation transaction is required")
+	}
+
+	found := make(map[string]struct{}, len(itemKeys))
+	for start := 0; start < len(itemKeys); start += maxChannelIDsPerSourceBatch {
+		end := start + maxChannelIDsPerSourceBatch
+		if end > len(itemKeys) {
+			end = len(itemKeys)
+		}
+		batch := itemKeys[start:end]
+		query := `SELECT item_key FROM playlist_items WHERE item_key IN (` + inPlaceholders(len(batch)) + `)`
+		args := make([]any, 0, len(batch))
+		for _, key := range batch {
+			args = append(args, key)
+		}
+
+		rows, err := tx.QueryContext(ctx, query, args...)
+		if err != nil {
+			return fmt.Errorf("query playlist item keys for dynamic source sync: %w", err)
+		}
+
+		for rows.Next() {
+			var itemKey string
+			if err := rows.Scan(&itemKey); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan playlist item key for dynamic source sync: %w", err)
+			}
+			found[strings.TrimSpace(itemKey)] = struct{}{}
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			return fmt.Errorf("iterate playlist item keys for dynamic source sync: %w", err)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close playlist item key validation rows: %w", err)
+		}
+	}
+
+	for _, itemKey := range itemKeys {
+		if _, ok := found[itemKey]; ok {
+			continue
+		}
+		return fmt.Errorf("%w: item_key %q", channels.ErrItemNotFound, itemKey)
+	}
+	return nil
 }
 
 func (s *Store) MarkSourceFailure(ctx context.Context, sourceID int64, reason string, failedAt time.Time) error {
@@ -2165,6 +2307,8 @@ func (s *Store) ListDuplicateSuggestions(ctx context.Context, minItems int, sear
 			       COALESCE(tvg_id, ''),
 			       COALESCE(tvg_logo, ''),
 			       stream_url,
+			       COALESCE(playlist_source_id, 1),
+			       COALESCE((SELECT ps.name FROM playlist_sources ps WHERE ps.source_id = playlist_items.playlist_source_id), ''),
 			       active
 			FROM playlist_items
 			WHERE active = 1
@@ -2192,6 +2336,8 @@ func (s *Store) ListDuplicateSuggestions(ctx context.Context, minItems int, sear
 			&item.TVGID,
 			&item.TVGLogo,
 			&item.StreamURL,
+			&item.PlaylistSourceID,
+			&item.PlaylistSourceName,
 			&activeInt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan duplicate suggestion item row: %w", err)
@@ -2275,9 +2421,13 @@ func listSourcesByChannelIDsQuery(channelIDs []int64, enabledOnly bool) (string,
 			COALESCE(cs.profile_video_codec, ''),
 			COALESCE(cs.profile_audio_codec, ''),
 			COALESCE(cs.profile_bitrate_bps, 0),
+			COALESCE(p.playlist_source_id, 0),
+			COALESCE(ps.name, ''),
+			COALESCE(ps.tuner_count, 0),
 			COALESCE(p.tvg_name, '')
 		FROM channel_sources cs
 		LEFT JOIN playlist_items p ON p.item_key = cs.item_key
+		LEFT JOIN playlist_sources ps ON ps.source_id = p.playlist_source_id
 		WHERE cs.channel_id IN (` + inPlaceholders(len(channelIDs)) + `)
 	`
 	if enabledOnly {
@@ -2345,6 +2495,18 @@ func (s *Store) channelExists(ctx context.Context, channelID int64) (bool, error
 	return found == 1, nil
 }
 
+func channelExistsTx(ctx context.Context, tx *sql.Tx, channelID int64) (bool, error) {
+	var found int
+	err := tx.QueryRowContext(ctx, `SELECT 1 FROM published_channels WHERE channel_id = ?`, channelID).Scan(&found)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("check channel exists: %w", err)
+	}
+	return found == 1, nil
+}
+
 func getChannelByIDTx(ctx context.Context, tx *sql.Tx, channelID int64) (channels.Channel, error) {
 	var (
 		channel               channels.Channel
@@ -2352,6 +2514,7 @@ func getChannelByIDTx(ctx context.Context, tx *sql.Tx, channelID int64) (channel
 		dynamicEnabledInt     int
 		dynamicSearchRegexInt int
 		dynamicGroupNamesJSON string
+		dynamicSourceIDsJSON  string
 	)
 	err := tx.QueryRowContext(
 		ctx,
@@ -2368,6 +2531,7 @@ func getChannelByIDTx(ctx context.Context, tx *sql.Tx, channelID int64) (channel
 			COALESCE(dynamic_sources_enabled, 0),
 			COALESCE(dynamic_group_name, ''),
 			COALESCE(dynamic_group_names_json, '[]'),
+			COALESCE(dynamic_source_ids_json, '[]'),
 			COALESCE(dynamic_search_query, ''),
 			COALESCE(dynamic_search_regex, 0),
 			COALESCE((
@@ -2409,6 +2573,7 @@ func getChannelByIDTx(ctx context.Context, tx *sql.Tx, channelID int64) (channel
 		&dynamicEnabledInt,
 		&channel.DynamicRule.GroupName,
 		&dynamicGroupNamesJSON,
+		&dynamicSourceIDsJSON,
 		&channel.DynamicRule.SearchQuery,
 		&dynamicSearchRegexInt,
 		&channel.SourceTotal,
@@ -2423,14 +2588,16 @@ func getChannelByIDTx(ctx context.Context, tx *sql.Tx, channelID int64) (channel
 	channel.DynamicRule.Enabled = dynamicEnabledInt != 0
 	channel.DynamicRule.SearchRegex = dynamicSearchRegexInt != 0
 	channel.DynamicRule.GroupName, channel.DynamicRule.GroupNames = normalizeStoredGroupNames(channel.DynamicRule.GroupName, dynamicGroupNamesJSON)
+	channel.DynamicRule.SourceIDs = normalizeStoredSourceIDs(dynamicSourceIDsJSON)
 	return channel, nil
 }
 
 func getChannelSourceByItemKeyTx(ctx context.Context, tx *sql.Tx, channelID int64, itemKey string) (channels.Source, error) {
 	var (
-		src        channels.Source
-		enabledInt int
-		tvgName    string
+		src                channels.Source
+		enabledInt         int
+		tvgName            string
+		playlistSourceName string
 	)
 	err := tx.QueryRowContext(
 		ctx,
@@ -2455,9 +2622,13 @@ func getChannelSourceByItemKeyTx(ctx context.Context, tx *sql.Tx, channelID int6
 			COALESCE(cs.profile_video_codec, ''),
 			COALESCE(cs.profile_audio_codec, ''),
 			COALESCE(cs.profile_bitrate_bps, 0),
+			COALESCE(p.playlist_source_id, 0),
+			COALESCE(ps.name, ''),
+			COALESCE(ps.tuner_count, 0),
 			COALESCE(p.tvg_name, '')
 		 FROM channel_sources cs
 		 LEFT JOIN playlist_items p ON p.item_key = cs.item_key
+		 LEFT JOIN playlist_sources ps ON ps.source_id = p.playlist_source_id
 		 WHERE cs.channel_id = ? AND cs.item_key = ?`,
 		channelID,
 		itemKey,
@@ -2482,6 +2653,9 @@ func getChannelSourceByItemKeyTx(ctx context.Context, tx *sql.Tx, channelID int6
 		&src.ProfileVideoCodec,
 		&src.ProfileAudioCodec,
 		&src.ProfileBitrateBPS,
+		&src.PlaylistSourceID,
+		&playlistSourceName,
+		&src.PlaylistSourceTuners,
 		&tvgName,
 	)
 	if err != nil {
@@ -2489,14 +2663,16 @@ func getChannelSourceByItemKeyTx(ctx context.Context, tx *sql.Tx, channelID int6
 	}
 	src.Enabled = enabledInt != 0
 	src.TVGName = strings.TrimSpace(tvgName)
+	src.PlaylistSourceName = strings.TrimSpace(playlistSourceName)
 	return src, nil
 }
 
 func getSourceByIDTx(ctx context.Context, tx *sql.Tx, channelID, sourceID int64) (channels.Source, error) {
 	var (
-		src        channels.Source
-		enabledInt int
-		tvgName    string
+		src                channels.Source
+		enabledInt         int
+		tvgName            string
+		playlistSourceName string
 	)
 	err := tx.QueryRowContext(
 		ctx,
@@ -2521,9 +2697,13 @@ func getSourceByIDTx(ctx context.Context, tx *sql.Tx, channelID, sourceID int64)
 			COALESCE(cs.profile_video_codec, ''),
 			COALESCE(cs.profile_audio_codec, ''),
 			COALESCE(cs.profile_bitrate_bps, 0),
+			COALESCE(p.playlist_source_id, 0),
+			COALESCE(ps.name, ''),
+			COALESCE(ps.tuner_count, 0),
 			COALESCE(p.tvg_name, '')
 		FROM channel_sources cs
 		LEFT JOIN playlist_items p ON p.item_key = cs.item_key
+		LEFT JOIN playlist_sources ps ON ps.source_id = p.playlist_source_id
 		WHERE cs.channel_id = ? AND cs.source_id = ?`,
 		channelID,
 		sourceID,
@@ -2548,6 +2728,9 @@ func getSourceByIDTx(ctx context.Context, tx *sql.Tx, channelID, sourceID int64)
 		&src.ProfileVideoCodec,
 		&src.ProfileAudioCodec,
 		&src.ProfileBitrateBPS,
+		&src.PlaylistSourceID,
+		&playlistSourceName,
+		&src.PlaylistSourceTuners,
 		&tvgName,
 	)
 	if err != nil {
@@ -2555,6 +2738,7 @@ func getSourceByIDTx(ctx context.Context, tx *sql.Tx, channelID, sourceID int64)
 	}
 	src.Enabled = enabledInt != 0
 	src.TVGName = strings.TrimSpace(tvgName)
+	src.PlaylistSourceName = strings.TrimSpace(playlistSourceName)
 	return src, nil
 }
 

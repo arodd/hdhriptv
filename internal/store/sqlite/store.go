@@ -114,6 +114,7 @@ func effectiveCatalogSearchLimits(limits CatalogSearchLimits) CatalogSearchLimit
 const upsertItemSQL = `
 INSERT INTO playlist_items (
   item_key,
+  playlist_source_id,
   channel_key,
   name,
   group_name,
@@ -126,8 +127,9 @@ INSERT INTO playlist_items (
   last_seen_at,
   active
 )
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1)
 ON CONFLICT(item_key) DO UPDATE SET
+  playlist_source_id=excluded.playlist_source_id,
   channel_key=excluded.channel_key,
   name=excluded.name,
   group_name=excluded.group_name,
@@ -236,7 +238,11 @@ func (s *Store) Close() error {
 }
 
 func (s *Store) UpsertPlaylistItems(ctx context.Context, items []playlist.Item) error {
-	_, err := s.upsertPlaylistItemsStream(ctx, len(items), func(yield func(playlist.Item) error) error {
+	return s.UpsertPlaylistItemsForSource(ctx, primaryPlaylistSourceID, items)
+}
+
+func (s *Store) UpsertPlaylistItemsForSource(ctx context.Context, sourceID int64, items []playlist.Item) error {
+	_, err := s.upsertPlaylistItemsStream(ctx, sourceID, len(items), func(yield func(playlist.Item) error) error {
 		for _, item := range items {
 			if err := yield(item); err != nil {
 				return err
@@ -249,12 +255,19 @@ func (s *Store) UpsertPlaylistItems(ctx context.Context, items []playlist.Item) 
 
 // UpsertPlaylistItemsStream upserts playlist items from an incremental stream in one transaction.
 func (s *Store) UpsertPlaylistItemsStream(ctx context.Context, stream playlist.ItemStream) (int, error) {
-	return s.upsertPlaylistItemsStream(ctx, 0, stream)
+	return s.UpsertPlaylistItemsStreamForSource(ctx, primaryPlaylistSourceID, stream)
 }
 
-func (s *Store) upsertPlaylistItemsStream(ctx context.Context, itemTotal int, stream playlist.ItemStream) (int, error) {
+func (s *Store) UpsertPlaylistItemsStreamForSource(ctx context.Context, sourceID int64, stream playlist.ItemStream) (int, error) {
+	return s.upsertPlaylistItemsStream(ctx, sourceID, 0, stream)
+}
+
+func (s *Store) upsertPlaylistItemsStream(ctx context.Context, sourceID int64, itemTotal int, stream playlist.ItemStream) (int, error) {
 	if stream == nil {
 		return 0, fmt.Errorf("playlist item stream is required")
+	}
+	if sourceID <= 0 {
+		return 0, fmt.Errorf("playlist_source_id must be greater than zero")
 	}
 
 	beginTrace := s.beginSQLiteIOERRTrace("playlist_sync_write", "begin_tx")
@@ -272,6 +285,10 @@ func (s *Store) upsertPlaylistItemsStream(ctx context.Context, itemTotal int, st
 		)
 	}
 	defer tx.Rollback()
+
+	if err := ensurePlaylistSourceExistsTx(ctx, tx, sourceID); err != nil {
+		return 0, err
+	}
 
 	prepareTrace := s.beginSQLiteIOERRTrace("playlist_sync_write", "prepare_upsert")
 	stmt, err := tx.PrepareContext(ctx, upsertItemSQL)
@@ -296,6 +313,7 @@ func (s *Store) upsertPlaylistItemsStream(ctx context.Context, itemTotal int, st
 		return s.execUpsertPlaylistItem(
 			ctx,
 			stmt,
+			sourceID,
 			refreshMark,
 			item,
 			itemCount,
@@ -306,7 +324,7 @@ func (s *Store) upsertPlaylistItemsStream(ctx context.Context, itemTotal int, st
 	}
 
 	markInactiveTrace := s.beginSQLiteIOERRTrace("playlist_sync_write", "mark_inactive")
-	if _, err := tx.ExecContext(ctx, `UPDATE playlist_items SET active = 0 WHERE last_seen_at <> ? AND active <> 0`, refreshMark); err != nil {
+	if _, err := tx.ExecContext(ctx, `UPDATE playlist_items SET active = 0 WHERE playlist_source_id = ? AND last_seen_at <> ? AND active <> 0`, sourceID, refreshMark); err != nil {
 		s.endSQLiteIOERRTrace(markInactiveTrace, err)
 		return 0, fmt.Errorf(
 			"playlist write failed at mark_inactive: %w%s",
@@ -340,6 +358,7 @@ func (s *Store) upsertPlaylistItemsStream(ctx context.Context, itemTotal int, st
 func (s *Store) execUpsertPlaylistItem(
 	ctx context.Context,
 	stmt *sql.Stmt,
+	sourceID int64,
 	refreshMark int64,
 	item playlist.Item,
 	itemIndex int,
@@ -357,6 +376,7 @@ func (s *Store) execUpsertPlaylistItem(
 	if _, err := stmt.ExecContext(
 		ctx,
 		strings.TrimSpace(item.ItemKey),
+		sourceID,
 		normalizeChannelKey(item.ChannelKey),
 		strings.TrimSpace(item.Name),
 		strings.TrimSpace(item.Group),
@@ -456,6 +476,94 @@ func (s *Store) ListGroupsPaged(ctx context.Context, limit, offset int, includeC
 	return groups, total, nil
 }
 
+// ListGroupsPagedBySourceIDs returns paged active group names, optionally scoped
+// to one or more playlist source IDs.
+func (s *Store) ListGroupsPagedBySourceIDs(ctx context.Context, sourceIDs []int64, limit, offset int, includeCounts bool) ([]playlist.Group, int, error) {
+	if limit < 0 {
+		return nil, 0, fmt.Errorf("limit must be zero or greater")
+	}
+	if offset < 0 {
+		return nil, 0, fmt.Errorf("offset must be zero or greater")
+	}
+
+	normalizedSourceIDs, err := normalizePlaylistSourceIDs(sourceIDs)
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(normalizedSourceIDs) == 0 {
+		return s.ListGroupsPaged(ctx, limit, offset, includeCounts)
+	}
+
+	sourcePlaceholders := inPlaceholders(len(normalizedSourceIDs))
+	sourceArgs := make([]any, 0, len(normalizedSourceIDs))
+	for _, sourceID := range normalizedSourceIDs {
+		sourceArgs = append(sourceArgs, sourceID)
+	}
+
+	countQuery := `
+		SELECT COUNT(*)
+		FROM (
+			SELECT group_name
+			FROM playlist_items
+			WHERE active = 1
+			  AND playlist_source_id IN (` + sourcePlaceholders + `)
+			GROUP BY group_name
+		)
+	`
+	var total int
+	if err := s.db.QueryRowContext(ctx, countQuery, sourceArgs...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("count groups by source ids: %w", err)
+	}
+
+	baseQuery := `
+		SELECT group_name
+		FROM playlist_items
+		WHERE active = 1
+		  AND playlist_source_id IN (` + sourcePlaceholders + `)
+		GROUP BY group_name
+	`
+	if includeCounts {
+		baseQuery = `
+			SELECT group_name, COUNT(*)
+			FROM playlist_items
+			WHERE active = 1
+			  AND playlist_source_id IN (` + sourcePlaceholders + `)
+			GROUP BY group_name
+		`
+	}
+	baseQuery += `
+		ORDER BY group_name ASC
+	`
+	args := append([]any{}, sourceArgs...)
+	baseQuery, args = applyLimitOffset(baseQuery, args, limit, offset)
+
+	rows, err := s.db.QueryContext(ctx, baseQuery, args...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("query groups by source ids: %w", err)
+	}
+	defer rows.Close()
+
+	groups := make([]playlist.Group, 0, expectedPageCapacity(total, limit, offset))
+	for rows.Next() {
+		var group playlist.Group
+		if includeCounts {
+			if err := rows.Scan(&group.Name, &group.Count); err != nil {
+				return nil, 0, fmt.Errorf("scan group with count by source ids: %w", err)
+			}
+		} else {
+			if err := rows.Scan(&group.Name); err != nil {
+				return nil, 0, fmt.Errorf("scan group name by source ids: %w", err)
+			}
+		}
+		groups = append(groups, group)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("iterate groups by source ids: %w", err)
+	}
+
+	return groups, total, nil
+}
+
 func (s *Store) ListItems(ctx context.Context, q playlist.Query) ([]playlist.Item, int, error) {
 	q = normalizeCatalogQuery(q)
 
@@ -528,7 +636,15 @@ func (s *Store) ListCatalogItems(ctx context.Context, q playlist.Query) ([]playl
 	}
 
 	listSQL := `
-		SELECT item_key, channel_key, name, group_name, stream_url, tvg_logo, active
+		SELECT item_key,
+		       channel_key,
+		       name,
+		       group_name,
+		       stream_url,
+		       tvg_logo,
+		       COALESCE(playlist_source_id, 1),
+		       COALESCE((SELECT ps.name FROM playlist_sources ps WHERE ps.source_id = playlist_items.playlist_source_id), ''),
+		       active
 		FROM playlist_items
 	` + where + `
 		ORDER BY group_name ASC, name ASC, item_key ASC
@@ -555,6 +671,8 @@ func (s *Store) ListCatalogItems(ctx context.Context, q playlist.Query) ([]playl
 			&item.Group,
 			&item.StreamURL,
 			&item.TVGLogo,
+			&item.PlaylistSourceID,
+			&item.PlaylistSourceName,
 			&activeInt,
 		); err != nil {
 			return nil, 0, fmt.Errorf("scan catalog item: %w", err)
@@ -616,9 +734,20 @@ func buildWhere(q playlist.Query) (string, []any, error) {
 
 func buildWhereWithLimits(q playlist.Query, limits CatalogSearchLimits) (string, []any, error) {
 	limits = effectiveCatalogSearchLimits(limits)
+	sourceIDs, err := normalizePlaylistSourceIDs(q.SourceIDs)
+	if err != nil {
+		return "", nil, err
+	}
 	groupNames := channels.NormalizeGroupNames(q.Group, q.GroupNames)
 	clauses := []string{"active = 1"}
-	args := make([]any, 0, len(groupNames)+2)
+	args := make([]any, 0, len(sourceIDs)+len(groupNames)+2)
+
+	if len(sourceIDs) > 0 {
+		clauses = append(clauses, "playlist_source_id IN ("+inPlaceholders(len(sourceIDs))+")")
+		for _, sourceID := range sourceIDs {
+			args = append(args, sourceID)
+		}
+	}
 
 	switch len(groupNames) {
 	case 1:
@@ -1159,6 +1288,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.ensureFailoverSchema(ctx); err != nil {
 		return err
 	}
+	if err := s.ensurePlaylistSourcesSchema(ctx); err != nil {
+		return err
+	}
 	if err := s.ensureMetricsSchema(ctx); err != nil {
 		return err
 	}
@@ -1241,6 +1373,7 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 		  name          TEXT NOT NULL DEFAULT '',
 		  group_name    TEXT NOT NULL DEFAULT '',
 		  group_names_json TEXT NOT NULL DEFAULT '[]',
+		  source_ids_json TEXT NOT NULL DEFAULT '[]',
 		  search_query  TEXT NOT NULL DEFAULT '',
 		  search_regex  INTEGER NOT NULL DEFAULT 0,
 		  order_index   INTEGER NOT NULL,
@@ -1262,6 +1395,9 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 	if err := s.addColumnIfMissing(ctx, "dynamic_channel_queries", "group_names_json", `ALTER TABLE dynamic_channel_queries ADD COLUMN group_names_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
 		return err
 	}
+	if err := s.addColumnIfMissing(ctx, "dynamic_channel_queries", "source_ids_json", `ALTER TABLE dynamic_channel_queries ADD COLUMN source_ids_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
 	if err := s.addColumnIfMissing(ctx, "dynamic_channel_queries", "search_regex", `ALTER TABLE dynamic_channel_queries ADD COLUMN search_regex INTEGER NOT NULL DEFAULT 0`); err != nil {
 		return err
 	}
@@ -1280,6 +1416,7 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 		    name = TRIM(COALESCE(name, '')),
 		    group_name = TRIM(COALESCE(group_name, '')),
 		    group_names_json = TRIM(COALESCE(group_names_json, '[]')),
+		    source_ids_json = TRIM(COALESCE(source_ids_json, '[]')),
 		    search_query = TRIM(COALESCE(search_query, '')),
 		    search_regex = CASE
 				WHEN COALESCE(search_regex, 0) <> 0 THEN 1
@@ -1317,6 +1454,7 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 		  dynamic_sources_enabled INTEGER NOT NULL DEFAULT 0,
 		  dynamic_group_name TEXT NOT NULL DEFAULT '',
 		  dynamic_group_names_json TEXT NOT NULL DEFAULT '[]',
+		  dynamic_source_ids_json TEXT NOT NULL DEFAULT '[]',
 		  dynamic_search_query TEXT NOT NULL DEFAULT '',
 		  dynamic_search_regex INTEGER NOT NULL DEFAULT 0,
 		  created_at    INTEGER NOT NULL,
@@ -1344,6 +1482,9 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 		return err
 	}
 	if err := s.addColumnIfMissing(ctx, "published_channels", "dynamic_group_names_json", `ALTER TABLE published_channels ADD COLUMN dynamic_group_names_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
+		return err
+	}
+	if err := s.addColumnIfMissing(ctx, "published_channels", "dynamic_source_ids_json", `ALTER TABLE published_channels ADD COLUMN dynamic_source_ids_json TEXT NOT NULL DEFAULT '[]'`); err != nil {
 		return err
 	}
 	if err := s.addColumnIfMissing(ctx, "published_channels", "dynamic_search_query", `ALTER TABLE published_channels ADD COLUMN dynamic_search_query TEXT NOT NULL DEFAULT ''`); err != nil {
@@ -1409,6 +1550,7 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 		    dynamic_sources_enabled = COALESCE(dynamic_sources_enabled, 0),
 		    dynamic_group_name = TRIM(COALESCE(dynamic_group_name, '')),
 		    dynamic_group_names_json = TRIM(COALESCE(dynamic_group_names_json, '[]')),
+		    dynamic_source_ids_json = TRIM(COALESCE(dynamic_source_ids_json, '[]')),
 		    dynamic_search_query = TRIM(COALESCE(dynamic_search_query, '')),
 		    dynamic_search_regex = CASE
 				WHEN COALESCE(dynamic_search_regex, 0) <> 0 THEN 1
@@ -1420,7 +1562,13 @@ func (s *Store) ensureFailoverSchema(ctx context.Context) error {
 	if err := s.normalizeDynamicQueryGroupNames(ctx); err != nil {
 		return err
 	}
+	if err := s.normalizeDynamicQuerySourceIDs(ctx); err != nil {
+		return err
+	}
 	if err := s.normalizePublishedChannelGroupNames(ctx); err != nil {
+		return err
+	}
+	if err := s.normalizePublishedChannelSourceIDs(ctx); err != nil {
 		return err
 	}
 

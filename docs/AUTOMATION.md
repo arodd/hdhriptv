@@ -126,21 +126,35 @@ optional `AnalysisErrorBuckets` parsed from auto-prioritize summary text.
 ## Playlist Sync Job
 
 `PlaylistSyncJob` (`internal/jobs/playlist_sync.go`) refreshes the channel
-catalog from the upstream M3U playlist and reconciles channel sources.
+catalog from upstream M3U playlists and reconciles channel sources. The job
+supports multiple playlist sources with bounded source-refresh concurrency.
+The default remains sequential (`playlist_sync_source_concurrency=1`).
 
 ### Pipeline
 
-1. **Read playlist URL** — from settings store key `playlist.url`.
-   Fails immediately if not configured.
-2. **Refresh** — calls `PlaylistRefresher.Refresh(ctx, url)` which fetches,
-   parses, and upserts catalog entries. Returns the count of refreshed items.
+1. **Resolve source list** — loads all enabled playlist sources from the
+   `playlist_sources` table. If the job context includes a `source_id` scope
+   (via `PlaylistSyncSourceIDFromContext`), only that source is processed.
+   Falls back to legacy `playlist.url` for the primary source if its stored
+   URL is blank.
+2. **Refresh each source** — iterates enabled sources in `order_index` order
+   with bounded worker concurrency controlled by
+   `PLAYLIST_SYNC_SOURCE_CONCURRENCY` (default `1`, max `16`). For each source,
+   calls
+   `PlaylistRefresher.RefreshForSource(ctx, source)` which fetches, parses,
+   applies item-key namespacing for non-primary sources
+   (`ps:<source_key>:<base_key>`), and runs source-scoped catalog
+   upsert/deactivation. Records per-source outcome (item count, error),
+   and emits per-source Prometheus metrics (sync duration, errors, items).
 3. **Reconcile** — calls `PlaylistReconciler.Reconcile(ctx, onProgress)`.
    Progress is reported per-channel with throttled persistence (every 5
-   channels or every 1 second, whichever comes first).
+   channels or every 1 second, whichever comes first). Reconcile is
+   **skipped when all sources fail**.
 4. **DVR lineup reload** (optional) — if a `DVRLineupReloader` is configured
-   via `SetPostSyncLineupReloader`, it is called after successful
-   refresh+reconcile through `ReloadLineupForPlaylistSyncOutcome`, which
-   returns typed reload status/skip metadata (`dvr.ReloadOutcome`).
+   via `SetPostSyncLineupReloader`, it is called when at least one source
+   succeeded, through `ReloadLineupForPlaylistSyncOutcome`, which returns
+   typed reload status/skip/failure metadata (`dvr.ReloadOutcome`). DVR
+   reload is skipped on total source failure.
 
 ### Progress Throttling
 
@@ -159,12 +173,17 @@ For playlist sync: `persistEvery = 5`, `persistInterval = 1s`.
 On completion the run summary is set to a key=value string:
 
 ```
-playlist refreshed items=N; channels processed=X/Y; added_sources=A;
+playlist_sources attempted=N succeeded=M failed=K
+requested_source_id=... playlist_source_results=<source1>:items=N,<source2>:err=...;
+channels processed=X/Y; added_sources=A;
 existing_sources=E; dynamic_blocks=B enabled=E added=A updated=U
 retained=R removed=R truncated=T; dynamic_channels=C; dynamic_added=A;
 dynamic_removed=R; dvr_lineup_reloaded=bool; dvr_lineup_reload_status=S;
 dvr_lineup_reload_skip_reason=R
 ```
+
+`dvr_lineup_reload_skip_reason` carries compact provider-scoped detail for
+both skipped providers and provider-local reload/build failures.
 
 ## Auto-Prioritize Job
 
@@ -203,8 +222,10 @@ source list so the highest-quality source is tried first during streaming.
 
 5. **Analyze pending** — runs a concurrent worker pool:
    - Workers read from a shared `taskCh` channel.
-   - Each worker acquires a probe lease from `TunerUsage.AcquireProbe` when
-     tuner-aware mode is active.
+   - Each worker acquires a probe lease from the source's virtual tuner
+     pool via `TunerUsage.AcquireProbeForSource(ctx, sourceID, ...)` when
+     tuner-aware mode is active. Source-pool-aware probing ensures probe
+     leases respect per-source capacity without cross-pool interference.
    - On `stream.ErrNoTunersAvailable`, performs up to 3 probe-slot acquire
      attempts with exponential backoff. Delays start at 250 ms and double per
      attempt, capped at 2 s.
@@ -467,13 +488,15 @@ For channels without dynamic rules, reconciliation:
 Channels with `DynamicRule.Enabled = true` use catalog filter queries:
 
 1. **Dynamic channel block sync** — `SyncDynamicChannelBlocks` materializes
-   block-level channel additions/removals/updates. Truncation is logged when
-   matches exceed `DynamicGuideBlockMaxLen`.
+   block-level channel additions/removals/updates. When a block's
+   `source_ids` filter is set, only catalog items from those playlist sources
+   are matched. Truncation is logged when matches exceed
+   `DynamicGuideBlockMaxLen`.
 
 2. **Per-channel dynamic source sync** — for each reconcilable dynamic
    channel:
    - Builds a `dynamicCatalogFilterKey` from the rule's group names, search
-     query, and regex flag.
+     query, regex flag, and optional `source_ids` filter.
    - **Paged mode** (when enabled and the rule is used by only one channel):
      delegates to `SyncDynamicSourcesByCatalogFilter` which iterates the
      catalog in pages of 512 items.
@@ -586,13 +609,22 @@ To diagnose:
 
 - Check `GET /api/admin/jobs?limit=5` for a run with `status: "running"`.
 - Wait for the running job to finish before retrying. Scheduled triggers
-  that collide with an in-flight job are skipped with a warning log event;
-  no `job_runs` row is created for the skipped invocation, so it will not
-  appear in job history.
+  that collide with an in-flight job are now coalesced into one deferred
+  catch-up run with bounded exponential backoff; no unbounded overlap queue
+  is created.
 - If a job appears stuck (running for an unexpectedly long time), check
   server logs for panics or deadlocks. The runner recovers from panics
   and marks the run as `"error"`, but a blocked network call may hang
   until its context deadline.
+
+Scheduler contention/freshness observability (Prometheus):
+
+- `job_scheduler_events_total{job_name,event}` — scheduler start/skip/deferred lifecycle counters.
+- `job_scheduler_deferred_pending{job_name}` — `1` when a deferred catch-up run is pending.
+- `job_scheduler_deferred_backoff_seconds{job_name}` — current deferred retry backoff.
+- `job_scheduler_deferred_age_seconds{job_name}` — age of the pending deferred catch-up.
+- `job_scheduler_last_success_timestamp_seconds{job_name}` — last successful schedule-triggered run timestamp.
+- `job_scheduler_freshness_seconds{job_name}` — computed freshness age since the last successful schedule-triggered run.
 
 #### HTTP 429 Cooldown During Auto-Prioritize
 
@@ -625,9 +657,10 @@ should be staggered to avoid contention:
   and network bandwidth). Schedule it at most once or twice per day,
   ideally during off-peak hours.
 - Because the global lock prevents overlap, a long-running auto-prioritize
-  job will cause scheduled playlist syncs to be skipped until it
-  finishes. Set playlist sync frequency no higher than needed to avoid
-  excessive skipped runs.
+  job will defer playlist sync into catch-up backoff windows. Keep playlist
+  sync frequency aligned to observed run durations and monitor
+  `job_scheduler_freshness_seconds{job_name="playlist_sync"}` to confirm
+  freshness targets are met under load.
 - Be aware of provider session caps — if your IPTV provider limits
   concurrent connections, ensure `TunerCount` reflects this limit so
   auto-prioritize workers do not exhaust all available sessions and
@@ -647,15 +680,15 @@ rather than causing data corruption.
 
 ## Partial Failure Semantics
 
-The playlist sync pipeline executes four sequential stages. A failure at
-any stage is terminal — subsequent stages are skipped.
+The playlist sync pipeline executes staged phases. Individual source
+failures do not prevent other sources from being refreshed.
 
 | Stage | Operation                | On Failure                                                                                      |
 |-------|--------------------------|--------------------------------------------------------------------------------------------------|
-| 1     | Read playlist URL setting | Job errors immediately. No catalog or source changes.                                           |
-| 2     | Refresh (fetch + upsert) | Items already upserted before the error persist in the catalog. Remaining items are not processed. |
-| 3     | Reconcile sources        | Catalog is updated (from stage 2) but channel source mappings for un-processed channels are stale. |
-| 4     | DVR lineup reload        | Catalog and sources are updated but the DVR provider is not notified. Reported as partial in the run summary (`dvr_lineup_reload_status`). |
+| 1     | Resolve source list      | Job errors immediately if no enabled sources found.                                             |
+| 2     | Refresh sources          | Each source is refreshed independently. Failed sources are recorded in the summary; their catalogs are not affected. Other sources continue. Source-scoped deactivation ensures one failing source does not mark other sources' items inactive. |
+| 3     | Reconcile sources        | Skipped when **all** sources fail. When at least one source succeeds, catalog is updated and channel source mappings are reconciled. |
+| 4     | DVR lineup reload        | Triggered when at least one source succeeds; skipped on total source failure. Provider-local reload/build failures are aggregated while remaining providers continue. Run summary status reflects `reloaded`, `partial`, `failed`, or `skipped` based on aggregate outcome. |
 
 The auto-prioritize job has analogous staged behavior: if analysis
 completes but reordering fails for a specific channel, the failure is

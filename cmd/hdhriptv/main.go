@@ -37,6 +37,7 @@ import (
 	"github.com/arodd/hdhriptv/internal/scheduler"
 	"github.com/arodd/hdhriptv/internal/store/sqlite"
 	"github.com/arodd/hdhriptv/internal/stream"
+	appversion "github.com/arodd/hdhriptv/internal/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
@@ -59,7 +60,25 @@ type traditionalGuideStartMigrator interface {
 	Reorder(ctx context.Context, channelIDs []int64) error
 }
 
+type playlistSourceLister interface {
+	ListPlaylistSources(ctx context.Context) ([]playlist.PlaylistSource, error)
+}
+
+type playlistSourceRuntimeTunerPool interface {
+	Reconfigure(sources []stream.VirtualTunerSource)
+	Capacity() int
+}
+
+type discoveryAdvertisedTunerCountSetter interface {
+	SetDiscoveryAdvertisedTunerCount(tunerCount int)
+}
+
 func main() {
+	runtimeVersionInfo := appversion.Current()
+	if printVersionIfRequested(os.Args[1:], os.Stdout, runtimeVersionInfo) {
+		return
+	}
+
 	cfg, err := config.Load(os.Args[1:])
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
@@ -78,6 +97,9 @@ func main() {
 	}()
 	logger := logRuntime.Logger
 	slog.SetDefault(logger)
+
+	discoveryAdvertisedTunerCount := cfg.DiscoveryAdvertisedTunerCount()
+	discoveryTunerCountCapped := cfg.DiscoveryTunerCountCapped()
 
 	sqliteOpenStart := time.Now()
 	store, err := sqlite.OpenWithOptions(cfg.DBPath, sqlite.SQLiteOptions{
@@ -102,6 +124,11 @@ func main() {
 	defer cancel()
 
 	explicitIdentity := detectExplicitIdentitySettings(os.Args[1:])
+	explicitAutomation, err := detectExplicitAutomationSettings(os.Args[1:])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "configuration error: %v\n", err)
+		os.Exit(2)
+	}
 	resolveIdentityStart := time.Now()
 	if err := resolveIdentitySettings(ctx, store, &cfg, explicitIdentity); err != nil {
 		fmt.Fprintf(os.Stderr, "identity settings error: %v\n", err)
@@ -112,12 +139,25 @@ func main() {
 		"phase", "identity_settings_resolve",
 		"duration", time.Since(resolveIdentityStart),
 	)
-
-	tunerPool := stream.NewPool(cfg.TunerCount)
-	tunerPool.SetPreemptSettleDelay(cfg.PreemptSettleDelay)
+	versionSyncStart := time.Now()
+	previousRuntimeVersion, err := persistRuntimeVersion(ctx, store, runtimeVersionInfo)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "runtime version settings error: %v\n", err)
+		os.Exit(1)
+	}
+	logger.Info(
+		"startup phase complete",
+		"phase", "app_version_sync",
+		"duration", time.Since(versionSyncStart),
+		"app_version", runtimeVersionInfo.Version,
+		"app_version_source", runtimeVersionInfo.Source,
+		"app_version_previous", previousRuntimeVersion,
+		"app_commit", runtimeVersionInfo.Commit,
+		"app_build_time", runtimeVersionInfo.BuildTime,
+	)
 
 	automationOverridesStart := time.Now()
-	if err := applyAutomationCLIOverrides(ctx, store, cfg); err != nil {
+	if err := applyAutomationCLIOverrides(ctx, store, cfg, explicitAutomation); err != nil {
 		fmt.Fprintf(os.Stderr, "automation settings error: %v\n", err)
 		os.Exit(2)
 	}
@@ -126,6 +166,20 @@ func main() {
 		"phase", "automation_overrides_sync",
 		"duration", time.Since(automationOverridesStart),
 	)
+
+	virtualTunerSources, err := resolveRuntimeVirtualTunerSources(ctx, store, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "virtual tuner source config error: %v\n", err)
+		os.Exit(1)
+	}
+	tunerPool := stream.NewVirtualTunerManager(virtualTunerSources)
+	tunerPool.SetPreemptSettleDelay(cfg.PreemptSettleDelay)
+	internalTunerCount := tunerPool.Capacity()
+	discoveryAdvertisedTunerCount = internalTunerCount
+	if discoveryAdvertisedTunerCount > 255 {
+		discoveryAdvertisedTunerCount = 255
+	}
+	discoveryTunerCountCapped = internalTunerCount > discoveryAdvertisedTunerCount
 
 	channelsSvc := channels.NewServiceWithStartGuideNumber(store, cfg.TraditionalGuideStart)
 	guideStartMigrationStart := time.Now()
@@ -163,6 +217,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "playlist sync job error: %v\n", err)
 		os.Exit(1)
 	}
+	playlistSyncJob.SetSourceRefreshConcurrency(cfg.PlaylistSyncSourceConcurrency)
 	playlistSyncJob.SetPostSyncLineupReloader(dvrSvc)
 	analyzerCfg, err := loadAnalyzerConfig(ctx, store, cfg.FFmpegPath, cfg.FFprobePath)
 	if err != nil {
@@ -197,7 +252,7 @@ func main() {
 		jobs.AutoPrioritizeOptions{
 			WorkerMode:     autoWorkersMode,
 			FixedWorkers:   autoWorkersFixed,
-			TunerCount:     cfg.TunerCount,
+			TunerCount:     internalTunerCount,
 			TunerUsage:     tunerPool,
 			ProbeTuneDelay: cfg.AutoPrioritizeProbeTuneDelay,
 		},
@@ -220,61 +275,77 @@ func main() {
 		fmt.Fprintf(os.Stderr, "scheduler error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := schedulerSvc.RegisterJob(jobs.JobPlaylistSync, func(runCtx context.Context, _ string) error {
-		_, startErr := jobRunner.Start(runCtx, jobs.JobPlaylistSync, jobs.TriggerSchedule, playlistSyncJob.Run)
-		if errors.Is(startErr, jobs.ErrAlreadyRunning) {
-			logger.Warn("scheduled playlist sync skipped because a run is already active")
-			return nil
-		}
-		return startErr
-	}); err != nil {
+	playlistSyncScheduledCallback, err := jobs.NewScheduledJobCallback(
+		jobRunner,
+		store,
+		logger,
+		jobs.JobPlaylistSync,
+		playlistSyncJob.Run,
+		jobs.ScheduledCatchUpOptions{},
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scheduler playlist_sync callback error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := schedulerSvc.RegisterJob(jobs.JobPlaylistSync, playlistSyncScheduledCallback.Callback); err != nil {
 		fmt.Fprintf(os.Stderr, "scheduler register playlist_sync error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := schedulerSvc.RegisterJob(jobs.JobAutoPrioritize, func(runCtx context.Context, _ string) error {
-		_, startErr := jobRunner.Start(runCtx, jobs.JobAutoPrioritize, jobs.TriggerSchedule, autoPrioritizeJob.Run)
-		if errors.Is(startErr, jobs.ErrAlreadyRunning) {
-			logger.Warn("scheduled auto-prioritize skipped because a run is already active")
-			return nil
-		}
-		return startErr
-	}); err != nil {
+	autoPrioritizeScheduledCallback, err := jobs.NewScheduledJobCallback(
+		jobRunner,
+		store,
+		logger,
+		jobs.JobAutoPrioritize,
+		autoPrioritizeJob.Run,
+		jobs.ScheduledCatchUpOptions{},
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scheduler auto_prioritize callback error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := schedulerSvc.RegisterJob(jobs.JobAutoPrioritize, autoPrioritizeScheduledCallback.Callback); err != nil {
 		fmt.Fprintf(os.Stderr, "scheduler register auto_prioritize error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := schedulerSvc.RegisterJob(jobs.JobDVRLineupSync, func(runCtx context.Context, _ string) error {
-		_, startErr := jobRunner.Start(runCtx, jobs.JobDVRLineupSync, jobs.TriggerSchedule, func(jobCtx context.Context, run *jobs.RunContext) error {
-			result, syncErr := dvrSvc.Sync(jobCtx, dvr.SyncRequest{DryRun: false})
-			if syncErr != nil {
-				return syncErr
-			}
-			if run != nil {
-				summary := fmt.Sprintf(
-					"updated=%d cleared=%d unchanged=%d unresolved=%d warnings=%d",
-					result.UpdatedCount,
-					result.ClearedCount,
-					result.UnchangedCount,
-					result.UnresolvedCount,
-					len(result.Warnings),
-				)
-				_ = run.SetSummary(jobCtx, summary)
-			}
-			logger.Info(
-				"scheduled dvr lineup sync completed",
-				"updated", result.UpdatedCount,
-				"cleared", result.ClearedCount,
-				"unchanged", result.UnchangedCount,
-				"unresolved", result.UnresolvedCount,
-				"warnings", len(result.Warnings),
-			)
-			return nil
-		})
-		if errors.Is(startErr, jobs.ErrAlreadyRunning) {
-			logger.Warn("scheduled dvr lineup sync skipped because a run is already active")
-			return nil
+	dvrLineupSyncJobFn := func(jobCtx context.Context, run *jobs.RunContext) error {
+		result, syncErr := dvrSvc.Sync(jobCtx, dvr.SyncRequest{DryRun: false})
+		if syncErr != nil {
+			return syncErr
 		}
-		return startErr
-	}); err != nil {
+		if run != nil {
+			summary := fmt.Sprintf(
+				"updated=%d cleared=%d unchanged=%d unresolved=%d warnings=%d",
+				result.UpdatedCount,
+				result.ClearedCount,
+				result.UnchangedCount,
+				result.UnresolvedCount,
+				len(result.Warnings),
+			)
+			_ = run.SetSummary(jobCtx, summary)
+		}
+		logger.Info(
+			"scheduled dvr lineup sync completed",
+			"updated", result.UpdatedCount,
+			"cleared", result.ClearedCount,
+			"unchanged", result.UnchangedCount,
+			"unresolved", result.UnresolvedCount,
+			"warnings", len(result.Warnings),
+		)
+		return nil
+	}
+	dvrLineupScheduledCallback, err := jobs.NewScheduledJobCallback(
+		jobRunner,
+		store,
+		logger,
+		jobs.JobDVRLineupSync,
+		dvrLineupSyncJobFn,
+		jobs.ScheduledCatchUpOptions{},
+	)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "scheduler dvr_lineup_sync callback error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := schedulerSvc.RegisterJob(jobs.JobDVRLineupSync, dvrLineupScheduledCallback.Callback); err != nil {
 		fmt.Fprintf(os.Stderr, "scheduler register dvr_lineup_sync error: %v\n", err)
 		os.Exit(1)
 	}
@@ -317,6 +388,7 @@ func main() {
 		fmt.Fprintf(os.Stderr, "admin handler error: %v\n", err)
 		os.Exit(1)
 	}
+	adminHandler.SetUIVersion(runtimeVersionInfo.Version)
 	adminHandler.SetLogger(logger)
 	adminHandler.SetJSONBodyLimitBytes(cfg.AdminJSONBodyLimitBytes)
 	adminHandler.SetDVRLineupReloadTimeout(cfg.DVRLineupReloadTimeout)
@@ -327,7 +399,7 @@ func main() {
 		FriendlyName:                     cfg.FriendlyName,
 		DeviceID:                         cfg.DeviceID,
 		DeviceAuth:                       cfg.DeviceAuth,
-		TunerCount:                       cfg.TunerCount,
+		TunerCount:                       discoveryAdvertisedTunerCount,
 		ContentDirectoryUpdateIDCacheTTL: cfg.UPnPContentDirectoryUpdateIDCacheTTL,
 	}, channelsSvc)
 	ffmpegCopyRegenerateTimestamps := cfg.FFmpegCopyRegenerateTimestamps
@@ -448,7 +520,7 @@ func main() {
 	discoveryServer, err := discovery.NewServer(discovery.Config{
 		DeviceID:       cfg.DeviceID,
 		DeviceAuth:     cfg.DeviceAuth,
-		TunerCount:     cfg.TunerCount,
+		TunerCount:     discoveryAdvertisedTunerCount,
 		HTTPAddr:       cfg.HTTPAddr,
 		LegacyHTTPAddr: cfg.LegacyHTTPAddr,
 		Logger:         logger,
@@ -457,6 +529,13 @@ func main() {
 		fmt.Fprintf(os.Stderr, "discovery server error: %v\n", err)
 		os.Exit(1)
 	}
+	adminHandler.SetPlaylistSourceRuntime(&playlistSourceRuntimeReloader{
+		store:           store,
+		tunerPool:       tunerPool,
+		hdhrHandler:     hdhrHandler,
+		discoveryServer: discoveryServer,
+		logger:          logger,
+	})
 
 	var upnpServer *upnp.Server
 	if cfg.UPnPEnabled {
@@ -519,14 +598,26 @@ func main() {
 	autoPrioritizeEnabled, _ := readSettingOrDefault(ctx, store, sqlite.SettingJobsAutoPrioritizeEnabled, "false")
 	dvrLineupSyncCron, _ := readSettingOrDefault(ctx, store, sqlite.SettingJobsDVRLineupSyncCron, "")
 	dvrLineupSyncEnabled, _ := readSettingOrDefault(ctx, store, sqlite.SettingJobsDVRLineupSyncEnabled, "false")
-	playlistURLConfigured := hasPlaylistURLSetting(ctx, store)
+	playlistURLConfigured := hasEnabledPlaylistSourceURL(ctx, store)
 	logFFmpegRWTimeoutStallDetectWarning(logger, cfg)
+	if discoveryTunerCountCapped {
+		logger.Warn(
+			"discovery tuner count capped for compatibility",
+			"tuner_count_internal", internalTunerCount,
+			"tuner_count_discovery_advertised", discoveryAdvertisedTunerCount,
+		)
+	}
 
 	logger.Info("starting server",
 		"http_addr", cfg.HTTPAddr,
 		"legacy_http_addr", cfg.LegacyHTTPAddr,
 		"log_dir", cfg.LogDir,
 		"log_file", logRuntime.LogFilePath,
+		"app_version", runtimeVersionInfo.Version,
+		"app_version_source", runtimeVersionInfo.Source,
+		"app_version_previous", previousRuntimeVersion,
+		"app_commit", runtimeVersionInfo.Commit,
+		"app_build_time", runtimeVersionInfo.BuildTime,
 		"db_journal_mode", dbRuntimePragmas.JournalMode,
 		"db_synchronous", dbRuntimePragmas.Synchronous,
 		"db_busy_timeout_ms", dbRuntimePragmas.BusyTimeoutMS,
@@ -537,17 +628,23 @@ func main() {
 		"upnp_notify_interval", cfg.UPnPNotifyInterval.String(),
 		"upnp_max_age", cfg.UPnPMaxAge.String(),
 		"playlist_url_configured", playlistURLConfigured,
+		"playlist_source_count", len(virtualTunerSources),
+		"playlist_sources", summarizeVirtualTunerSourcesForLog(virtualTunerSources),
 		"reconcile_dynamic_rule_paged", cfg.ReconcileDynamicRulePaged,
 		"reconcile_dynamic_rule_match_limit", channels.DynamicGuideBlockMaxLen,
 		"playlist_sync_enabled", strings.EqualFold(strings.TrimSpace(playlistSyncEnabled), "true"),
 		"playlist_sync_cron", playlistSyncCron,
+		"playlist_sync_source_concurrency", cfg.PlaylistSyncSourceConcurrency,
 		"auto_prioritize_enabled", strings.EqualFold(strings.TrimSpace(autoPrioritizeEnabled), "true"),
 		"auto_prioritize_cron", autoPrioritizeCron,
 		"dvr_lineup_sync_enabled", strings.EqualFold(strings.TrimSpace(dvrLineupSyncEnabled), "true"),
 		"dvr_lineup_sync_cron", dvrLineupSyncCron,
 		"friendly_name", cfg.FriendlyName,
 		"device_id", cfg.DeviceID,
-		"tuner_count", cfg.TunerCount,
+		"tuner_count", internalTunerCount,
+		"tuner_count_internal", internalTunerCount,
+		"tuner_count_discovery_advertised", discoveryAdvertisedTunerCount,
+		"tuner_count_discovery_capped", discoveryTunerCountCapped,
 		"stream_mode", cfg.StreamMode,
 		"startup_timeout", cfg.StartupTimeout.String(),
 		"startup_random_access_recovery_only", cfg.StartupRandomAccessRecoveryOnly,
@@ -708,6 +805,7 @@ func main() {
 	if err := streamHandler.CloseWithContext(shutdownCtx); err != nil {
 		logger.Warn("stream session shutdown did not fully converge before deadline", "error", err)
 	}
+	tunerPool.Close()
 
 	// Wait for admin dynamic sync background workers to finish before
 	// store.Close() runs.
@@ -733,6 +831,44 @@ type identityExplicitSettings struct {
 	DeviceAuth   bool
 }
 
+type automationExplicitSettings struct {
+	PlaylistURL     bool
+	PlaylistSources bool
+	TunerCount      bool
+}
+
+func printVersionIfRequested(args []string, out io.Writer, info appversion.Info) bool {
+	if !versionFlagRequested(args) {
+		return false
+	}
+	if out == nil {
+		return true
+	}
+	_, _ = fmt.Fprintf(out, "hdhriptv %s\n", info.Version)
+	return true
+}
+
+func versionFlagRequested(args []string) bool {
+	for _, raw := range args {
+		value := strings.TrimSpace(raw)
+		switch {
+		case value == "--version":
+			return true
+		case strings.HasPrefix(value, "--version="):
+			encoded := strings.TrimSpace(strings.TrimPrefix(value, "--version="))
+			if encoded == "" {
+				return true
+			}
+			parsed, err := strconv.ParseBool(encoded)
+			if err != nil {
+				return true
+			}
+			return parsed
+		}
+	}
+	return false
+}
+
 func detectExplicitIdentitySettings(args []string) identityExplicitSettings {
 	return identityExplicitSettings{
 		FriendlyName: settingExplicitlyProvided(args, "--friendly-name", "FRIENDLY_NAME"),
@@ -741,17 +877,55 @@ func detectExplicitIdentitySettings(args []string) identityExplicitSettings {
 	}
 }
 
+func detectExplicitAutomationSettings(args []string) (automationExplicitSettings, error) {
+	explicitTunerCount, err := explicitIntSettingProvided(args, "--tuner-count", "TUNER_COUNT")
+	if err != nil {
+		return automationExplicitSettings{}, err
+	}
+	return automationExplicitSettings{
+		PlaylistURL:     settingExplicitlyProvided(args, "--playlist-url", "PLAYLIST_URL"),
+		PlaylistSources: settingExplicitlyProvided(args, "--playlist-source", "PLAYLIST_SOURCES"),
+		TunerCount:      explicitTunerCount,
+	}, nil
+}
+
 func settingExplicitlyProvided(args []string, flagName, envKey string) bool {
-	if flagPresent, flagNonEmpty := lookupFlagSetting(args, flagName); flagPresent {
-		return flagNonEmpty
+	if flagPresent, rawValue := lookupFlagValue(args, flagName); flagPresent {
+		return strings.TrimSpace(rawValue) != ""
 	}
 	value, ok := os.LookupEnv(envKey)
 	return ok && strings.TrimSpace(value) != ""
 }
 
-func lookupFlagSetting(args []string, flagName string) (present bool, nonEmpty bool) {
+func explicitIntSettingProvided(args []string, flagName, envKey string) (bool, error) {
+	if flagPresent, rawValue := lookupFlagValue(args, flagName); flagPresent {
+		trimmed := strings.TrimSpace(rawValue)
+		if trimmed == "" {
+			return false, nil
+		}
+		if _, err := strconv.Atoi(trimmed); err != nil {
+			return false, fmt.Errorf("invalid explicit %s value %q: %w", flagName, trimmed, err)
+		}
+		return true, nil
+	}
+
+	value, ok := os.LookupEnv(envKey)
+	if !ok {
+		return false, nil
+	}
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return false, nil
+	}
+	if _, err := strconv.Atoi(trimmed); err != nil {
+		return false, fmt.Errorf("invalid explicit %s value %q: %w", envKey, trimmed, err)
+	}
+	return true, nil
+}
+
+func lookupFlagValue(args []string, flagName string) (present bool, value string) {
 	if strings.TrimSpace(flagName) == "" {
-		return false, false
+		return false, ""
 	}
 	prefix := flagName + "="
 	for i := 0; i < len(args); i++ {
@@ -761,20 +935,19 @@ func lookupFlagSetting(args []string, flagName string) (present bool, nonEmpty b
 		}
 		if arg == flagName {
 			present = true
-			value := ""
+			value = ""
 			if i+1 < len(args) {
 				value = args[i+1]
 				i++
 			}
-			nonEmpty = strings.TrimSpace(value) != ""
 			continue
 		}
 		if strings.HasPrefix(arg, prefix) {
 			present = true
-			nonEmpty = strings.TrimSpace(strings.TrimPrefix(arg, prefix)) != ""
+			value = strings.TrimPrefix(arg, prefix)
 		}
 	}
-	return present, nonEmpty
+	return present, value
 }
 
 func resolveIdentitySettings(
@@ -848,6 +1021,31 @@ func resolveIdentitySettings(
 	return nil
 }
 
+func persistRuntimeVersion(
+	ctx context.Context,
+	store *sqlite.Store,
+	info appversion.Info,
+) (string, error) {
+	if store == nil {
+		return "", fmt.Errorf("store is required")
+	}
+
+	previousVersion, err := readSettingOrDefault(ctx, store, sqlite.SettingAppVersion, "")
+	if err != nil {
+		return "", fmt.Errorf("load persisted app version: %w", err)
+	}
+
+	if err := store.SetSettings(ctx, map[string]string{
+		sqlite.SettingAppVersion:   strings.TrimSpace(info.Version),
+		sqlite.SettingAppCommit:    strings.TrimSpace(info.Commit),
+		sqlite.SettingAppBuildTime: strings.TrimSpace(info.BuildTime),
+	}); err != nil {
+		return "", fmt.Errorf("persist app version settings: %w", err)
+	}
+
+	return strings.TrimSpace(previousVersion), nil
+}
+
 func normalizeDeviceID(raw string) string {
 	id := strings.ToUpper(strings.TrimSpace(raw))
 	if len(id) != 8 {
@@ -877,11 +1075,44 @@ func applyAutomationCLIOverrides(
 	ctx context.Context,
 	store *sqlite.Store,
 	cfg config.Config,
+	explicit automationExplicitSettings,
 ) error {
-	updates := map[string]string{}
-	if playlistURL := strings.TrimSpace(cfg.PlaylistURL); playlistURL != "" {
-		updates[sqlite.SettingPlaylistURL] = playlistURL
+	if store == nil {
+		return fmt.Errorf("store is required")
 	}
+
+	var primaryUpdate playlist.PlaylistSourceUpdate
+	primaryUpdated := false
+	if explicit.PlaylistURL {
+		playlistURL := strings.TrimSpace(cfg.PlaylistURL)
+		if playlistURL != "" {
+			primaryUpdate.PlaylistURL = &playlistURL
+			primaryUpdated = true
+		}
+	}
+	if explicit.TunerCount {
+		tunerCount := cfg.PrimaryTunerCount
+		if tunerCount < 1 && len(cfg.PlaylistSources) > 0 {
+			tunerCount = cfg.PlaylistSources[0].TunerCount
+		}
+		if tunerCount < 1 {
+			return fmt.Errorf("primary tuner-count override must be at least 1")
+		}
+		primaryUpdate.TunerCount = &tunerCount
+		primaryUpdated = true
+	}
+	if primaryUpdated {
+		if _, err := store.UpdatePlaylistSource(ctx, 1, primaryUpdate); err != nil {
+			return fmt.Errorf("apply primary playlist source overrides: %w", err)
+		}
+	}
+	if explicit.PlaylistSources {
+		if err := reconcileConfiguredPlaylistSources(ctx, store, cfg.PlaylistSources[1:], cfg.PlaylistSourcesStartupAuthoritative); err != nil {
+			return fmt.Errorf("apply configured playlist sources: %w", err)
+		}
+	}
+
+	updates := map[string]string{}
 	if schedule := strings.TrimSpace(cfg.RefreshSchedule); schedule != "" {
 		updates[sqlite.SettingJobsPlaylistSyncCron] = schedule
 		updates[sqlite.SettingJobsPlaylistSyncEnabled] = "true"
@@ -890,6 +1121,111 @@ func applyAutomationCLIOverrides(
 		return nil
 	}
 	return store.SetSettings(ctx, updates)
+}
+
+func reconcileConfiguredPlaylistSources(
+	ctx context.Context,
+	store *sqlite.Store,
+	configured []config.PlaylistSourceConfig,
+	pruneUnspecified bool,
+) error {
+	if store == nil {
+		return fmt.Errorf("store is required")
+	}
+	if len(configured) == 0 {
+		return nil
+	}
+
+	persistedSources, err := store.ListPlaylistSources(ctx)
+	if err != nil {
+		return fmt.Errorf("list playlist sources: %w", err)
+	}
+
+	persistedByURLKey := make(map[string]playlist.PlaylistSource, len(persistedSources))
+	persistedNonPrimary := make([]playlist.PlaylistSource, 0, len(persistedSources))
+	for _, source := range persistedSources {
+		if source.SourceID == 1 {
+			continue
+		}
+		persistedNonPrimary = append(persistedNonPrimary, source)
+		urlKey := playlist.CanonicalPlaylistSourceURL(source.PlaylistURL)
+		if urlKey == "" {
+			continue
+		}
+		if previous, exists := persistedByURLKey[urlKey]; exists {
+			return fmt.Errorf(
+				"multiple persisted playlist sources share normalized playlist_url %q (source_id %d and %d)",
+				urlKey,
+				previous.SourceID,
+				source.SourceID,
+			)
+		}
+		persistedByURLKey[urlKey] = source
+	}
+
+	configuredURLKeys := make(map[string]struct{}, len(configured))
+	matchedSourceIDs := make(map[int64]struct{}, len(configured))
+	for i, source := range configured {
+		trimmedURL := strings.TrimSpace(source.PlaylistURL)
+		if trimmedURL == "" {
+			return fmt.Errorf("playlist source startup config entry %d requires playlist_url", i+1)
+		}
+		urlKey := playlist.CanonicalPlaylistSourceURL(trimmedURL)
+		if urlKey == "" {
+			return fmt.Errorf("playlist source startup config entry %d has invalid playlist_url %q", i+1, trimmedURL)
+		}
+		if _, exists := configuredURLKeys[urlKey]; exists {
+			return fmt.Errorf("playlist source startup config contains duplicate normalized playlist_url %q", urlKey)
+		}
+		configuredURLKeys[urlKey] = struct{}{}
+
+		enabled := source.Enabled
+		name := strings.TrimSpace(source.Name)
+		tunerCount := source.TunerCount
+		playlistURL := trimmedURL
+		if persisted, exists := persistedByURLKey[urlKey]; exists {
+			matchedSourceIDs[persisted.SourceID] = struct{}{}
+			if persisted.Name == name &&
+				persisted.PlaylistURL == playlistURL &&
+				persisted.TunerCount == tunerCount &&
+				persisted.Enabled == enabled {
+				continue
+			}
+			if _, err := store.UpdatePlaylistSource(ctx, persisted.SourceID, playlist.PlaylistSourceUpdate{
+				Name:        &name,
+				PlaylistURL: &playlistURL,
+				TunerCount:  &tunerCount,
+				Enabled:     &enabled,
+			}); err != nil {
+				return fmt.Errorf("update playlist source %d from startup config: %w", persisted.SourceID, err)
+			}
+			continue
+		}
+
+		created, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+			Name:        name,
+			PlaylistURL: playlistURL,
+			TunerCount:  tunerCount,
+			Enabled:     &enabled,
+		})
+		if err != nil {
+			return fmt.Errorf("create playlist source from startup config: %w", err)
+		}
+		matchedSourceIDs[created.SourceID] = struct{}{}
+	}
+
+	if !pruneUnspecified {
+		return nil
+	}
+	for _, source := range persistedNonPrimary {
+		if _, keep := matchedSourceIDs[source.SourceID]; keep {
+			continue
+		}
+		if err := store.DeletePlaylistSource(ctx, source.SourceID); err != nil {
+			return fmt.Errorf("prune unspecified playlist source %d: %w", source.SourceID, err)
+		}
+	}
+	return nil
 }
 
 func logFFmpegRWTimeoutStallDetectWarning(logger *slog.Logger, cfg config.Config) {
@@ -991,12 +1327,44 @@ func runAndWaitPlaylistSync(
 	runner *jobs.Runner,
 	jobFn jobs.JobFunc,
 ) error {
+	if runner == nil {
+		return fmt.Errorf("job runner is required")
+	}
+
 	runID, err := runner.Start(ctx, jobs.JobPlaylistSync, jobs.TriggerManual, jobFn)
 	if err != nil {
 		if errors.Is(err, jobs.ErrAlreadyRunning) {
-			return nil
+			return waitForLatestPlaylistSyncRun(ctx, runner)
 		}
 		return err
+	}
+	return waitForPlaylistSyncRun(ctx, runner, runID)
+}
+
+func waitForLatestPlaylistSyncRun(ctx context.Context, runner *jobs.Runner) error {
+	if runner == nil {
+		return fmt.Errorf("job runner is required")
+	}
+
+	runs, err := runner.ListRuns(ctx, jobs.JobPlaylistSync, 1, 0)
+	if err != nil {
+		return fmt.Errorf("list latest playlist sync run: %w", err)
+	}
+	if len(runs) == 0 || runs[0].RunID <= 0 {
+		return fmt.Errorf("playlist sync already running but no persisted run was found")
+	}
+	if runs[0].Status != jobs.StatusRunning {
+		return playlistSyncRunTerminalError(runs[0])
+	}
+	return waitForPlaylistSyncRun(ctx, runner, runs[0].RunID)
+}
+
+func waitForPlaylistSyncRun(ctx context.Context, runner *jobs.Runner, runID int64) error {
+	if runner == nil {
+		return fmt.Errorf("job runner is required")
+	}
+	if runID <= 0 {
+		return fmt.Errorf("playlist sync run id must be greater than zero")
 	}
 
 	ticker := time.NewTicker(200 * time.Millisecond)
@@ -1011,23 +1379,27 @@ func runAndWaitPlaylistSync(
 			if runErr != nil {
 				return runErr
 			}
-
-			switch run.Status {
-			case jobs.StatusRunning:
+			if run.Status == jobs.StatusRunning {
 				continue
-			case jobs.StatusSuccess:
-				return nil
-			case jobs.StatusError:
-				if strings.TrimSpace(run.ErrorMessage) == "" {
-					return fmt.Errorf("playlist sync run %d failed", runID)
-				}
-				return fmt.Errorf("playlist sync run %d failed: %s", runID, run.ErrorMessage)
-			case jobs.StatusCanceled:
-				return fmt.Errorf("playlist sync run %d was canceled", runID)
-			default:
-				return fmt.Errorf("playlist sync run %d ended with unknown status %q", runID, run.Status)
 			}
+			return playlistSyncRunTerminalError(run)
 		}
+	}
+}
+
+func playlistSyncRunTerminalError(run jobs.Run) error {
+	switch run.Status {
+	case jobs.StatusSuccess:
+		return nil
+	case jobs.StatusError:
+		if strings.TrimSpace(run.ErrorMessage) == "" {
+			return fmt.Errorf("playlist sync run %d failed", run.RunID)
+		}
+		return fmt.Errorf("playlist sync run %d failed: %s", run.RunID, run.ErrorMessage)
+	case jobs.StatusCanceled:
+		return fmt.Errorf("playlist sync run %d was canceled", run.RunID)
+	default:
+		return fmt.Errorf("playlist sync run %d ended with unknown status %q", run.RunID, run.Status)
 	}
 }
 
@@ -1330,15 +1702,170 @@ func isTransientStartupJellyfinLineupReloadError(err error) bool {
 	}
 }
 
-func hasPlaylistURLSetting(
+type playlistSourceRuntimeReloader struct {
+	store           playlistSourceLister
+	tunerPool       playlistSourceRuntimeTunerPool
+	hdhrHandler     discoveryAdvertisedTunerCountSetter
+	discoveryServer discoveryAdvertisedTunerCountSetter
+	logger          *slog.Logger
+}
+
+func (r *playlistSourceRuntimeReloader) ReloadPlaylistSources(ctx context.Context) error {
+	if r == nil {
+		return fmt.Errorf("playlist source runtime reloader is not configured")
+	}
+	if r.store == nil {
+		return fmt.Errorf("playlist source runtime store is not configured")
+	}
+	if r.tunerPool == nil {
+		return fmt.Errorf("playlist source runtime tuner manager is not configured")
+	}
+	if r.hdhrHandler == nil {
+		return fmt.Errorf("playlist source runtime hdhr handler is not configured")
+	}
+	if r.discoveryServer == nil {
+		return fmt.Errorf("playlist source runtime discovery server is not configured")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	persistedSources, err := r.store.ListPlaylistSources(ctx)
+	if err != nil {
+		return fmt.Errorf("list playlist sources: %w", err)
+	}
+	virtualSources := virtualTunerSourcesFromPlaylistSources(persistedSources)
+	r.tunerPool.Reconfigure(virtualSources)
+
+	internalTunerCount := r.tunerPool.Capacity()
+	discoveryAdvertised := internalTunerCount
+	if discoveryAdvertised > 255 {
+		discoveryAdvertised = 255
+	}
+	r.hdhrHandler.SetDiscoveryAdvertisedTunerCount(discoveryAdvertised)
+	r.discoveryServer.SetDiscoveryAdvertisedTunerCount(discoveryAdvertised)
+	discoveryCapped := internalTunerCount > discoveryAdvertised
+	logger := r.logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+	logger.Info(
+		"playlist source runtime reconfigured",
+		"internal_tuner_count", internalTunerCount,
+		"discovery_advertised_tuner_count", discoveryAdvertised,
+		"discovery_tuner_count_capped", discoveryCapped,
+		"playlist_sources", summarizeVirtualTunerSourcesForLog(virtualSources),
+	)
+	return nil
+}
+
+func hasEnabledPlaylistSourceURL(
 	ctx context.Context,
 	store *sqlite.Store,
 ) bool {
-	value, err := store.GetSetting(ctx, sqlite.SettingPlaylistURL)
+	if store == nil {
+		return false
+	}
+	sources, err := store.ListPlaylistSources(ctx)
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(value) != ""
+	for _, source := range sources {
+		if !source.Enabled {
+			continue
+		}
+		if strings.TrimSpace(source.PlaylistURL) == "" {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
+func resolveRuntimeVirtualTunerSources(
+	ctx context.Context,
+	store *sqlite.Store,
+	cfg config.Config,
+) ([]stream.VirtualTunerSource, error) {
+	if store == nil {
+		return nil, fmt.Errorf("store is required")
+	}
+
+	persistedSources, err := store.ListPlaylistSources(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list playlist sources: %w", err)
+	}
+	if len(persistedSources) > 0 {
+		return virtualTunerSourcesFromPlaylistSources(persistedSources), nil
+	}
+
+	out := make([]stream.VirtualTunerSource, 0, len(cfg.PlaylistSources))
+	for i, source := range cfg.PlaylistSources {
+		sourceID := int64(i + 1)
+		name := strings.TrimSpace(source.Name)
+		if name == "" {
+			if sourceID == 1 {
+				name = "Primary"
+			} else {
+				name = fmt.Sprintf("Source %d", sourceID)
+			}
+		}
+		out = append(out, stream.VirtualTunerSource{
+			SourceID:   sourceID,
+			Name:       name,
+			TunerCount: source.TunerCount,
+			Enabled:    source.Enabled,
+			OrderIndex: i,
+		})
+	}
+	return out, nil
+}
+
+func virtualTunerSourcesFromPlaylistSources(persistedSources []playlist.PlaylistSource) []stream.VirtualTunerSource {
+	out := make([]stream.VirtualTunerSource, 0, len(persistedSources))
+	for _, source := range persistedSources {
+		out = append(out, stream.VirtualTunerSource{
+			SourceID:   source.SourceID,
+			Name:       strings.TrimSpace(source.Name),
+			TunerCount: source.TunerCount,
+			Enabled:    source.Enabled,
+			OrderIndex: source.OrderIndex,
+		})
+	}
+	return out
+}
+
+func summarizeVirtualTunerSourcesForLog(sources []stream.VirtualTunerSource) []map[string]any {
+	if len(sources) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(sources))
+	for _, source := range sources {
+		out = append(out, map[string]any{
+			"source_id":   source.SourceID,
+			"name":        strings.TrimSpace(source.Name),
+			"tuner_count": source.TunerCount,
+			"enabled":     source.Enabled,
+			"order_index": source.OrderIndex,
+		})
+	}
+	return out
+}
+
+func summarizePlaylistSourcesForLog(sources []config.PlaylistSourceConfig) []map[string]any {
+	if len(sources) == 0 {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(sources))
+	for _, source := range sources {
+		out = append(out, map[string]any{
+			"name":                    strings.TrimSpace(source.Name),
+			"playlist_url_configured": strings.TrimSpace(source.PlaylistURL) != "",
+			"tuner_count":             source.TunerCount,
+			"enabled":                 source.Enabled,
+		})
+	}
+	return out
 }
 
 func readSettingOrDefault(

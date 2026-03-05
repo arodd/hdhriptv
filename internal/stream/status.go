@@ -20,6 +20,7 @@ type TunerStatusSnapshot struct {
 	TunerCount                   int                    `json:"tuner_count"`
 	InUseCount                   int                    `json:"in_use_count"`
 	IdleCount                    int                    `json:"idle_count"`
+	VirtualTuners                []VirtualTunerStatus   `json:"virtual_tuners"`
 	Churn                        ChurnSummary           `json:"churn"`
 	DrainWait                    DrainWaitTelemetry     `json:"drain_wait"`
 	ProbeClose                   ProbeCloseTelemetry    `json:"probe_close"`
@@ -59,112 +60,130 @@ type ProbeCloseTelemetry struct {
 	QueueFullCount uint64 `json:"queue_full_count"`
 }
 
+// VirtualTunerStatus reports aggregate tuner usage for one playlist source pool.
+type VirtualTunerStatus struct {
+	PlaylistSourceID    int64  `json:"playlist_source_id"`
+	PlaylistSourceName  string `json:"playlist_source_name"`
+	PlaylistSourceOrder int    `json:"playlist_source_order"`
+	TunerCount          int    `json:"tuner_count"`
+	InUseCount          int    `json:"in_use_count"`
+	IdleCount           int    `json:"idle_count"`
+	ActiveSessionCount  int    `json:"active_session_count"`
+}
+
 // TunerStatus describes one active tuner lease and linked shared-session state.
 type TunerStatus struct {
-	TunerID                              int               `json:"tuner_id"`
-	Kind                                 string            `json:"kind"`
-	State                                string            `json:"state"`
-	GuideNumber                          string            `json:"guide_number,omitempty"`
-	LeaseClientAddr                      string            `json:"lease_client_addr,omitempty"`
-	LeaseStartedAt                       time.Time         `json:"lease_started_at"`
-	ChannelID                            int64             `json:"channel_id,omitempty"`
-	GuideName                            string            `json:"guide_name,omitempty"`
-	SourceID                             int64             `json:"source_id,omitempty"`
-	SourceItemKey                        string            `json:"source_item_key,omitempty"`
-	SourceStreamURL                      string            `json:"source_stream_url,omitempty"`
-	SourceStartupProbeRawBytes           int               `json:"source_startup_probe_raw_bytes,omitempty"`
-	SourceStartupProbeTrimmedBytes       int               `json:"source_startup_probe_trimmed_bytes,omitempty"`
-	SourceStartupProbeCutoverOffset      int               `json:"source_startup_probe_cutover_offset,omitempty"`
-	SourceStartupProbeDroppedBytes       int               `json:"source_startup_probe_dropped_bytes,omitempty"`
-	SourceStartupProbeBytes              int               `json:"source_startup_probe_bytes,omitempty"`
-	SourceStartupRandomAccessReady       bool              `json:"source_startup_random_access_ready,omitempty"`
-	SourceStartupRandomAccessCodec       string            `json:"source_startup_random_access_codec,omitempty"`
-	SourceStartupInventoryMethod         string            `json:"source_startup_inventory_method,omitempty"`
-	SourceStartupVideoStreams            int               `json:"source_startup_video_streams,omitempty"`
-	SourceStartupAudioStreams            int               `json:"source_startup_audio_streams,omitempty"`
-	SourceStartupVideoCodecs             string            `json:"source_startup_video_codecs,omitempty"`
-	SourceStartupAudioCodecs             string            `json:"source_startup_audio_codecs,omitempty"`
-	SourceStartupComponentState          string            `json:"source_startup_component_state,omitempty"`
-	SourceStartupRetryRelaxedProbe       bool              `json:"source_startup_retry_relaxed_probe,omitempty"`
-	SourceStartupRetryRelaxedProbeReason string            `json:"source_startup_retry_relaxed_probe_reason,omitempty"`
-	Resolution                           string            `json:"resolution,omitempty"`
-	FrameRate                            float64           `json:"frame_rate,omitempty"`
-	VideoCodec                           string            `json:"video_codec,omitempty"`
-	AudioCodec                           string            `json:"audio_codec,omitempty"`
-	CurrentBitrateBPS                    int64             `json:"current_bitrate_bps,omitempty"`
-	ProfileBitrateBPS                    int64             `json:"profile_bitrate_bps,omitempty"`
-	Producer                             string            `json:"producer,omitempty"`
-	SessionStartedAt                     time.Time         `json:"session_started_at"`
-	LastByteAt                           time.Time         `json:"last_byte_at"`
-	LastPushAt                           time.Time         `json:"last_push_at"`
-	BytesRead                            int64             `json:"bytes_read"`
-	BytesPushed                          int64             `json:"bytes_pushed"`
-	ChunksPushed                         int64             `json:"chunks_pushed"`
-	SlowSkipEventsTotal                  uint64            `json:"slow_skip_events_total"`
-	SlowSkipLagChunksTotal               uint64            `json:"slow_skip_lag_chunks_total"`
-	SlowSkipLagBytesTotal                uint64            `json:"slow_skip_lag_bytes_total"`
-	SlowSkipMaxLagChunks                 uint64            `json:"slow_skip_max_lag_chunks"`
-	SubscriberWriteDeadlineTimeoutsTotal uint64            `json:"subscriber_write_deadline_timeouts_total"`
-	SubscriberWriteShortWritesTotal      uint64            `json:"subscriber_write_short_writes_total"`
-	SubscriberWriteBlockedDurationUS     uint64            `json:"subscriber_write_blocked_duration_us"`
-	SubscriberWriteBlockedDurationMS     uint64            `json:"subscriber_write_blocked_duration_ms"`
-	StallCount                           int64             `json:"stall_count"`
-	RecoveryCycle                        int64             `json:"recovery_cycle"`
-	RecoveryReason                       string            `json:"recovery_reason,omitempty"`
-	RecoveryTransitionMode               string            `json:"recovery_transition_mode,omitempty"`
-	RecoveryTransitionEffectiveMode      string            `json:"recovery_transition_effective_mode,omitempty"`
-	RecoveryTransitionSignalsApplied     string            `json:"recovery_transition_signals_applied,omitempty"`
-	RecoveryTransitionSignalSkips        string            `json:"recovery_transition_signal_skips,omitempty"`
-	RecoveryTransitionFallbackCount      int64             `json:"recovery_transition_fallback_count,omitempty"`
-	RecoveryTransitionFallbackReason     string            `json:"recovery_transition_fallback_reason,omitempty"`
-	RecoveryTransitionStitchApplied      bool              `json:"recovery_transition_stitch_applied,omitempty"`
-	RecoveryKeepaliveMode                string            `json:"recovery_keepalive_mode,omitempty"`
-	RecoveryKeepaliveFallbackCount       int64             `json:"recovery_keepalive_fallback_count,omitempty"`
-	RecoveryKeepaliveFallbackReason      string            `json:"recovery_keepalive_fallback_reason,omitempty"`
-	RecoveryKeepaliveStartedAt           time.Time         `json:"recovery_keepalive_started_at,omitempty"`
-	RecoveryKeepaliveStoppedAt           time.Time         `json:"recovery_keepalive_stopped_at,omitempty"`
-	RecoveryKeepaliveDuration            string            `json:"recovery_keepalive_duration,omitempty"`
-	RecoveryKeepaliveBytes               int64             `json:"recovery_keepalive_bytes,omitempty"`
-	RecoveryKeepaliveChunks              int64             `json:"recovery_keepalive_chunks,omitempty"`
-	RecoveryKeepaliveRateBytesPerSecond  float64           `json:"recovery_keepalive_rate_bytes_per_second,omitempty"`
-	RecoveryKeepaliveExpectedRate        float64           `json:"recovery_keepalive_expected_rate_bytes_per_second,omitempty"`
-	RecoveryKeepaliveRealtimeMultiplier  float64           `json:"recovery_keepalive_realtime_multiplier,omitempty"`
-	RecoveryKeepaliveGuardrailCount      int64             `json:"recovery_keepalive_guardrail_count,omitempty"`
-	RecoveryKeepaliveGuardrailReason     string            `json:"recovery_keepalive_guardrail_reason,omitempty"`
-	SourceSelectCount                    int64             `json:"source_select_count"`
-	SameSourceReselectCount              int64             `json:"same_source_reselect_count"`
-	LastSourceSelectedAt                 time.Time         `json:"last_source_selected_at"`
-	LastSourceSelectReason               string            `json:"last_source_select_reason,omitempty"`
-	SinceLastSourceSelect                string            `json:"since_last_source_select,omitempty"`
-	LastError                            string            `json:"last_error,omitempty"`
-	SourceHealthPersistCoalescedTotal    int64             `json:"source_health_persist_coalesced_total,omitempty"`
-	SourceHealthPersistDroppedTotal      int64             `json:"source_health_persist_dropped_total,omitempty"`
-	SourceHealthPersistCoalescedBySource map[int64]int64   `json:"source_health_persist_coalesced_by_source,omitempty"`
-	SourceHealthPersistDroppedBySource   map[int64]int64   `json:"source_health_persist_dropped_by_source,omitempty"`
-	Subscribers                          []SubscriberStats `json:"subscribers"`
+	TunerID                                 int               `json:"tuner_id"`
+	PlaylistSourceID                        int64             `json:"playlist_source_id"`
+	PlaylistSourceName                      string            `json:"playlist_source_name"`
+	VirtualTunerSlot                        int               `json:"virtual_tuner_slot"`
+	Kind                                    string            `json:"kind"`
+	State                                   string            `json:"state"`
+	GuideNumber                             string            `json:"guide_number,omitempty"`
+	LeaseClientAddr                         string            `json:"lease_client_addr,omitempty"`
+	LeaseStartedAt                          time.Time         `json:"lease_started_at"`
+	ChannelID                               int64             `json:"channel_id,omitempty"`
+	GuideName                               string            `json:"guide_name,omitempty"`
+	SourceID                                int64             `json:"source_id,omitempty"`
+	SourceItemKey                           string            `json:"source_item_key,omitempty"`
+	SourceStreamURL                         string            `json:"source_stream_url,omitempty"`
+	SourceStartupProbeRawBytes              int               `json:"source_startup_probe_raw_bytes,omitempty"`
+	SourceStartupProbeTrimmedBytes          int               `json:"source_startup_probe_trimmed_bytes,omitempty"`
+	SourceStartupProbeCutoverOffset         int               `json:"source_startup_probe_cutover_offset,omitempty"`
+	SourceStartupProbeDroppedBytes          int               `json:"source_startup_probe_dropped_bytes,omitempty"`
+	SourceStartupProbeBytes                 int               `json:"source_startup_probe_bytes,omitempty"`
+	SourceStartupRandomAccessReady          bool              `json:"source_startup_random_access_ready,omitempty"`
+	SourceStartupRandomAccessCodec          string            `json:"source_startup_random_access_codec,omitempty"`
+	SourceStartupInventoryMethod            string            `json:"source_startup_inventory_method,omitempty"`
+	SourceStartupVideoStreams               int               `json:"source_startup_video_streams,omitempty"`
+	SourceStartupAudioStreams               int               `json:"source_startup_audio_streams,omitempty"`
+	SourceStartupVideoCodecs                string            `json:"source_startup_video_codecs,omitempty"`
+	SourceStartupAudioCodecs                string            `json:"source_startup_audio_codecs,omitempty"`
+	SourceStartupComponentState             string            `json:"source_startup_component_state,omitempty"`
+	SourceStartupRetryRelaxedProbe          bool              `json:"source_startup_retry_relaxed_probe,omitempty"`
+	SourceStartupRetryRelaxedProbeReason    string            `json:"source_startup_retry_relaxed_probe_reason,omitempty"`
+	Resolution                              string            `json:"resolution,omitempty"`
+	FrameRate                               float64           `json:"frame_rate,omitempty"`
+	VideoCodec                              string            `json:"video_codec,omitempty"`
+	AudioCodec                              string            `json:"audio_codec,omitempty"`
+	CurrentBitrateBPS                       int64             `json:"current_bitrate_bps,omitempty"`
+	ProfileBitrateBPS                       int64             `json:"profile_bitrate_bps,omitempty"`
+	Producer                                string            `json:"producer,omitempty"`
+	SessionStartedAt                        time.Time         `json:"session_started_at"`
+	LastByteAt                              time.Time         `json:"last_byte_at"`
+	LastPushAt                              time.Time         `json:"last_push_at"`
+	BytesRead                               int64             `json:"bytes_read"`
+	BytesPushed                             int64             `json:"bytes_pushed"`
+	ChunksPushed                            int64             `json:"chunks_pushed"`
+	SlowSkipEventsTotal                     uint64            `json:"slow_skip_events_total"`
+	SlowSkipLagChunksTotal                  uint64            `json:"slow_skip_lag_chunks_total"`
+	SlowSkipLagBytesTotal                   uint64            `json:"slow_skip_lag_bytes_total"`
+	SlowSkipMaxLagChunks                    uint64            `json:"slow_skip_max_lag_chunks"`
+	SubscriberWriteDeadlineUnsupportedTotal uint64            `json:"subscriber_write_deadline_unsupported_total"`
+	SubscriberWriteDeadlineTimeoutsTotal    uint64            `json:"subscriber_write_deadline_timeouts_total"`
+	SubscriberWriteShortWritesTotal         uint64            `json:"subscriber_write_short_writes_total"`
+	SubscriberWriteBlockedDurationUS        uint64            `json:"subscriber_write_blocked_duration_us"`
+	SubscriberWriteBlockedDurationMS        uint64            `json:"subscriber_write_blocked_duration_ms"`
+	StallCount                              int64             `json:"stall_count"`
+	RecoveryCycle                           int64             `json:"recovery_cycle"`
+	RecoveryReason                          string            `json:"recovery_reason,omitempty"`
+	RecoveryTransitionMode                  string            `json:"recovery_transition_mode,omitempty"`
+	RecoveryTransitionEffectiveMode         string            `json:"recovery_transition_effective_mode,omitempty"`
+	RecoveryTransitionSignalsApplied        string            `json:"recovery_transition_signals_applied,omitempty"`
+	RecoveryTransitionSignalSkips           string            `json:"recovery_transition_signal_skips,omitempty"`
+	RecoveryTransitionFallbackCount         int64             `json:"recovery_transition_fallback_count,omitempty"`
+	RecoveryTransitionFallbackReason        string            `json:"recovery_transition_fallback_reason,omitempty"`
+	RecoveryTransitionStitchApplied         bool              `json:"recovery_transition_stitch_applied,omitempty"`
+	RecoveryKeepaliveMode                   string            `json:"recovery_keepalive_mode,omitempty"`
+	RecoveryKeepaliveFallbackCount          int64             `json:"recovery_keepalive_fallback_count,omitempty"`
+	RecoveryKeepaliveFallbackReason         string            `json:"recovery_keepalive_fallback_reason,omitempty"`
+	RecoveryKeepaliveStartedAt              time.Time         `json:"recovery_keepalive_started_at,omitempty"`
+	RecoveryKeepaliveStoppedAt              time.Time         `json:"recovery_keepalive_stopped_at,omitempty"`
+	RecoveryKeepaliveDuration               string            `json:"recovery_keepalive_duration,omitempty"`
+	RecoveryKeepaliveBytes                  int64             `json:"recovery_keepalive_bytes,omitempty"`
+	RecoveryKeepaliveChunks                 int64             `json:"recovery_keepalive_chunks,omitempty"`
+	RecoveryKeepaliveRateBytesPerSecond     float64           `json:"recovery_keepalive_rate_bytes_per_second,omitempty"`
+	RecoveryKeepaliveExpectedRate           float64           `json:"recovery_keepalive_expected_rate_bytes_per_second,omitempty"`
+	RecoveryKeepaliveRealtimeMultiplier     float64           `json:"recovery_keepalive_realtime_multiplier,omitempty"`
+	RecoveryKeepaliveGuardrailCount         int64             `json:"recovery_keepalive_guardrail_count,omitempty"`
+	RecoveryKeepaliveGuardrailReason        string            `json:"recovery_keepalive_guardrail_reason,omitempty"`
+	SourceSelectCount                       int64             `json:"source_select_count"`
+	SameSourceReselectCount                 int64             `json:"same_source_reselect_count"`
+	LastSourceSelectedAt                    time.Time         `json:"last_source_selected_at"`
+	LastSourceSelectReason                  string            `json:"last_source_select_reason,omitempty"`
+	SinceLastSourceSelect                   string            `json:"since_last_source_select,omitempty"`
+	LastError                               string            `json:"last_error,omitempty"`
+	SourceHealthPersistCoalescedTotal       int64             `json:"source_health_persist_coalesced_total,omitempty"`
+	SourceHealthPersistDroppedTotal         int64             `json:"source_health_persist_dropped_total,omitempty"`
+	SourceHealthPersistCoalescedBySource    map[int64]int64   `json:"source_health_persist_coalesced_by_source,omitempty"`
+	SourceHealthPersistDroppedBySource      map[int64]int64   `json:"source_health_persist_dropped_by_source,omitempty"`
+	Subscribers                             []SubscriberStats `json:"subscribers"`
 }
 
 // ClientStreamStatus maps one connected client subscriber to its backing tuner session.
 type ClientStreamStatus struct {
-	TunerID           int       `json:"tuner_id"`
-	Kind              string    `json:"kind"`
-	ChannelID         int64     `json:"channel_id,omitempty"`
-	GuideNumber       string    `json:"guide_number,omitempty"`
-	GuideName         string    `json:"guide_name,omitempty"`
-	SourceID          int64     `json:"source_id,omitempty"`
-	SourceItemKey     string    `json:"source_item_key,omitempty"`
-	SourceStreamURL   string    `json:"source_stream_url,omitempty"`
-	ClientHost        string    `json:"client_host,omitempty"`
-	Resolution        string    `json:"resolution,omitempty"`
-	FrameRate         float64   `json:"frame_rate,omitempty"`
-	VideoCodec        string    `json:"video_codec,omitempty"`
-	AudioCodec        string    `json:"audio_codec,omitempty"`
-	CurrentBitrateBPS int64     `json:"current_bitrate_bps,omitempty"`
-	ProfileBitrateBPS int64     `json:"profile_bitrate_bps,omitempty"`
-	Producer          string    `json:"producer,omitempty"`
-	SubscriberID      uint64    `json:"subscriber_id"`
-	ClientAddr        string    `json:"client_addr,omitempty"`
-	ConnectedAt       time.Time `json:"connected_at"`
+	TunerID            int       `json:"tuner_id"`
+	PlaylistSourceID   int64     `json:"playlist_source_id"`
+	PlaylistSourceName string    `json:"playlist_source_name"`
+	VirtualTunerSlot   int       `json:"virtual_tuner_slot"`
+	Kind               string    `json:"kind"`
+	ChannelID          int64     `json:"channel_id,omitempty"`
+	GuideNumber        string    `json:"guide_number,omitempty"`
+	GuideName          string    `json:"guide_name,omitempty"`
+	SourceID           int64     `json:"source_id,omitempty"`
+	SourceItemKey      string    `json:"source_item_key,omitempty"`
+	SourceStreamURL    string    `json:"source_stream_url,omitempty"`
+	ClientHost         string    `json:"client_host,omitempty"`
+	Resolution         string    `json:"resolution,omitempty"`
+	FrameRate          float64   `json:"frame_rate,omitempty"`
+	VideoCodec         string    `json:"video_codec,omitempty"`
+	AudioCodec         string    `json:"audio_codec,omitempty"`
+	CurrentBitrateBPS  int64     `json:"current_bitrate_bps,omitempty"`
+	ProfileBitrateBPS  int64     `json:"profile_bitrate_bps,omitempty"`
+	Producer           string    `json:"producer,omitempty"`
+	SubscriberID       uint64    `json:"subscriber_id"`
+	ClientAddr         string    `json:"client_addr,omitempty"`
+	ConnectedAt        time.Time `json:"connected_at"`
 }
 
 // TunerStatusSnapshot returns a structured view of active tuner leases and subscribers.
@@ -187,7 +206,13 @@ func (h *Handler) TunerStatusSnapshot() TunerStatusSnapshot {
 	probeCloseStats := probeCloseStatsSnapshot()
 
 	sessionByTuner := make(map[int]SharedSessionStats, len(sessionSnapshot))
+	activeSessionsByPlaylistSource := make(map[int64]int, len(sessionSnapshot))
 	for _, session := range sessionSnapshot {
+		playlistSourceID, _ := normalizePlaylistSourceIdentity(
+			session.PlaylistSourceID,
+			session.PlaylistSourceName,
+		)
+		activeSessionsByPlaylistSource[playlistSourceID]++
 		if session.TunerID < 0 {
 			continue
 		}
@@ -204,6 +229,11 @@ func (h *Handler) TunerStatusSnapshot() TunerStatusSnapshot {
 			LeaseClientAddr: lease.ClientAddr,
 			LeaseStartedAt:  lease.StartedAt,
 		}
+		row.PlaylistSourceID, row.PlaylistSourceName = normalizePlaylistSourceIdentity(
+			lease.PlaylistSourceID,
+			lease.PlaylistSourceName,
+		)
+		row.VirtualTunerSlot = normalizeVirtualTunerSlot(lease.VirtualTunerSlot, lease.ID)
 		hasSharedSession := false
 		if session, ok := sessionByTuner[lease.ID]; ok {
 			applySharedSessionStatus(&row, session)
@@ -228,6 +258,11 @@ func (h *Handler) TunerStatusSnapshot() TunerStatusSnapshot {
 			Kind:        sessionKindClient,
 			GuideNumber: session.GuideNumber,
 		}
+		row.PlaylistSourceID, row.PlaylistSourceName = normalizePlaylistSourceIdentity(
+			session.PlaylistSourceID,
+			session.PlaylistSourceName,
+		)
+		row.VirtualTunerSlot = normalizeVirtualTunerSlot(session.VirtualTunerSlot, session.TunerID)
 		applySharedSessionStatus(&row, session)
 		row.State = deriveTunerState(row.Kind, len(row.Subscribers), true)
 		tuners = append(tuners, row)
@@ -244,24 +279,27 @@ func (h *Handler) TunerStatusSnapshot() TunerStatusSnapshot {
 	for _, tuner := range tuners {
 		for _, subscriber := range tuner.Subscribers {
 			clientStreams = append(clientStreams, ClientStreamStatus{
-				TunerID:           tuner.TunerID,
-				Kind:              tuner.Kind,
-				ChannelID:         tuner.ChannelID,
-				GuideNumber:       tuner.GuideNumber,
-				GuideName:         tuner.GuideName,
-				SourceID:          tuner.SourceID,
-				SourceItemKey:     tuner.SourceItemKey,
-				SourceStreamURL:   sanitizeStreamURLForStatus(tuner.SourceStreamURL),
-				Resolution:        tuner.Resolution,
-				FrameRate:         tuner.FrameRate,
-				VideoCodec:        tuner.VideoCodec,
-				AudioCodec:        tuner.AudioCodec,
-				CurrentBitrateBPS: tuner.CurrentBitrateBPS,
-				ProfileBitrateBPS: tuner.ProfileBitrateBPS,
-				Producer:          tuner.Producer,
-				SubscriberID:      subscriber.SubscriberID,
-				ClientAddr:        subscriber.ClientAddr,
-				ConnectedAt:       subscriber.StartedAt,
+				TunerID:            tuner.TunerID,
+				PlaylistSourceID:   tuner.PlaylistSourceID,
+				PlaylistSourceName: tuner.PlaylistSourceName,
+				VirtualTunerSlot:   tuner.VirtualTunerSlot,
+				Kind:               tuner.Kind,
+				ChannelID:          tuner.ChannelID,
+				GuideNumber:        tuner.GuideNumber,
+				GuideName:          tuner.GuideName,
+				SourceID:           tuner.SourceID,
+				SourceItemKey:      tuner.SourceItemKey,
+				SourceStreamURL:    sanitizeStreamURLForStatus(tuner.SourceStreamURL),
+				Resolution:         tuner.Resolution,
+				FrameRate:          tuner.FrameRate,
+				VideoCodec:         tuner.VideoCodec,
+				AudioCodec:         tuner.AudioCodec,
+				CurrentBitrateBPS:  tuner.CurrentBitrateBPS,
+				ProfileBitrateBPS:  tuner.ProfileBitrateBPS,
+				Producer:           tuner.Producer,
+				SubscriberID:       subscriber.SubscriberID,
+				ClientAddr:         subscriber.ClientAddr,
+				ConnectedAt:        subscriber.StartedAt,
 			})
 		}
 	}
@@ -279,12 +317,15 @@ func (h *Handler) TunerStatusSnapshot() TunerStatusSnapshot {
 		idle = 0
 	}
 
+	virtualTuners := buildVirtualTunerStatusSnapshot(h.tuners, activeSessionsByPlaylistSource)
+
 	return TunerStatusSnapshot{
-		GeneratedAt: now,
-		TunerCount:  tunerCount,
-		InUseCount:  inUse,
-		IdleCount:   idle,
-		Churn:       churn,
+		GeneratedAt:   now,
+		TunerCount:    tunerCount,
+		InUseCount:    inUse,
+		IdleCount:     idle,
+		VirtualTuners: virtualTuners,
+		Churn:         churn,
 		DrainWait: DrainWaitTelemetry{
 			OK:             drainStats.OK,
 			Error:          drainStats.Error,
@@ -308,6 +349,11 @@ func applySharedSessionStatus(dst *TunerStatus, session SharedSessionStats) {
 		return
 	}
 
+	dst.PlaylistSourceID, dst.PlaylistSourceName = normalizePlaylistSourceIdentity(
+		session.PlaylistSourceID,
+		session.PlaylistSourceName,
+	)
+	dst.VirtualTunerSlot = normalizeVirtualTunerSlot(session.VirtualTunerSlot, dst.TunerID)
 	dst.ChannelID = session.ChannelID
 	if session.GuideNumber != "" {
 		dst.GuideNumber = session.GuideNumber
@@ -348,6 +394,7 @@ func applySharedSessionStatus(dst *TunerStatus, session SharedSessionStats) {
 	dst.SlowSkipLagChunksTotal = session.SlowSkipLagChunksTotal
 	dst.SlowSkipLagBytesTotal = session.SlowSkipLagBytesTotal
 	dst.SlowSkipMaxLagChunks = session.SlowSkipMaxLagChunks
+	dst.SubscriberWriteDeadlineUnsupportedTotal = session.SubscriberWriteDeadlineUnsupportedTotal
 	dst.SubscriberWriteDeadlineTimeoutsTotal = session.SubscriberWriteDeadlineTimeoutsTotal
 	dst.SubscriberWriteShortWritesTotal = session.SubscriberWriteShortWritesTotal
 	dst.SubscriberWriteBlockedDurationUS = session.SubscriberWriteBlockedDurationUS
@@ -398,6 +445,138 @@ func applySharedSessionStatus(dst *TunerStatus, session SharedSessionStats) {
 		}
 	}
 	dst.Subscribers = append([]SubscriberStats(nil), session.SubscriberInfo...)
+}
+
+func normalizePlaylistSourceIdentity(sourceID int64, sourceName string) (int64, string) {
+	if sourceID <= 0 {
+		sourceID = defaultPlaylistSourceID
+	}
+	sourceName = strings.TrimSpace(sourceName)
+	if sourceName == "" {
+		if sourceID == defaultPlaylistSourceID {
+			sourceName = defaultPlaylistSourceName
+		} else {
+			sourceName = "Source " + sourceIDString(sourceID)
+		}
+	}
+	return sourceID, sourceName
+}
+
+func normalizeVirtualTunerSlot(slot, tunerID int) int {
+	if slot >= 0 {
+		return slot
+	}
+	if tunerID >= 0 {
+		return tunerID
+	}
+	return 0
+}
+
+func buildVirtualTunerStatusSnapshot(
+	tuners tunerUsage,
+	activeSessionsByPlaylistSource map[int64]int,
+) []VirtualTunerStatus {
+	summaries := readVirtualTunerPoolSummaries(tuners)
+	if len(summaries) == 0 {
+		sourceID, sourceName := normalizePlaylistSourceIdentity(0, "")
+		inUseCount := 0
+		tunerCount := 0
+		if tuners != nil {
+			inUseCount = tuners.InUseCount()
+			tunerCount = tuners.Capacity()
+		}
+		idleCount := tunerCount - inUseCount
+		if idleCount < 0 {
+			idleCount = 0
+		}
+		summaries = append(summaries, VirtualTunerPoolSnapshot{
+			PlaylistSourceID:    sourceID,
+			PlaylistSourceName:  sourceName,
+			PlaylistSourceOrder: 0,
+			TunerCount:          tunerCount,
+			InUseCount:          inUseCount,
+			IdleCount:           idleCount,
+		})
+	}
+
+	out := make([]VirtualTunerStatus, 0, len(summaries))
+	seenSources := make(map[int64]struct{}, len(summaries))
+	for _, summary := range summaries {
+		sourceID, sourceName := normalizePlaylistSourceIdentity(
+			summary.PlaylistSourceID,
+			summary.PlaylistSourceName,
+		)
+		tunerCount := summary.TunerCount
+		if tunerCount < 0 {
+			tunerCount = 0
+		}
+		inUseCount := summary.InUseCount
+		if inUseCount < 0 {
+			inUseCount = 0
+		}
+		idleCount := summary.IdleCount
+		if idleCount < 0 {
+			idleCount = tunerCount - inUseCount
+		}
+		if idleCount < 0 {
+			idleCount = 0
+		}
+		out = append(out, VirtualTunerStatus{
+			PlaylistSourceID:    sourceID,
+			PlaylistSourceName:  sourceName,
+			PlaylistSourceOrder: summary.PlaylistSourceOrder,
+			TunerCount:          tunerCount,
+			InUseCount:          inUseCount,
+			IdleCount:           idleCount,
+			ActiveSessionCount:  activeSessionsByPlaylistSource[sourceID],
+		})
+		seenSources[sourceID] = struct{}{}
+	}
+
+	nextOrder := len(out)
+	for sourceID, count := range activeSessionsByPlaylistSource {
+		if _, exists := seenSources[sourceID]; exists {
+			continue
+		}
+		normalizedSourceID, sourceName := normalizePlaylistSourceIdentity(sourceID, "")
+		out = append(out, VirtualTunerStatus{
+			PlaylistSourceID:    normalizedSourceID,
+			PlaylistSourceName:  sourceName,
+			PlaylistSourceOrder: nextOrder,
+			ActiveSessionCount:  count,
+		})
+		nextOrder++
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].PlaylistSourceOrder == out[j].PlaylistSourceOrder {
+			return out[i].PlaylistSourceID < out[j].PlaylistSourceID
+		}
+		return out[i].PlaylistSourceOrder < out[j].PlaylistSourceOrder
+	})
+
+	if out == nil {
+		return []VirtualTunerStatus{}
+	}
+	return out
+}
+
+func readVirtualTunerPoolSummaries(tuners tunerUsage) []VirtualTunerPoolSnapshot {
+	if tuners == nil {
+		return nil
+	}
+	type virtualTunerSummaryProvider interface {
+		VirtualTunerSnapshot() []VirtualTunerPoolSnapshot
+	}
+	provider, ok := tuners.(virtualTunerSummaryProvider)
+	if !ok {
+		return nil
+	}
+	snapshot := provider.VirtualTunerSnapshot()
+	if len(snapshot) == 0 {
+		return nil
+	}
+	return append([]VirtualTunerPoolSnapshot(nil), snapshot...)
 }
 
 func deriveTunerState(kind string, subscriberCount int, hasSharedSession bool) string {

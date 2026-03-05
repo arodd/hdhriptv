@@ -136,7 +136,7 @@ func TestSharedSessionFinishBlocksOnSourceHealthPersistenceBacklog(t *testing.T)
 			Mode:                       "direct",
 			StartupTimeout:             500 * time.Millisecond,
 			FailoverTotalTimeout:       1 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           188,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         50 * time.Millisecond,
@@ -238,7 +238,7 @@ func TestSharedSessionFinishBlocksOnSourceHealthPersistenceBacklog(t *testing.T)
 				Mode:                       "direct",
 				StartupTimeout:             500 * time.Millisecond,
 				FailoverTotalTimeout:       1 * time.Second,
-				MinProbeBytes:              1,
+				MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 				BufferChunkBytes:           188,
 				BufferPublishFlushInterval: 20 * time.Millisecond,
 				SessionIdleTimeout:         50 * time.Millisecond,
@@ -725,7 +725,7 @@ func TestSessionManagerSharesOneTunerPerChannelSession(t *testing.T) {
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write([]byte("abcd")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("abcd")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -759,7 +759,7 @@ func TestSessionManagerSharesOneTunerPerChannelSession(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           4,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -798,7 +798,7 @@ func TestSessionManagerSubscribeEvictsClosedMappedSession(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("E"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -832,7 +832,7 @@ func TestSessionManagerSubscribeEvictsClosedMappedSession(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -878,7 +878,7 @@ func TestSessionManagerSubscribeSkipsClosedCreateWaitSession(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("W"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -912,7 +912,7 @@ func TestSessionManagerSubscribeSkipsClosedCreateWaitSession(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1009,7 +1009,7 @@ func TestSessionManagerGetOrCreateSessionSkipsCanceledMappedSession(t *testing.T
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("C"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -1043,7 +1043,7 @@ func TestSessionManagerGetOrCreateSessionSkipsCanceledMappedSession(t *testing.T
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1088,7 +1088,7 @@ func TestSessionManagerSubscribeSkipsCanceledMappedSession(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("K"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -1122,7 +1122,7 @@ func TestSessionManagerSubscribeSkipsCanceledMappedSession(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1180,7 +1180,7 @@ func TestSessionManagerGetOrCreateSessionRejectsCanceledContextOnReadyReuse(t *t
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1227,7 +1227,7 @@ func TestSessionManagerSubscribeCanceledContextDoesNotAttachReadySession(t *test
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1357,7 +1357,7 @@ func TestSessionManagerHasActiveOrPendingSessionInadmissibleMappedSessionRemoved
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1447,7 +1447,7 @@ func TestRemoveSubscriberZeroTriggersIdleCancelOnNewSession(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1501,7 +1501,7 @@ func TestSubscribeG2CleansUpCreatedSessionOnCanceledContext(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("G"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -1535,7 +1535,7 @@ func TestSubscribeG2CleansUpCreatedSessionOnCanceledContext(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1607,7 +1607,7 @@ func TestSubscribeG3CleansUpSubscriberOnCanceledContextAfterAdd(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1719,7 +1719,7 @@ func TestGetOrCreateSessionG7CanceledContextDuringCreateWait(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -1792,7 +1792,7 @@ func TestSessionManagerTriggerRecovery(t *testing.T) {
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("R"), mpegTSPacketSize)
 		for i := 0; i < 1200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -1826,7 +1826,7 @@ func TestSessionManagerTriggerRecovery(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             800 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		StallPolicy:                stallPolicyRestartSame,
@@ -2161,14 +2161,14 @@ func waitForSourceReadPauseInProgress(t *testing.T) {
 
 func sourceReadPauseMetricDelta(t *testing.T, reason string, before float64) float64 {
 	t.Helper()
-	return testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(reason)) - before
+	return testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(reason, playlistSourceMetricUnknown)) - before
 }
 
 func TestSharedRuntimeSessionRunCycleFinalizesSourceReadPauseOnContextCancel(t *testing.T) {
 	isolateStreamSourceReadPauseStatsForTest(t)
-	beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered))
-	beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit))
-	beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel))
+	beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered, playlistSourceMetricUnknown))
+	beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit, playlistSourceMetricUnknown))
+	beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel, playlistSourceMetricUnknown))
 
 	session, writer, pumpNowUnixNano, cancel, resultCh := startRunCyclePauseTestSession(t, 1)
 	defer cancel()
@@ -2219,9 +2219,9 @@ func TestSharedRuntimeSessionRunCycleFinalizesSourceReadPauseOnContextCancel(t *
 func TestSharedRuntimeSessionRunCycleSourceReadPauseStateMachine(t *testing.T) {
 	t.Run("pause closes when read gap recovers", func(t *testing.T) {
 		isolateStreamSourceReadPauseStatsForTest(t)
-		beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered))
-		beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit))
-		beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel))
+		beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered, playlistSourceMetricUnknown))
+		beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit, playlistSourceMetricUnknown))
+		beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel, playlistSourceMetricUnknown))
 
 		session, writer, pumpNowUnixNano, cancel, resultCh := startRunCyclePauseTestSession(t, 1)
 		defer cancel()
@@ -2265,9 +2265,9 @@ func TestSharedRuntimeSessionRunCycleSourceReadPauseStateMachine(t *testing.T) {
 
 	t.Run("pause closes when pump exits with error channel", func(t *testing.T) {
 		isolateStreamSourceReadPauseStatsForTest(t)
-		beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered))
-		beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit))
-		beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel))
+		beforeRecovered := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonRecovered, playlistSourceMetricUnknown))
+		beforePumpExit := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonPumpExit, playlistSourceMetricUnknown))
+		beforeContextCancel := testutil.ToFloat64(streamSourceReadPauseEventsMetric.WithLabelValues(sourceReadPauseReasonContextCancel, playlistSourceMetricUnknown))
 
 		session, writer, pumpNowUnixNano, cancel, resultCh := startRunCyclePauseTestSession(t, 1)
 		defer cancel()
@@ -2795,7 +2795,7 @@ func TestSessionManagerTriggerRecoveryRejectsIdleGraceSessionWithoutSubscribers(
 			case <-r.Context().Done():
 				return
 			case <-ticker.C:
-				if _, err := w.Write(payload); err != nil {
+				if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 					return
 				}
 				if flusher != nil {
@@ -2829,7 +2829,7 @@ func TestSessionManagerTriggerRecoveryRejectsIdleGraceSessionWithoutSubscribers(
 		Mode:                       "direct",
 		StartupTimeout:             800 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         400 * time.Millisecond,
@@ -3099,7 +3099,7 @@ func TestSessionManagerIdleGraceSessionSkipsStallRecoveryAndFailurePersistence(t
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("S"), mpegTSPacketSize)
-		if _, err := w.Write(payload); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -3132,7 +3132,7 @@ func TestSessionManagerIdleGraceSessionSkipsStallRecoveryAndFailurePersistence(t
 		Mode:                       "direct",
 		StartupTimeout:             600 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                50 * time.Millisecond,
@@ -3212,7 +3212,7 @@ func TestSessionManagerMidRecoveryDisconnectAbortsFailoverStartupWhenIdle(t *tes
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("P"), mpegTSPacketSize)
-		if _, err := w.Write(payload); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -3230,7 +3230,7 @@ func TestSessionManagerMidRecoveryDisconnectAbortsFailoverStartupWhenIdle(t *tes
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("A"), mpegTSPacketSize)
-		if _, err := w.Write(payload); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -3271,7 +3271,7 @@ func TestSessionManagerMidRecoveryDisconnectAbortsFailoverStartupWhenIdle(t *tes
 		Mode:                       "direct",
 		StartupTimeout:             400 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                45 * time.Millisecond,
@@ -3333,7 +3333,7 @@ func TestSessionManagerMidRecoveryDisconnectAbortsRestartSameRetryLoop(t *testin
 		flusher, _ := w.(http.Flusher)
 		if attempt == 1 {
 			payload := bytes.Repeat([]byte("R"), mpegTSPacketSize)
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -3367,7 +3367,7 @@ func TestSessionManagerMidRecoveryDisconnectAbortsRestartSameRetryLoop(t *testin
 		Mode:                       "direct",
 		StartupTimeout:             120 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                40 * time.Millisecond,
@@ -3474,7 +3474,7 @@ func TestStartRecoverySourceFailoverAlternateHonorsAttemptContextDeadline(t *tes
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                50 * time.Millisecond,
@@ -3575,7 +3575,7 @@ func TestStartCurrentSourceWithBackoffCancelsInflightStartupWhenRecoveryGoesIdle
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                45 * time.Millisecond,
@@ -3687,7 +3687,7 @@ func TestStartCurrentSourceWithBackoffIgnoresIdleCanceledAlternatePenaltyAfterRe
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                45 * time.Millisecond,
@@ -3822,7 +3822,7 @@ func TestStartCurrentSourceWithBackoffRecordsPenaltyForTrueAlternateStartupFailu
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             300 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                45 * time.Millisecond,
@@ -3900,7 +3900,7 @@ func TestStartSourceWithCandidatesIgnoresIdleCanceledAlternatePenaltyAfterReatta
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                45 * time.Millisecond,
@@ -4025,7 +4025,7 @@ func TestStartSourceWithCandidatesIgnoresIdleCanceledAlternatePenaltyAfterReatta
 
 func TestSessionManagerThirdClientOnSharedChannelDoesNotEOFExistingClientWhenOtherTunerActive(t *testing.T) {
 	newUpstream := func(payload byte) *httptest.Server {
-		chunk := bytes.Repeat([]byte{payload}, mpegTSPacketSize)
+		chunk := testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte{payload}, mpegTSPacketSize))
 		return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			flusher, _ := w.(http.Flusher)
@@ -4203,14 +4203,20 @@ func TestSessionManagerThirdClientOnSharedChannelDoesNotEOFExistingClientWhenOth
 
 func TestSessionManagerThirdClientOnSharedChannelDoesNotEOFExistingClientWhenOtherTunerActiveFFmpeg(t *testing.T) {
 	tmp := t.TempDir()
-	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-constant-stream.sh", `#!/usr/bin/env bash
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-constant-stream.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
-chunk="$(printf '%188s' '' | tr ' ' S)"
+video_audio=%q
+cat "$video_audio"
+chunk="$(printf '%%188s' '' | tr ' ' S)"
 while true; do
-  printf '%s' "$chunk"
+  printf '%%s' "$chunk"
   sleep 0.01
 done
-`)
+`, videoAudioPath))
 
 	provider := &fakeChannelsProvider{
 		channelsByGuide: map[string]channels.Channel{
@@ -4375,7 +4381,7 @@ func TestSessionManagerPreemptsIdleGraceSessionWhenPoolIsFull(t *testing.T) {
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 800; i++ {
-			if _, err := w.Write([]byte("x")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("x")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -4431,7 +4437,7 @@ func TestSessionManagerPreemptsIdleGraceSessionWhenPoolIsFull(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             750 * time.Millisecond,
 		FailoverTotalTimeout:       1500 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         750 * time.Millisecond,
@@ -4504,7 +4510,7 @@ func TestSessionManagerFailoverRetrySettleDelayWhenPoolIsFull(t *testing.T) {
 		payload := bytes.Repeat([]byte("G"), mpegTSPacketSize)
 
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -4562,7 +4568,7 @@ func TestSessionManagerFailoverRetrySettleDelayWhenPoolIsFull(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -4645,7 +4651,7 @@ func TestSessionManagerFailoverRetrySettleDelayWhenPoolRecentlyDroppedFromFull(t
 		payload := bytes.Repeat([]byte("H"), mpegTSPacketSize)
 
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -4704,7 +4710,7 @@ func TestSessionManagerFailoverRetrySettleDelayWhenPoolRecentlyDroppedFromFull(t
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -4753,7 +4759,7 @@ func TestSessionManagerRapidRetunePreemptionKeepsOtherTunerFlowing(t *testing.T)
 		ticker := time.NewTicker(15 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 1200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -4797,7 +4803,7 @@ func TestSessionManagerRapidRetunePreemptionKeepsOtherTunerFlowing(t *testing.T)
 		Mode:                       "direct",
 		StartupTimeout:             1 * time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         750 * time.Millisecond,
@@ -4854,14 +4860,20 @@ func TestSessionManagerRapidRetunePreemptionKeepsOtherTunerFlowing(t *testing.T)
 
 func TestSessionManagerRapidRetunePreemptionKeepsOtherTunerFlowingFFmpeg(t *testing.T) {
 	tmp := t.TempDir()
-	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-constant-stream.sh", `#!/usr/bin/env bash
+	videoAudioPath := filepath.Join(tmp, "video_audio.ts")
+	if err := os.WriteFile(videoAudioPath, startupTestProbeWithPMTStreams(0x1B, 0x0F), 0o644); err != nil {
+		t.Fatalf("WriteFile(videoAudioPath) error = %v", err)
+	}
+	ffmpegPath := writeExecutable(t, tmp, "ffmpeg-constant-stream.sh", fmt.Sprintf(`#!/usr/bin/env bash
 set -euo pipefail
-chunk="$(printf '%188s' '' | tr ' ' S)"
+video_audio=%q
+cat "$video_audio"
+chunk="$(printf '%%188s' '' | tr ' ' S)"
 while true; do
-  printf '%s' "$chunk"
+  printf '%%s' "$chunk"
   sleep 0.01
 done
-`)
+`, videoAudioPath))
 
 	channelsByGuide := make(map[string]channels.Channel)
 	sourcesByID := make(map[int64][]channels.Source)
@@ -4897,7 +4909,7 @@ done
 		FFmpegPath:                 ffmpegPath,
 		StartupTimeout:             800 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         750 * time.Millisecond,
@@ -4962,7 +4974,7 @@ func TestSessionManagerCanceledSubscribeBeforeReadyReleasesTuner(t *testing.T) {
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 1000; i++ {
-			if _, err := w.Write([]byte("z")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("z")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -4996,7 +5008,7 @@ func TestSessionManagerCanceledSubscribeBeforeReadyReleasesTuner(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             2 * time.Second,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         100 * time.Millisecond,
@@ -5023,7 +5035,7 @@ func TestSessionManagerFollowerSurvivesCreateLeaderAcquireCancellation(t *testin
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("c"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -5073,7 +5085,7 @@ func TestSessionManagerFollowerSurvivesCreateLeaderAcquireCancellation(t *testin
 		Mode:                       "direct",
 		StartupTimeout:             600 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -5123,7 +5135,7 @@ func TestSessionManagerFollowerRetryIsBoundedByOwnContextAfterCreateLeaderCancel
 		flusher, _ := w.(http.Flusher)
 		payload := bytes.Repeat([]byte("r"), mpegTSPacketSize)
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -5173,7 +5185,7 @@ func TestSessionManagerFollowerRetryIsBoundedByOwnContextAfterCreateLeaderCancel
 		Mode:                       "direct",
 		StartupTimeout:             600 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         80 * time.Millisecond,
@@ -5225,7 +5237,7 @@ func TestSessionManagerImmediateCloseBeforeReadySkipsIdleGrace(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		time.Sleep(500 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("late-start"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("late-start"))
 	}))
 	defer upstream.Close()
 
@@ -5252,7 +5264,7 @@ func TestSessionManagerImmediateCloseBeforeReadySkipsIdleGrace(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             2 * time.Second,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         5 * time.Second,
@@ -5276,7 +5288,7 @@ func TestSessionManagerStallRecoveryRetriesCurrentSource(t *testing.T) {
 	stalling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		if _, err := w.Write([]byte("A")); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureText("A")); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -5289,11 +5301,16 @@ func TestSessionManagerStallRecoveryRetriesCurrentSource(t *testing.T) {
 	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
+		startupChunk := testVideoAudioStartupFixtureText("B")
 
 		ticker := time.NewTicker(20 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write([]byte("B")); err != nil {
+			chunk := []byte("B")
+			if i == 0 {
+				chunk = startupChunk
+			}
+			if _, err := w.Write(chunk); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -5335,7 +5352,7 @@ func TestSessionManagerStallRecoveryRetriesCurrentSource(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             300 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                100 * time.Millisecond,
@@ -5343,7 +5360,7 @@ func TestSessionManagerStallRecoveryRetriesCurrentSource(t *testing.T) {
 		StallPolicy:                stallPolicyRestartSame,
 		StallMaxFailoversPerStall:  1,
 		SessionIdleTimeout:         50 * time.Millisecond,
-		SubscriberJoinLagBytes:     1,
+		SubscriberJoinLagBytes:     4096,
 	}, pool, provider)
 	if manager == nil {
 		t.Fatal("manager is nil")
@@ -5360,7 +5377,7 @@ func TestSessionManagerStallRecoveryRetriesCurrentSource(t *testing.T) {
 
 	writer := &recordingResponseWriter{
 		onWrite: func(totalBytes int) {
-			if totalBytes >= 20 {
+			if totalBytes >= 900 {
 				cancel()
 			}
 		},
@@ -5404,7 +5421,7 @@ func TestSessionManagerSourceEOFRecoverySingleCandidateIsPacedAndCoalesced(t *te
 
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		if _, err := w.Write([]byte("A")); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureText("A")); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -5436,7 +5453,7 @@ func TestSessionManagerSourceEOFRecoverySingleCandidateIsPacedAndCoalesced(t *te
 		Logger:                     logger,
 		StartupTimeout:             250 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                120 * time.Millisecond,
@@ -5505,7 +5522,7 @@ func TestSessionManagerHeartbeatDuringRecoveryKeepsDataFlow(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 			flusher, _ := w.(http.Flusher)
 			payload := bytes.Repeat([]byte("A"), mpegTSPacketSize)
-			_, _ = w.Write(payload)
+			_, _ = w.Write(testVideoAudioStartupFixtureChunk(payload))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -5520,7 +5537,7 @@ func TestSessionManagerHeartbeatDuringRecoveryKeepsDataFlow(t *testing.T) {
 			flusher, _ := w.(http.Flusher)
 			payload := bytes.Repeat([]byte("A"), mpegTSPacketSize)
 			for i := 0; i < 60; i++ {
-				if _, err := w.Write(payload); err != nil {
+				if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 					return
 				}
 				if flusher != nil {
@@ -5554,7 +5571,7 @@ func TestSessionManagerHeartbeatDuringRecoveryKeepsDataFlow(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             1200 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		StallDetect:                120 * time.Millisecond,
@@ -5611,7 +5628,7 @@ func TestSessionManagerTerminalRecoveryFailureSuppressesKeepaliveToLiveBoundary(
 			w.WriteHeader(http.StatusOK)
 			flusher, _ := w.(http.Flusher)
 			payload := bytes.Repeat([]byte("A"), mpegTSPacketSize)
-			_, _ = w.Write(payload)
+			_, _ = w.Write(testVideoAudioStartupFixtureChunk(payload))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -5645,7 +5662,7 @@ func TestSessionManagerTerminalRecoveryFailureSuppressesKeepaliveToLiveBoundary(
 		Mode:                       "direct",
 		StartupTimeout:             200 * time.Millisecond,
 		FailoverTotalTimeout:       250 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           mpegTSPacketSize,
 		BufferPublishFlushInterval: 15 * time.Millisecond,
 		StallDetect:                100 * time.Millisecond,
@@ -7377,7 +7394,7 @@ func TestSharedSessionFinishCancelsSourceHealthPersistWorker(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -7441,7 +7458,7 @@ func TestSharedSessionSourceHealthQueueOverflowPreservesLatestPerSourceOverlay(t
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -7547,7 +7564,7 @@ func TestSharedSessionSourceHealthQueueDrainPersistsLatestCoalescedEvent(t *test
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -7673,7 +7690,7 @@ func TestDrainSourceHealthPersistQueueWithTimeoutBranches(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             500 * time.Millisecond,
 			FailoverTotalTimeout:       time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           188,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         50 * time.Millisecond,
@@ -7859,7 +7876,7 @@ func TestDropSourceHealthPersistHelpers(t *testing.T) {
 			Mode:                       "direct",
 			StartupTimeout:             500 * time.Millisecond,
 			FailoverTotalTimeout:       time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           188,
 			BufferPublishFlushInterval: 20 * time.Millisecond,
 			SessionIdleTimeout:         50 * time.Millisecond,
@@ -8001,7 +8018,7 @@ func TestPersistSourceHealthSkipsStaleQueuedEventAfterChannelClear(t *testing.T)
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8089,7 +8106,7 @@ func TestPersistSourceHealthSkipsStaleCoalescedEventsAfterAllClear(t *testing.T)
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8163,7 +8180,7 @@ func TestPersistSourceHealthRetriesTransientFailureThenSucceeds(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8231,7 +8248,7 @@ func TestPersistSourceHealthDropsAfterMaxRetries(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8292,7 +8309,7 @@ func TestPostCancelSourceHealthEventNotStaged(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8346,7 +8363,7 @@ func TestEnqueueSourceHealthPersistDropsAfterWorkerDone(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8412,7 +8429,7 @@ func TestPersistSourceHealthDropsOnErrSourceNotFound(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8485,7 +8502,7 @@ func TestPersistSourceHealthRetryExitsOnContextCancel(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 20 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -8561,7 +8578,7 @@ func TestSessionManagerBurstGapFixtureAvoidsWatchdogTimeout(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 120; i++ {
-			if _, err := w.Write([]byte("B")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("B")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -8602,7 +8619,7 @@ func TestSessionManagerBurstGapFixtureAvoidsWatchdogTimeout(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             1 * time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                120 * time.Millisecond,
@@ -8636,7 +8653,7 @@ func TestSessionManagerPacedSourcePassesChannelsStyleWatchdog(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 220; i++ {
-			if _, err := w.Write([]byte("P")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("P")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -8669,7 +8686,7 @@ func TestSessionManagerPacedSourcePassesChannelsStyleWatchdog(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             1 * time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                3 * time.Second,
@@ -8844,7 +8861,7 @@ func TestSessionManagerSyntheticSlowSubscriberSkipPolicyIntegration(t *testing.T
 		ticker := time.NewTicker(time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 5000; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -8987,7 +9004,7 @@ func TestSessionManagerSyntheticSlowSubscriberDisconnectPolicyIntegration(t *tes
 		ticker := time.NewTicker(time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 5000; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -9495,63 +9512,69 @@ func TestSessionSubscriptionReturnsNonGracefulRingCloseError(t *testing.T) {
 	}
 }
 
-func TestWriteChunkFailsFastWhenWriteDeadlineCannotBeApplied(t *testing.T) {
-	deadlineErr := errors.New("deadline setup failed")
-	type writeDeadlineTestWriter interface {
-		http.ResponseWriter
-		WriteCalls() int
-	}
-	testCases := []struct {
-		name             string
-		writer           writeDeadlineTestWriter
-		expectErrMatcher func(error) bool
-	}{
-		{
-			name:   "deadline_unsupported",
-			writer: newBlockingWriteResponseWriter(300 * time.Millisecond),
-			expectErrMatcher: func(err error) bool {
-				return errors.Is(err, http.ErrNotSupported)
-			},
-		},
-		{
-			name: "deadline_setup_failure",
-			writer: &failingWriteDeadlineResponseWriter{
-				blockingWriteResponseWriter: newBlockingWriteResponseWriter(300 * time.Millisecond),
-				err:                         deadlineErr,
-			},
-			expectErrMatcher: func(err error) bool {
-				return errors.Is(err, deadlineErr)
-			},
-		},
-	}
+func TestWriteChunkHandlesWriteDeadlineSetupOutcomes(t *testing.T) {
+	t.Run("deadline_unsupported_falls_back_to_write", func(t *testing.T) {
+		writer := newBlockingWriteResponseWriter(120 * time.Millisecond)
+		controller := http.NewResponseController(writer)
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			controller := http.NewResponseController(tc.writer)
-			started := time.Now()
-			sample, err := writeChunk(tc.writer, controller, []byte("payload"), 25*time.Millisecond)
-			elapsed := time.Since(started)
+		started := time.Now()
+		sample, err := writeChunk(writer, controller, []byte("payload"), 25*time.Millisecond)
+		elapsed := time.Since(started)
 
-			if err == nil {
-				t.Fatal("writeChunk() error = nil, want deadline setup failure")
-			}
-			if !tc.expectErrMatcher(err) {
-				t.Fatalf("writeChunk() error = %v, want expected deadline setup error", err)
-			}
-			if got := tc.writer.WriteCalls(); got != 0 {
-				t.Fatalf("write calls = %d, want 0 when deadline setup fails", got)
-			}
-			if sample.DeadlineTimeout {
-				t.Fatalf("sample.deadline_timeout = true, want false for setup failure err=%v", err)
-			}
-			if sample.ShortWrite {
-				t.Fatalf("sample.short_write = true, want false for setup failure err=%v", err)
-			}
-			if elapsed >= 150*time.Millisecond {
-				t.Fatalf("writeChunk() elapsed = %s, want fast-fail under 150ms", elapsed)
-			}
-		})
-	}
+		if err != nil {
+			t.Fatalf("writeChunk() error = %v, want nil on unsupported deadline fallback", err)
+		}
+		if got := writer.WriteCalls(); got != 1 {
+			t.Fatalf("write calls = %d, want 1 when falling back without deadline support", got)
+		}
+		if !sample.DeadlineUnsupported {
+			t.Fatalf("sample.deadline_unsupported = %t, want true", sample.DeadlineUnsupported)
+		}
+		if sample.DeadlineTimeout {
+			t.Fatalf("sample.deadline_timeout = %t, want false", sample.DeadlineTimeout)
+		}
+		if sample.ShortWrite {
+			t.Fatalf("sample.short_write = %t, want false", sample.ShortWrite)
+		}
+		if sample.BlockedDuration == 0 {
+			t.Fatalf("sample.blocked_duration = %d, want > 0", sample.BlockedDuration)
+		}
+		if elapsed < 100*time.Millisecond {
+			t.Fatalf("writeChunk() elapsed = %s, want write-path fallback (>=100ms)", elapsed)
+		}
+	})
+
+	t.Run("deadline_setup_failure_returns_error", func(t *testing.T) {
+		deadlineErr := errors.New("deadline setup failed")
+		writer := &failingWriteDeadlineResponseWriter{
+			blockingWriteResponseWriter: newBlockingWriteResponseWriter(300 * time.Millisecond),
+			err:                         deadlineErr,
+		}
+		controller := http.NewResponseController(writer)
+
+		started := time.Now()
+		sample, err := writeChunk(writer, controller, []byte("payload"), 25*time.Millisecond)
+		elapsed := time.Since(started)
+
+		if !errors.Is(err, deadlineErr) {
+			t.Fatalf("writeChunk() error = %v, want %v", err, deadlineErr)
+		}
+		if got := writer.WriteCalls(); got != 0 {
+			t.Fatalf("write calls = %d, want 0 when deadline setup fails", got)
+		}
+		if sample.DeadlineUnsupported {
+			t.Fatalf("sample.deadline_unsupported = %t, want false for setup failure", sample.DeadlineUnsupported)
+		}
+		if sample.DeadlineTimeout {
+			t.Fatalf("sample.deadline_timeout = %t, want false for setup failure", sample.DeadlineTimeout)
+		}
+		if sample.ShortWrite {
+			t.Fatalf("sample.short_write = %t, want false for setup failure", sample.ShortWrite)
+		}
+		if elapsed >= 150*time.Millisecond {
+			t.Fatalf("writeChunk() elapsed = %s, want fast-fail under 150ms", elapsed)
+		}
+	})
 }
 
 func TestIsWriteDeadlineTimeout(t *testing.T) {
@@ -9775,9 +9798,12 @@ func TestWriteChunkPathCoverage(t *testing.T) {
 	})
 }
 
-func TestSessionSubscriptionDeadlineUnsupportedRemovesSubscriberWithoutBlockingWrite(t *testing.T) {
+func TestSessionSubscriptionDeadlineUnsupportedFallsBackAndRecordsTelemetry(t *testing.T) {
+	isolateStreamSubscriberWriteStatsForTest(t)
+
 	ring := NewChunkRing(4)
 	_ = ring.PublishChunk([]byte("chunk"), time.Now())
+	ring.Close(nil)
 
 	subscriberID := uint64(7)
 	connectedAt := time.Now().UTC().Add(-500 * time.Millisecond)
@@ -9818,18 +9844,17 @@ func TestSessionSubscriptionDeadlineUnsupportedRemovesSubscriberWithoutBlockingW
 	started := time.Now()
 	err := sub.Stream(context.Background(), writer)
 	elapsed := time.Since(started)
-	if !errors.Is(err, http.ErrNotSupported) {
-		t.Fatalf("Stream() error = %v, want http.ErrNotSupported", err)
+	if err != nil {
+		t.Fatalf("Stream() error = %v, want nil with unsupported deadline fallback", err)
 	}
-	if got := writer.WriteCalls(); got != 0 {
-		t.Fatalf("write calls = %d, want 0 when deadline setup is unsupported", got)
+	if got := writer.WriteCalls(); got != 1 {
+		t.Fatalf("write calls = %d, want 1 when deadline setup is unsupported fallback", got)
 	}
-	if elapsed >= 150*time.Millisecond {
-		t.Fatalf("Stream() elapsed = %s, want fast-fail under 150ms", elapsed)
+	if elapsed < 200*time.Millisecond {
+		t.Fatalf("Stream() elapsed = %s, want fallback write path delay >=200ms", elapsed)
 	}
 
 	session.mu.Lock()
-	defer session.mu.Unlock()
 	if got := len(session.subscribers); got != 0 {
 		t.Fatalf("subscribers after stream error = %d, want 0", got)
 	}
@@ -9837,10 +9862,36 @@ func TestSessionSubscriptionDeadlineUnsupportedRemovesSubscriberWithoutBlockingW
 		t.Fatalf("history subscriber entries = %d, want 1", got)
 	}
 	if session.historySubscribers[0].ClosedAt.IsZero() {
-		t.Fatal("history subscriber closed_at is zero, want stream-write-error close timestamp")
+		t.Fatal("history subscriber closed_at is zero, want closure timestamp")
 	}
-	if got, want := session.historySubscribers[0].CloseReason, subscriberRemovalReasonStreamWriteError; got != want {
+	if got, want := session.historySubscribers[0].CloseReason, subscriberRemovalReasonSessionClosed; got != want {
 		t.Fatalf("history subscriber close_reason = %q, want %q", got, want)
+	}
+	session.mu.Unlock()
+
+	stats := session.stats()
+	if got := stats.SubscriberWriteDeadlineUnsupportedTotal; got != 1 {
+		t.Fatalf("subscriber_write_deadline_unsupported_total = %d, want 1", got)
+	}
+	if got := stats.SubscriberWriteDeadlineTimeoutsTotal; got != 0 {
+		t.Fatalf("subscriber_write_deadline_timeouts_total = %d, want 0", got)
+	}
+	if got := stats.SubscriberWriteShortWritesTotal; got != 0 {
+		t.Fatalf("subscriber_write_short_writes_total = %d, want 0", got)
+	}
+	if got := stats.SubscriberWriteBlockedDurationUS; got == 0 {
+		t.Fatalf("subscriber_write_blocked_duration_us = %d, want > 0", got)
+	}
+
+	global := streamSubscriberWriteStatsSnapshot()
+	if got := global.DeadlineUnsupported; got != 1 {
+		t.Fatalf("global subscriber write deadline unsupported = %d, want 1", got)
+	}
+	if got := global.DeadlineTimeouts; got != 0 {
+		t.Fatalf("global subscriber write deadline timeouts = %d, want 0", got)
+	}
+	if got := global.ShortWrites; got != 0 {
+		t.Fatalf("global subscriber write short writes = %d, want 0", got)
 	}
 }
 
@@ -9871,6 +9922,9 @@ func TestSessionSubscriptionWriteDeadlineTimeoutTelemetry(t *testing.T) {
 	}
 
 	stats := sub.session.stats()
+	if got := stats.SubscriberWriteDeadlineUnsupportedTotal; got != 0 {
+		t.Fatalf("subscriber_write_deadline_unsupported_total = %d, want 0", got)
+	}
 	if got := stats.SubscriberWriteDeadlineTimeoutsTotal; got != 1 {
 		t.Fatalf("subscriber_write_deadline_timeouts_total = %d, want 1", got)
 	}
@@ -9885,6 +9939,9 @@ func TestSessionSubscriptionWriteDeadlineTimeoutTelemetry(t *testing.T) {
 	}
 
 	global := streamSubscriberWriteStatsSnapshot()
+	if got := global.DeadlineUnsupported; got != 0 {
+		t.Fatalf("global subscriber write deadline unsupported = %d, want 0", got)
+	}
 	if got := global.DeadlineTimeouts; got != 1 {
 		t.Fatalf("global subscriber write deadline timeouts = %d, want 1", got)
 	}
@@ -9923,6 +9980,9 @@ func TestSessionSubscriptionShortWriteTelemetry(t *testing.T) {
 	}
 
 	stats := sub.session.stats()
+	if got := stats.SubscriberWriteDeadlineUnsupportedTotal; got != 0 {
+		t.Fatalf("subscriber_write_deadline_unsupported_total = %d, want 0", got)
+	}
 	if got := stats.SubscriberWriteDeadlineTimeoutsTotal; got != 0 {
 		t.Fatalf("subscriber_write_deadline_timeouts_total = %d, want 0", got)
 	}
@@ -9934,6 +9994,9 @@ func TestSessionSubscriptionShortWriteTelemetry(t *testing.T) {
 	}
 
 	global := streamSubscriberWriteStatsSnapshot()
+	if got := global.DeadlineUnsupported; got != 0 {
+		t.Fatalf("global subscriber write deadline unsupported = %d, want 0", got)
+	}
 	if got := global.DeadlineTimeouts; got != 0 {
 		t.Fatalf("global subscriber write deadline timeouts = %d, want 0", got)
 	}
@@ -9948,10 +10011,10 @@ func TestSessionSubscriptionShortWriteTelemetry(t *testing.T) {
 func TestRecordStreamSourceReadPauseTelemetry(t *testing.T) {
 	isolateStreamSourceReadPauseStatsForTest(t)
 
-	recordStreamSourceReadPauseTelemetry(sourceReadPauseReasonRecovered, 1500*time.Millisecond)
-	recordStreamSourceReadPauseTelemetry(sourceReadPauseReasonPumpExit, 500*time.Millisecond)
-	recordStreamSourceReadPauseTelemetry(sourceReadPauseReasonContextCancel, 0)
-	recordStreamSourceReadPauseTelemetry("unknown", -250*time.Millisecond)
+	recordStreamSourceReadPauseTelemetry(playlistSourceMetricUnknown, sourceReadPauseReasonRecovered, 1500*time.Millisecond)
+	recordStreamSourceReadPauseTelemetry(playlistSourceMetricUnknown, sourceReadPauseReasonPumpExit, 500*time.Millisecond)
+	recordStreamSourceReadPauseTelemetry(playlistSourceMetricUnknown, sourceReadPauseReasonContextCancel, 0)
+	recordStreamSourceReadPauseTelemetry(playlistSourceMetricUnknown, "unknown", -250*time.Millisecond)
 
 	stats := streamSourceReadPauseStatsSnapshot()
 	if got, want := stats.Events, uint64(2); got != want {
@@ -9981,7 +10044,7 @@ func TestSessionManagerAppliesProviderOverlimitCooldownAfter429(t *testing.T) {
 			http.Error(w, "over limit", http.StatusTooManyRequests)
 		case "/healthy":
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -10021,7 +10084,7 @@ func TestSessionManagerAppliesProviderOverlimitCooldownAfter429(t *testing.T) {
 		StartupTimeout:             800 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
 		UpstreamOverlimitCooldown:  220 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10065,7 +10128,7 @@ func TestSessionManagerProviderOverlimitCooldownDoesNotBlockOtherScopes(t *testi
 
 	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer healthy.Close()
 
@@ -10101,7 +10164,7 @@ func TestSessionManagerProviderOverlimitCooldownDoesNotBlockOtherScopes(t *testi
 		StartupTimeout:             800 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
 		UpstreamOverlimitCooldown:  220 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10134,7 +10197,7 @@ func TestStartSourceWithCandidatesDeadlineCooldownBudgetExhaustedSkipsDirectStar
 		hitsMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer upstream.Close()
 
@@ -10144,7 +10207,7 @@ func TestStartSourceWithCandidatesDeadlineCooldownBudgetExhaustedSkipsDirectStar
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       2 * time.Second,
 		UpstreamOverlimitCooldown:  400 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10216,6 +10279,86 @@ func TestStartSourceWithCandidatesDeadlineCooldownBudgetExhaustedSkipsDirectStar
 	}
 }
 
+func TestStartSourceWithCandidatesWaitsProviderCooldownBeforeLeaseAcquire(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "temporary unavailable", http.StatusNotFound)
+	}))
+	defer upstream.Close()
+
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "direct",
+		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
+		StartupTimeout:             700 * time.Millisecond,
+		FailoverTotalTimeout:       2 * time.Second,
+		UpstreamOverlimitCooldown:  320 * time.Millisecond,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
+		BufferChunkBytes:           1,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+		SessionIdleTimeout:         50 * time.Millisecond,
+	}, NewPool(1), &fakeChannelsProvider{})
+	if manager == nil {
+		t.Fatal("manager is nil")
+	}
+
+	session := &sharedRuntimeSession{
+		manager: manager,
+		channel: channels.Channel{
+			ChannelID:   1,
+			GuideNumber: "101",
+			GuideName:   "News",
+			Enabled:     true,
+		},
+		ctx:         context.Background(),
+		cancel:      func() {},
+		readyCh:     make(chan struct{}),
+		subscribers: map[uint64]SubscriberStats{1: {SubscriberID: 1}},
+		startedAt:   time.Now().UTC(),
+	}
+
+	source := channels.Source{
+		SourceID:           10,
+		ChannelID:          1,
+		ItemKey:            "src:news:primary",
+		StreamURL:          upstream.URL,
+		PlaylistSourceID:   1,
+		PlaylistSourceName: "Primary",
+		PriorityIndex:      0,
+		Enabled:            true,
+	}
+	manager.armProviderOverlimitCooldownForSource(
+		http.StatusTooManyRequests,
+		"upstream returned status 429",
+		source.SourceID,
+		source.StreamURL,
+	)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		reader, _, err := session.startSourceWithCandidates(
+			context.Background(),
+			[]channels.Source{source},
+			550*time.Millisecond,
+			"initial_startup",
+			0,
+			"",
+		)
+		if reader != nil {
+			_ = reader.Close()
+		}
+		resultCh <- err
+	}()
+
+	time.Sleep(120 * time.Millisecond)
+	if got, want := manager.tuners.InUseCount(), 0; got != want {
+		t.Fatalf("manager.tuners.InUseCount() during provider cooldown wait = %d, want %d", got, want)
+	}
+
+	err := <-resultCh
+	if err == nil {
+		t.Fatal("startSourceWithCandidates() error = nil, want startup failure after provider cooldown window")
+	}
+}
+
 func TestStartCurrentSourceWithBackoffDeadlineCooldownBudgetExhaustedSkipsFFmpegStartupAttempt(t *testing.T) {
 	tmp := t.TempDir()
 	ffmpegInvocationsPath := filepath.Join(tmp, "ffmpeg-invocations.log")
@@ -10233,7 +10376,7 @@ exit 1
 		FailoverTotalTimeout:       2 * time.Second,
 		UpstreamOverlimitCooldown:  400 * time.Millisecond,
 		StallMaxFailoversPerStall:  0,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10337,7 +10480,7 @@ func TestSessionManagerRetriesOverlimitStartupPassBeforeDeadline(t *testing.T) {
 		}
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer flaky.Close()
 
@@ -10374,7 +10517,7 @@ func TestSessionManagerRetriesOverlimitStartupPassBeforeDeadline(t *testing.T) {
 		FailoverTotalTimeout:       2200 * time.Millisecond,
 		UpstreamOverlimitCooldown:  120 * time.Millisecond,
 		MaxFailovers:               1,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10437,7 +10580,7 @@ func TestSessionManagerDoesNotRetryOverlimitStartupPassOn404(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer flaky.Close()
 
@@ -10474,7 +10617,7 @@ func TestSessionManagerDoesNotRetryOverlimitStartupPassOn404(t *testing.T) {
 		FailoverTotalTimeout:       2200 * time.Millisecond,
 		UpstreamOverlimitCooldown:  120 * time.Millisecond,
 		MaxFailovers:               1,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10524,7 +10667,7 @@ func TestSessionManagerArmProviderOverlimitCooldownOnlyFor429(t *testing.T) {
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  200 * time.Millisecond,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -10550,7 +10693,7 @@ func TestSessionManagerProviderOverlimitCooldownClearIsScopeLocal(t *testing.T) 
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  350 * time.Millisecond,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -10587,7 +10730,7 @@ func TestSessionManagerProviderOverlimitCooldownScopeStateBounded(t *testing.T) 
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  2 * time.Second,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -10624,7 +10767,7 @@ func TestSessionManagerProviderOverlimitCooldownScopeStatePreservesActiveScopeUn
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  350 * time.Millisecond,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -10683,7 +10826,7 @@ func TestSessionManagerWaitForProviderOverlimitCooldownForSourceHonorsActiveScop
 		Mode:                       "direct",
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  320 * time.Millisecond,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -10739,7 +10882,7 @@ func TestSessionManagerWaitForProviderOverlimitCooldownForSourceHonorsActiveScop
 func TestStartRecoverySourceSingleCandidateUsesSingleSourceLookup(t *testing.T) {
 	current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer current.Close()
 
@@ -10765,7 +10908,7 @@ func TestStartRecoverySourceSingleCandidateUsesSingleSourceLookup(t *testing.T) 
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10814,7 +10957,7 @@ func TestStartRecoverySourceSingleCandidateUsesSingleSourceLookup(t *testing.T) 
 func TestStartRecoverySourceSingleCandidateLegacyProviderFallsBackToListSources(t *testing.T) {
 	current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer current.Close()
 
@@ -10841,7 +10984,7 @@ func TestStartRecoverySourceSingleCandidateLegacyProviderFallsBackToListSources(
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         50 * time.Millisecond,
@@ -10992,7 +11135,7 @@ func BenchmarkLoadPersistedSourceCandidateLookup(b *testing.B) {
 			Mode:                       "direct",
 			StartupTimeout:             700 * time.Millisecond,
 			FailoverTotalTimeout:       3 * time.Second,
-			MinProbeBytes:              1,
+			MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 			BufferChunkBytes:           1,
 			BufferPublishFlushInterval: 10 * time.Millisecond,
 		}, NewPool(1), provider)
@@ -11070,7 +11213,7 @@ func TestStartRecoverySourceRetriesCurrentSourceWithBackoffOnly(t *testing.T) {
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer current.Close()
 
@@ -11084,7 +11227,7 @@ func TestStartRecoverySourceRetriesCurrentSourceWithBackoffOnly(t *testing.T) {
 		alternateMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("alt"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alt"))
 	}))
 	defer alternate.Close()
 
@@ -11118,7 +11261,7 @@ func TestStartRecoverySourceRetriesCurrentSourceWithBackoffOnly(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
 		StallPolicy:                stallPolicyRestartSame,
@@ -11221,7 +11364,7 @@ func TestStartRecoverySourceFailoverPolicyUsesAlternateCandidate(t *testing.T) {
 		alternateMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("alt"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alt"))
 	}))
 	defer alternate.Close()
 
@@ -11255,7 +11398,7 @@ func TestStartRecoverySourceFailoverPolicyUsesAlternateCandidate(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               1,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
@@ -11322,6 +11465,683 @@ func TestStartRecoverySourceFailoverPolicyUsesAlternateCandidate(t *testing.T) {
 	}
 }
 
+func TestStartRecoverySourceFailoverPolicyMigratesLeaseAcrossPlaylistSources(t *testing.T) {
+	current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "current source down", http.StatusServiceUnavailable)
+	}))
+	defer current.Close()
+
+	alternate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alt"))
+	}))
+	defer alternate.Close()
+
+	provider := &fakeChannelsProvider{
+		channelsByGuide: map[string]channels.Channel{
+			"101": {ChannelID: 1, GuideNumber: "101", GuideName: "News", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:             10,
+					ChannelID:            1,
+					ItemKey:              "src:news:current",
+					StreamURL:            current.URL,
+					PlaylistSourceID:     1,
+					PlaylistSourceName:   "Primary",
+					PlaylistSourceTuners: 1,
+					PriorityIndex:        0,
+					Enabled:              true,
+				},
+				{
+					SourceID:             11,
+					ChannelID:            1,
+					ItemKey:              "src:news:alternate",
+					StreamURL:            alternate.URL,
+					PlaylistSourceID:     2,
+					PlaylistSourceName:   "Backup",
+					PlaylistSourceTuners: 1,
+					PriorityIndex:        1,
+					Enabled:              true,
+				},
+			},
+		},
+	}
+
+	virtualTuners := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: true, OrderIndex: 1},
+	})
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "direct",
+		StartupTimeout:             700 * time.Millisecond,
+		FailoverTotalTimeout:       3 * time.Second,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
+		MaxFailovers:               1,
+		UpstreamOverlimitCooldown:  0,
+		StallHardDeadline:          1200 * time.Millisecond,
+		StallPolicy:                "failover_source",
+		StallMaxFailoversPerStall:  1,
+		BufferChunkBytes:           1,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+		SessionIdleTimeout:         50 * time.Millisecond,
+	}, virtualTuners, provider)
+	if manager == nil {
+		t.Fatal("manager is nil")
+	}
+
+	channel := provider.channelsByGuide["101"]
+	primaryLease, err := manager.tuners.AcquireClientForSource(
+		context.Background(),
+		1,
+		channel.GuideNumber,
+		"shared:"+channel.GuideNumber,
+	)
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(primary) error = %v", err)
+	}
+
+	session := &sharedRuntimeSession{
+		manager:     manager,
+		channel:     channel,
+		lease:       primaryLease,
+		ctx:         context.Background(),
+		cancel:      func() {},
+		readyCh:     make(chan struct{}),
+		subscribers: map[uint64]SubscriberStats{1: {SubscriberID: 1}},
+		startedAt:   time.Now().UTC(),
+	}
+
+	currentSource := channels.Source{
+		SourceID:             10,
+		ChannelID:            1,
+		ItemKey:              "src:news:current",
+		StreamURL:            current.URL,
+		PlaylistSourceID:     1,
+		PlaylistSourceName:   "Primary",
+		PlaylistSourceTuners: 1,
+		PriorityIndex:        0,
+		Enabled:              true,
+	}
+
+	reader, selected, err := session.startRecoverySource(context.Background(), currentSource, true, 2, "stall")
+	if err != nil {
+		t.Fatalf("startRecoverySource() error = %v", err)
+	}
+	defer reader.Close()
+	t.Cleanup(func() {
+		if session.lease != nil {
+			session.lease.Release()
+		}
+	})
+
+	if selected.SourceID != 11 {
+		t.Fatalf("selected source = %d, want 11 (alternate source)", selected.SourceID)
+	}
+	if session.lease == nil {
+		t.Fatal("session.lease is nil after recovery source selection")
+	}
+	if got := session.lease.PlaylistSourceID; got != 2 {
+		t.Fatalf("session lease playlist_source_id = %d, want 2", got)
+	}
+	if got := session.lease.PlaylistSourceName; got != "Backup" {
+		t.Fatalf("session lease playlist_source_name = %q, want Backup", got)
+	}
+
+	if got := virtualTuners.InUseCount(); got != 1 {
+		t.Fatalf("virtualTuners.InUseCount() = %d, want 1 (old source lease released)", got)
+	}
+
+	snapshot := virtualTuners.Snapshot()
+	if len(snapshot) != 1 {
+		t.Fatalf("len(virtualTuners.Snapshot()) = %d, want 1", len(snapshot))
+	}
+	if got := snapshot[0].PlaylistSourceID; got != 2 {
+		t.Fatalf("snapshot[0].playlist_source_id = %d, want 2", got)
+	}
+}
+
+func TestSessionManagerInitialLeasePlaylistSourceIDSkipsFullSourcePool(t *testing.T) {
+	provider := &fakeChannelsProvider{
+		channelsByGuide: map[string]channels.Channel{
+			"101": {ChannelID: 1, GuideNumber: "101", GuideName: "News", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:           10,
+					ChannelID:          1,
+					ItemKey:            "src:news:primary",
+					StreamURL:          "http://example.com/primary.ts",
+					PlaylistSourceID:   1,
+					PlaylistSourceName: "Primary",
+					PriorityIndex:      0,
+					Enabled:            true,
+				},
+				{
+					SourceID:           11,
+					ChannelID:          1,
+					ItemKey:            "src:news:backup",
+					StreamURL:          "http://example.com/backup.ts",
+					PlaylistSourceID:   2,
+					PlaylistSourceName: "Backup",
+					PriorityIndex:      1,
+					Enabled:            true,
+				},
+			},
+		},
+	}
+
+	virtualTuners := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: true, OrderIndex: 1},
+	})
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "direct",
+		StartupTimeout:             700 * time.Millisecond,
+		FailoverTotalTimeout:       2 * time.Second,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
+		BufferChunkBytes:           1,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+		SessionIdleTimeout:         50 * time.Millisecond,
+	}, virtualTuners, provider)
+
+	primaryLease, err := manager.tuners.AcquireClientForSource(
+		context.Background(),
+		1,
+		"101",
+		"busy-primary",
+	)
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(primary) error = %v", err)
+	}
+	defer primaryLease.Release()
+
+	channel := provider.channelsByGuide["101"]
+	if got, want := manager.initialLeasePlaylistSourceID(context.Background(), channel), int64(2); got != want {
+		t.Fatalf("initialLeasePlaylistSourceID() = %d, want %d", got, want)
+	}
+}
+
+func TestStartSourceWithCandidatesSkipsFullSourcePoolWithoutLeaseSwitch(t *testing.T) {
+	primaryHits := int64(0)
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt64(&primaryHits, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("primary"))
+	}))
+	defer primary.Close()
+
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("backup"))
+	}))
+	defer backup.Close()
+
+	provider := &fakeChannelsProvider{
+		channelsByGuide: map[string]channels.Channel{
+			"101": {ChannelID: 1, GuideNumber: "101", GuideName: "News", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:           10,
+					ChannelID:          1,
+					ItemKey:            "src:news:primary",
+					StreamURL:          primary.URL,
+					PlaylistSourceID:   1,
+					PlaylistSourceName: "Primary",
+					PriorityIndex:      0,
+					Enabled:            true,
+				},
+				{
+					SourceID:           11,
+					ChannelID:          1,
+					ItemKey:            "src:news:backup",
+					StreamURL:          backup.URL,
+					PlaylistSourceID:   2,
+					PlaylistSourceName: "Backup",
+					PriorityIndex:      1,
+					Enabled:            true,
+				},
+			},
+		},
+	}
+
+	virtualTuners := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: true, OrderIndex: 1},
+	})
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "direct",
+		StartupTimeout:             700 * time.Millisecond,
+		FailoverTotalTimeout:       2 * time.Second,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
+		BufferChunkBytes:           1,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+		SessionIdleTimeout:         50 * time.Millisecond,
+	}, virtualTuners, provider)
+
+	primaryBusyLease, err := manager.tuners.AcquireClientForSource(
+		context.Background(),
+		1,
+		"101",
+		"busy-primary",
+	)
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(primary busy lease) error = %v", err)
+	}
+	defer primaryBusyLease.Release()
+
+	backupLease, err := manager.tuners.AcquireClientForSource(
+		context.Background(),
+		2,
+		"101",
+		"shared:101",
+	)
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(backup lease) error = %v", err)
+	}
+
+	channel := provider.channelsByGuide["101"]
+	session := &sharedRuntimeSession{
+		manager:     manager,
+		channel:     channel,
+		lease:       backupLease,
+		ctx:         context.Background(),
+		cancel:      func() {},
+		readyCh:     make(chan struct{}),
+		subscribers: map[uint64]SubscriberStats{1: {SubscriberID: 1}},
+		startedAt:   time.Now().UTC(),
+	}
+	t.Cleanup(func() {
+		if session.lease != nil {
+			session.lease.Release()
+		}
+	})
+
+	originalLease := session.lease
+	reader, selected, err := session.startSourceWithCandidates(
+		context.Background(),
+		[]channels.Source{
+			{
+				SourceID:           10,
+				ChannelID:          1,
+				ItemKey:            "src:news:primary",
+				StreamURL:          primary.URL,
+				PlaylistSourceID:   1,
+				PlaylistSourceName: "Primary",
+				PriorityIndex:      0,
+				Enabled:            true,
+			},
+			{
+				SourceID:           11,
+				ChannelID:          1,
+				ItemKey:            "src:news:backup",
+				StreamURL:          backup.URL,
+				PlaylistSourceID:   2,
+				PlaylistSourceName: "Backup",
+				PriorityIndex:      1,
+				Enabled:            true,
+			},
+		},
+		2*time.Second,
+		"initial_startup",
+		0,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("startSourceWithCandidates() error = %v", err)
+	}
+	defer reader.Close()
+
+	if got, want := selected.SourceID, int64(11); got != want {
+		t.Fatalf("selected.SourceID = %d, want %d", got, want)
+	}
+	if session.lease != originalLease {
+		t.Fatalf("session lease pointer changed after skipping full pool; got %p want %p", session.lease, originalLease)
+	}
+	if got, want := atomic.LoadInt64(&primaryHits), int64(0); got != want {
+		t.Fatalf("primary source HTTP attempts = %d, want %d", got, want)
+	}
+}
+
+func TestStartSourceWithCandidatesPreemptsProbeInFullSourcePool(t *testing.T) {
+	primaryHits := int64(0)
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt64(&primaryHits, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("primary"))
+	}))
+	defer primary.Close()
+
+	backupHits := int64(0)
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt64(&backupHits, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("backup"))
+	}))
+	defer backup.Close()
+
+	provider := &fakeChannelsProvider{
+		channelsByGuide: map[string]channels.Channel{
+			"101": {ChannelID: 1, GuideNumber: "101", GuideName: "News", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:           11,
+					ChannelID:          1,
+					ItemKey:            "src:news:backup",
+					StreamURL:          backup.URL,
+					PlaylistSourceID:   2,
+					PlaylistSourceName: "Backup",
+					PriorityIndex:      0,
+					Enabled:            true,
+				},
+				{
+					SourceID:           10,
+					ChannelID:          1,
+					ItemKey:            "src:news:primary",
+					StreamURL:          primary.URL,
+					PlaylistSourceID:   1,
+					PlaylistSourceName: "Primary",
+					PriorityIndex:      1,
+					Enabled:            true,
+				},
+			},
+		},
+	}
+
+	virtualTuners := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: true, OrderIndex: 1},
+	})
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "direct",
+		StartupTimeout:             700 * time.Millisecond,
+		FailoverTotalTimeout:       2 * time.Second,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
+		BufferChunkBytes:           1,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+		SessionIdleTimeout:         50 * time.Millisecond,
+	}, virtualTuners, provider)
+
+	primaryLease, err := manager.tuners.AcquireClientForSource(
+		context.Background(),
+		1,
+		"101",
+		"shared:101",
+	)
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(primary lease) error = %v", err)
+	}
+
+	probeCtx, probeCancel := context.WithCancelCause(context.Background())
+	probeLease, err := manager.tuners.AcquireProbeForSource(
+		probeCtx,
+		2,
+		"probe:backup",
+		probeCancel,
+	)
+	if err != nil {
+		primaryLease.Release()
+		t.Fatalf("AcquireProbeForSource(backup probe lease) error = %v", err)
+	}
+	probeDone := make(chan struct{})
+	go func() {
+		<-probeCtx.Done()
+		probeLease.Release()
+		close(probeDone)
+	}()
+	t.Cleanup(func() {
+		probeCancel(nil)
+		select {
+		case <-probeDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("timed out waiting for probe lease cleanup")
+		}
+	})
+
+	channel := provider.channelsByGuide["101"]
+	session := &sharedRuntimeSession{
+		manager:     manager,
+		channel:     channel,
+		lease:       primaryLease,
+		ctx:         context.Background(),
+		cancel:      func() {},
+		readyCh:     make(chan struct{}),
+		subscribers: map[uint64]SubscriberStats{1: {SubscriberID: 1}},
+		startedAt:   time.Now().UTC(),
+	}
+	t.Cleanup(func() {
+		if session.lease != nil {
+			session.lease.Release()
+		}
+	})
+
+	reader, selected, err := session.startSourceWithCandidates(
+		context.Background(),
+		[]channels.Source{
+			{
+				SourceID:           11,
+				ChannelID:          1,
+				ItemKey:            "src:news:backup",
+				StreamURL:          backup.URL,
+				PlaylistSourceID:   2,
+				PlaylistSourceName: "Backup",
+				PriorityIndex:      0,
+				Enabled:            true,
+			},
+			{
+				SourceID:           10,
+				ChannelID:          1,
+				ItemKey:            "src:news:primary",
+				StreamURL:          primary.URL,
+				PlaylistSourceID:   1,
+				PlaylistSourceName: "Primary",
+				PriorityIndex:      1,
+				Enabled:            true,
+			},
+		},
+		2*time.Second,
+		"initial_startup",
+		0,
+		"",
+	)
+	if err != nil {
+		t.Fatalf("startSourceWithCandidates() error = %v", err)
+	}
+	defer reader.Close()
+
+	if got, want := selected.SourceID, int64(11); got != want {
+		t.Fatalf("selected source = %d, want %d after probe preemption", got, want)
+	}
+	if session.lease == nil {
+		t.Fatal("session lease is nil after source selection")
+	}
+	if got, want := session.lease.PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("session lease playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := atomic.LoadInt64(&backupHits), int64(1); got != want {
+		t.Fatalf("backup source HTTP attempts = %d, want %d", got, want)
+	}
+	if got, want := atomic.LoadInt64(&primaryHits), int64(0); got != want {
+		t.Fatalf("primary source HTTP attempts = %d, want %d", got, want)
+	}
+	select {
+	case <-probeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for backup probe lease preemption")
+	}
+	if !errors.Is(context.Cause(probeCtx), ErrProbePreempted) {
+		t.Fatalf("probe context cause = %v, want ErrProbePreempted", context.Cause(probeCtx))
+	}
+}
+
+func TestStartRecoverySourceFailoverPolicyPreemptsProbeInFullAlternatePool(t *testing.T) {
+	current := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
+	}))
+	defer current.Close()
+
+	alternateHits := int64(0)
+	alternate := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		atomic.AddInt64(&alternateHits, 1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alternate"))
+	}))
+	defer alternate.Close()
+
+	provider := &fakeChannelsProvider{
+		channelsByGuide: map[string]channels.Channel{
+			"101": {ChannelID: 1, GuideNumber: "101", GuideName: "News", Enabled: true},
+		},
+		sourcesByID: map[int64][]channels.Source{
+			1: {
+				{
+					SourceID:             10,
+					ChannelID:            1,
+					ItemKey:              "src:news:current",
+					StreamURL:            current.URL,
+					PlaylistSourceID:     1,
+					PlaylistSourceName:   "Primary",
+					PlaylistSourceTuners: 1,
+					PriorityIndex:        0,
+					Enabled:              true,
+				},
+				{
+					SourceID:             11,
+					ChannelID:            1,
+					ItemKey:              "src:news:alternate",
+					StreamURL:            alternate.URL,
+					PlaylistSourceID:     2,
+					PlaylistSourceName:   "Backup",
+					PlaylistSourceTuners: 1,
+					PriorityIndex:        1,
+					Enabled:              true,
+				},
+			},
+		},
+	}
+
+	virtualTuners := NewVirtualTunerManager([]VirtualTunerSource{
+		{SourceID: 1, Name: "Primary", TunerCount: 1, Enabled: true, OrderIndex: 0},
+		{SourceID: 2, Name: "Backup", TunerCount: 1, Enabled: true, OrderIndex: 1},
+	})
+	manager := NewSessionManager(SessionManagerConfig{
+		Mode:                       "direct",
+		StartupTimeout:             700 * time.Millisecond,
+		FailoverTotalTimeout:       3 * time.Second,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
+		MaxFailovers:               1,
+		UpstreamOverlimitCooldown:  0,
+		StallHardDeadline:          1200 * time.Millisecond,
+		StallPolicy:                "failover_source",
+		StallMaxFailoversPerStall:  1,
+		BufferChunkBytes:           1,
+		BufferPublishFlushInterval: 10 * time.Millisecond,
+		SessionIdleTimeout:         50 * time.Millisecond,
+	}, virtualTuners, provider)
+	if manager == nil {
+		t.Fatal("manager is nil")
+	}
+
+	channel := provider.channelsByGuide["101"]
+	primaryLease, err := manager.tuners.AcquireClientForSource(
+		context.Background(),
+		1,
+		channel.GuideNumber,
+		"shared:"+channel.GuideNumber,
+	)
+	if err != nil {
+		t.Fatalf("AcquireClientForSource(primary) error = %v", err)
+	}
+
+	probeCtx, probeCancel := context.WithCancelCause(context.Background())
+	probeLease, err := manager.tuners.AcquireProbeForSource(
+		probeCtx,
+		2,
+		"probe:alternate",
+		probeCancel,
+	)
+	if err != nil {
+		primaryLease.Release()
+		t.Fatalf("AcquireProbeForSource(alternate) error = %v", err)
+	}
+	probeDone := make(chan struct{})
+	go func() {
+		<-probeCtx.Done()
+		probeLease.Release()
+		close(probeDone)
+	}()
+	t.Cleanup(func() {
+		probeCancel(nil)
+		select {
+		case <-probeDone:
+		case <-time.After(2 * time.Second):
+			t.Errorf("timed out waiting for alternate probe lease cleanup")
+		}
+	})
+
+	session := &sharedRuntimeSession{
+		manager:     manager,
+		channel:     channel,
+		lease:       primaryLease,
+		ctx:         context.Background(),
+		cancel:      func() {},
+		readyCh:     make(chan struct{}),
+		subscribers: map[uint64]SubscriberStats{1: {SubscriberID: 1}},
+		startedAt:   time.Now().UTC(),
+	}
+	t.Cleanup(func() {
+		if session.lease != nil {
+			session.lease.Release()
+		}
+	})
+
+	currentSource := channels.Source{
+		SourceID:             10,
+		ChannelID:            1,
+		ItemKey:              "src:news:current",
+		StreamURL:            current.URL,
+		PlaylistSourceID:     1,
+		PlaylistSourceName:   "Primary",
+		PlaylistSourceTuners: 1,
+		PriorityIndex:        0,
+		Enabled:              true,
+	}
+
+	reader, selected, err := session.startRecoverySource(context.Background(), currentSource, true, 2, "stall")
+	if err != nil {
+		t.Fatalf("startRecoverySource() error = %v", err)
+	}
+	defer reader.Close()
+
+	if got, want := selected.SourceID, int64(11); got != want {
+		t.Fatalf("selected source = %d, want %d after probe preemption", got, want)
+	}
+	if session.lease == nil {
+		t.Fatal("session lease is nil after recovery selection")
+	}
+	if got, want := session.lease.PlaylistSourceID, int64(2); got != want {
+		t.Fatalf("session lease playlist_source_id = %d, want %d", got, want)
+	}
+	if got, want := atomic.LoadInt64(&alternateHits), int64(1); got != want {
+		t.Fatalf("alternate source HTTP attempts = %d, want %d", got, want)
+	}
+	select {
+	case <-probeDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for alternate probe lease preemption")
+	}
+	if !errors.Is(context.Cause(probeCtx), ErrProbePreempted) {
+		t.Fatalf("probe context cause = %v, want ErrProbePreempted", context.Cause(probeCtx))
+	}
+}
+
 func TestStartRecoverySourceFailoverPolicySkipsTransientCoolingAlternate(t *testing.T) {
 	var (
 		currentMu   sync.Mutex
@@ -11333,7 +12153,7 @@ func TestStartRecoverySourceFailoverPolicySkipsTransientCoolingAlternate(t *test
 		currentMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -11347,7 +12167,7 @@ func TestStartRecoverySourceFailoverPolicySkipsTransientCoolingAlternate(t *test
 		alternateMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("alternate"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alternate"))
 	}))
 	defer alternate.Close()
 
@@ -11381,7 +12201,7 @@ func TestStartRecoverySourceFailoverPolicySkipsTransientCoolingAlternate(t *test
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               1,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
@@ -11459,7 +12279,7 @@ func TestStartRecoverySourceFailoverPolicyPenalizesFailingAlternateAcrossRecover
 		currentMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -11506,7 +12326,7 @@ func TestStartRecoverySourceFailoverPolicyPenalizesFailingAlternateAcrossRecover
 		Mode:                       "direct",
 		StartupTimeout:             150 * time.Millisecond,
 		FailoverTotalTimeout:       1300 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               1,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1300 * time.Millisecond,
@@ -11609,7 +12429,7 @@ func TestStartSourceWithCandidatesRecoveryCyclePenalizesFailingAlternatesAcrossC
 		currentHits++
 		currentMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -11643,7 +12463,7 @@ func TestStartSourceWithCandidatesRecoveryCyclePenalizesFailingAlternatesAcrossC
 		Mode:                       "direct",
 		StartupTimeout:             120 * time.Millisecond,
 		FailoverTotalTimeout:       900 * time.Millisecond,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               1,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          900 * time.Millisecond,
@@ -11760,7 +12580,7 @@ func TestStartRecoverySourceFailoverPolicyFallsBackToRestartSameWithoutAlternate
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -11786,7 +12606,7 @@ func TestStartRecoverySourceFailoverPolicyFallsBackToRestartSameWithoutAlternate
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
 		StallPolicy:                stallPolicyFailoverSource,
@@ -11877,7 +12697,7 @@ func TestStartRecoverySourceFailoverPolicyFallsBackWhenAlternatesNotStartupEligi
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -11891,7 +12711,7 @@ func TestStartRecoverySourceFailoverPolicyFallsBackWhenAlternatesNotStartupEligi
 		alternateMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("alternate"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alternate"))
 	}))
 	defer alternateCooling.Close()
 
@@ -11938,7 +12758,7 @@ func TestStartRecoverySourceFailoverPolicyFallsBackWhenAlternatesNotStartupEligi
 		Logger:                     logger,
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               2,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
@@ -12042,7 +12862,7 @@ func TestStartRecoverySourceFailoverPolicyRetriesAlternateBeforeFallback(t *test
 		currentMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -12061,7 +12881,7 @@ func TestStartRecoverySourceFailoverPolicyRetriesAlternateBeforeFallback(t *test
 			return
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("alternate"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("alternate"))
 	}))
 	defer alternate.Close()
 
@@ -12095,7 +12915,7 @@ func TestStartRecoverySourceFailoverPolicyRetriesAlternateBeforeFallback(t *test
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       4 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               1,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          4 * time.Second,
@@ -12183,7 +13003,7 @@ func TestStartRecoverySourceRestartSameHonorsCurrentCooldown(t *testing.T) {
 		currentMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("current"))
 	}))
 	defer current.Close()
 
@@ -12231,7 +13051,7 @@ func TestStartRecoverySourceRestartSameHonorsCurrentCooldown(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          3 * time.Second,
 		StallPolicy:                stallPolicyRestartSame,
@@ -12305,7 +13125,7 @@ func TestStartRecoverySourceRestartSameSkipsDisabledCurrentSource(t *testing.T) 
 		currentHits++
 		currentMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("stale-current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("stale-current"))
 	}))
 	defer current.Close()
 
@@ -12318,7 +13138,7 @@ func TestStartRecoverySourceRestartSameSkipsDisabledCurrentSource(t *testing.T) 
 		alternateHits++
 		alternateMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("enabled-alternate"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("enabled-alternate"))
 	}))
 	defer alternate.Close()
 
@@ -12352,7 +13172,7 @@ func TestStartRecoverySourceRestartSameSkipsDisabledCurrentSource(t *testing.T) 
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
 		StallPolicy:                stallPolicyRestartSame,
@@ -12432,7 +13252,7 @@ func TestStartRecoverySourceRestartSameDisabledCurrentWithoutEnabledCandidatesFa
 		currentHits++
 		currentMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("stale-current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("stale-current"))
 	}))
 	defer current.Close()
 
@@ -12458,7 +13278,7 @@ func TestStartRecoverySourceRestartSameDisabledCurrentWithoutEnabledCandidatesFa
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
 		StallPolicy:                stallPolicyRestartSame,
@@ -12521,7 +13341,7 @@ func TestStartRecoverySourceFailoverFallbackSkipsDisabledCurrentSource(t *testin
 		currentHits++
 		currentMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("stale-current"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("stale-current"))
 	}))
 	defer current.Close()
 
@@ -12534,7 +13354,7 @@ func TestStartRecoverySourceFailoverFallbackSkipsDisabledCurrentSource(t *testin
 		alternateHits++
 		alternateMu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("cooling-alternate"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("cooling-alternate"))
 	}))
 	defer alternate.Close()
 
@@ -12573,7 +13393,7 @@ func TestStartRecoverySourceFailoverFallbackSkipsDisabledCurrentSource(t *testin
 		Logger:                     logger,
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		MaxFailovers:               1,
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          1200 * time.Millisecond,
@@ -12665,7 +13485,7 @@ func TestStartSourceWithCandidatesWaitsForCoolingSource(t *testing.T) {
 		healthyMu.Unlock()
 
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer healthy.Close()
 
@@ -12699,7 +13519,7 @@ func TestStartSourceWithCandidatesWaitsForCoolingSource(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -12784,7 +13604,7 @@ func TestStartSourceWithCandidatesAttemptsLeastFailedCoolingSource(t *testing.T)
 		mostFailedHits++
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer mostFailed.Close()
 
@@ -12793,7 +13613,7 @@ func TestStartSourceWithCandidatesAttemptsLeastFailedCoolingSource(t *testing.T)
 		preferredHits++
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer preferred.Close()
 
@@ -12802,7 +13622,7 @@ func TestStartSourceWithCandidatesAttemptsLeastFailedCoolingSource(t *testing.T)
 		secondaryTieHits++
 		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok"))
+		_, _ = w.Write(testVideoAudioStartupFixtureText("ok"))
 	}))
 	defer secondaryTie.Close()
 
@@ -12844,7 +13664,7 @@ func TestStartSourceWithCandidatesAttemptsLeastFailedCoolingSource(t *testing.T)
 		Mode:                       "direct",
 		StartupTimeout:             600 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
@@ -12978,7 +13798,7 @@ func TestStartRecoverySourceHonorsStallMaxFailoversPerStall(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		UpstreamOverlimitCooldown:  0,
 		StallHardDeadline:          4 * time.Second,
 		StallMaxFailoversPerStall:  1,
@@ -13053,7 +13873,7 @@ func TestSessionStatsExposeRecoveryChurnTelemetry(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		if hit == 1 {
-			_, _ = w.Write([]byte("A"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("A"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -13062,7 +13882,7 @@ func TestSessionStatsExposeRecoveryChurnTelemetry(t *testing.T) {
 		}
 
 		for i := 0; i < 240; i++ {
-			if _, err := w.Write([]byte("B")); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureText("B")); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -13095,7 +13915,7 @@ func TestSessionStatsExposeRecoveryChurnTelemetry(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                80 * time.Millisecond,
@@ -13210,7 +14030,7 @@ func TestSessionManagerSkipsShortLivedRecoveryCycleFailurePersistence(t *testing
 	stalling := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		if _, err := w.Write([]byte("A")); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureText("A")); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -13223,7 +14043,7 @@ func TestSessionManagerSkipsShortLivedRecoveryCycleFailurePersistence(t *testing
 	shortEOF := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
-		if _, err := w.Write([]byte("B")); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureText("B")); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -13236,8 +14056,13 @@ func TestSessionManagerSkipsShortLivedRecoveryCycleFailurePersistence(t *testing
 	healthy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
+		startupChunk := testVideoAudioStartupFixtureText("C")
 		for i := 0; i < 200; i++ {
-			if _, err := w.Write([]byte("C")); err != nil {
+			chunk := []byte("C")
+			if i == 0 {
+				chunk = startupChunk
+			}
+			if _, err := w.Write(chunk); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -13286,7 +14111,7 @@ func TestSessionManagerSkipsShortLivedRecoveryCycleFailurePersistence(t *testing
 		Mode:                       "direct",
 		StartupTimeout:             700 * time.Millisecond,
 		FailoverTotalTimeout:       4 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                120 * time.Millisecond,
@@ -13311,7 +14136,7 @@ func TestSessionManagerSkipsShortLivedRecoveryCycleFailurePersistence(t *testing
 
 	writer := &recordingResponseWriter{
 		onWrite: func(totalBytes int) {
-			if totalBytes >= 40 {
+			if totalBytes >= 1000 {
 				cancel()
 			}
 		},
@@ -13406,7 +14231,7 @@ func TestSessionManagerLogsSubscriberLifecycle(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < 16; i++ {
-			_, _ = w.Write([]byte("lifecycle-stream"))
+			_, _ = w.Write(testVideoAudioStartupFixtureText("lifecycle-stream"))
 			if flusher != nil {
 				flusher.Flush()
 			}
@@ -13438,7 +14263,7 @@ func TestSessionManagerLogsSubscriberLifecycle(t *testing.T) {
 		Logger:                     logger,
 		StartupTimeout:             500 * time.Millisecond,
 		FailoverTotalTimeout:       1 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 15 * time.Millisecond,
 		SessionIdleTimeout:         30 * time.Millisecond,
@@ -14942,7 +15767,7 @@ JSON
 		Mode:                       "ffmpeg-copy",
 		StartupTimeout:             1 * time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 	}, NewPool(1), provider)
@@ -15280,7 +16105,7 @@ func TestRecentHealthCacheReordersCrossSessionBeforeAsyncPersistence(t *testing.
 		Mode:                 "direct",
 		StartupTimeout:       200 * time.Millisecond,
 		FailoverTotalTimeout: 2 * time.Second,
-		MinProbeBytes:        1,
+		MinProbeBytes:        testVideoAudioStartupMinProbeBytes(),
 	}, NewPool(1), provider)
 	if manager == nil {
 		t.Fatal("manager is nil")
@@ -15811,7 +16636,7 @@ func newBurstGapSourceServer(burstChunks int, payload []byte, gap time.Duration)
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		for i := 0; i < burstChunks; i++ {
-			if _, err := w.Write(payload); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(payload)); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -17367,7 +18192,7 @@ func TestSessionManagerCloseWaitsForInFlightCreator(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             2 * time.Second,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           1,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         100 * time.Millisecond,
@@ -17897,7 +18722,7 @@ func TestRecoveryCycleDoesNotFalseStallFromStaleLastPublish(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		// Send enough data to trigger a size-based publish (>512 bytes).
-		if _, err := w.Write(bytes.Repeat([]byte("A"), 1024)); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte("A"), 1024))); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -17921,7 +18746,7 @@ func TestRecoveryCycleDoesNotFalseStallFromStaleLastPublish(t *testing.T) {
 		ticker := time.NewTicker(10 * time.Millisecond)
 		defer ticker.Stop()
 		for i := 0; i < 500; i++ {
-			if _, err := w.Write(bytes.Repeat([]byte("B"), 200)); err != nil {
+			if _, err := w.Write(testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte("B"), 200))); err != nil {
 				return
 			}
 			if flusher != nil {
@@ -17963,7 +18788,7 @@ func TestRecoveryCycleDoesNotFalseStallFromStaleLastPublish(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             300 * time.Millisecond,
 		FailoverTotalTimeout:       5 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           512,
 		BufferPublishFlushInterval: 500 * time.Millisecond,
 		StallDetect:                200 * time.Millisecond,
@@ -18046,7 +18871,7 @@ func TestRecoveryCycleStallDetectsZeroPublishNewSource(t *testing.T) {
 		w.WriteHeader(http.StatusOK)
 		flusher, _ := w.(http.Flusher)
 		// Send enough data to trigger a size-based publish (>512 bytes).
-		if _, err := w.Write(bytes.Repeat([]byte("A"), 1024)); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte("A"), 1024))); err != nil {
 			return
 		}
 		if flusher != nil {
@@ -18064,7 +18889,7 @@ func TestRecoveryCycleStallDetectsZeroPublishNewSource(t *testing.T) {
 		// Send a tiny amount of data to satisfy the startup probe
 		// (MinProbeBytes=1), but not enough to trigger a chunk publish
 		// (BufferChunkBytes=512). Then hang.
-		if _, err := w.Write([]byte("X")); err != nil {
+		if _, err := w.Write(testVideoAudioStartupFixtureText("X")); err != nil {
 			return
 		}
 		if flusher, ok := w.(http.Flusher); ok {
@@ -18106,7 +18931,7 @@ func TestRecoveryCycleStallDetectsZeroPublishNewSource(t *testing.T) {
 		Mode:                       "direct",
 		StartupTimeout:             300 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           512,
 		BufferPublishFlushInterval: 500 * time.Millisecond,
 		StallDetect:                150 * time.Millisecond,
@@ -18178,7 +19003,7 @@ func TestStartSourceWithCandidatesIdleAbortBlocksOnReaderClose(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 		// Write enough data so startup probe succeeds.
-		_, _ = w.Write(bytes.Repeat([]byte("X"), 1024))
+		_, _ = w.Write(testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte("X"), 1024)))
 	}))
 	defer upstream.Close()
 
@@ -18188,7 +19013,7 @@ func TestStartSourceWithCandidatesIdleAbortBlocksOnReaderClose(t *testing.T) {
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           4,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         2 * time.Second,
@@ -18296,7 +19121,7 @@ func TestStartSourceWithCandidatesRepeatedIdleAbortBlocksOnReaderClose(t *testin
 		default:
 		}
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(bytes.Repeat([]byte("Z"), 1024))
+		_, _ = w.Write(testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte("Z"), 1024)))
 	}))
 	defer upstream.Close()
 
@@ -18306,7 +19131,7 @@ func TestStartSourceWithCandidatesRepeatedIdleAbortBlocksOnReaderClose(t *testin
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           4,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		SessionIdleTimeout:         2 * time.Second,
@@ -18459,7 +19284,7 @@ func TestStartCurrentSourceWithBackoffIdleAbortBlocksOnReaderClose(t *testing.T)
 		// Small delay to let subscriber drop propagate before responding.
 		time.Sleep(10 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(bytes.Repeat([]byte("Y"), 1024))
+		_, _ = w.Write(testVideoAudioStartupFixtureChunk(bytes.Repeat([]byte("Y"), 1024)))
 	}))
 	defer upstream.Close()
 
@@ -18469,7 +19294,7 @@ func TestStartCurrentSourceWithBackoffIdleAbortBlocksOnReaderClose(t *testing.T)
 		Logger:                     slog.New(slog.NewTextHandler(io.Discard, nil)),
 		StartupTimeout:             900 * time.Millisecond,
 		FailoverTotalTimeout:       3 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           4,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 		StallDetect:                45 * time.Millisecond,
@@ -18606,7 +19431,7 @@ JSON
 		Mode:                       "ffmpeg-copy",
 		StartupTimeout:             1 * time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 	}, NewPool(1), provider)
@@ -18722,7 +19547,7 @@ func TestSetSourceStatePersistProfileProbeCancelsOnSessionFinish(t *testing.T) {
 		Mode:                       "ffmpeg-copy",
 		StartupTimeout:             1 * time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 	}, NewPool(1), provider)
@@ -18824,7 +19649,7 @@ func TestSetSourceStateProfileProbeUsesConfiguredFFprobePath(t *testing.T) {
 		FFprobePath:                "C:\\ffmpeg\\bin\\ffprobe.exe",
 		StartupTimeout:             time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 	}, NewPool(1), provider)
@@ -18909,7 +19734,7 @@ func TestSetSourceStateWithStartupProbeCanceledContextConvergesProfileProbeWaitG
 		Mode:                       "ffmpeg-copy",
 		StartupTimeout:             time.Second,
 		FailoverTotalTimeout:       2 * time.Second,
-		MinProbeBytes:              1,
+		MinProbeBytes:              testVideoAudioStartupMinProbeBytes(),
 		BufferChunkBytes:           188,
 		BufferPublishFlushInterval: 10 * time.Millisecond,
 	}, NewPool(1), provider)

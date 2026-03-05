@@ -1357,6 +1357,139 @@ func TestListCatalogItemsSupportsMultiGroupFilters(t *testing.T) {
 	}
 }
 
+func TestListCatalogItemsSupportsSourceIDFilters(t *testing.T) {
+	ctx := context.Background()
+
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	secondary, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Secondary Catalog Source",
+		PlaylistURL: "http://example.com/secondary-catalog.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(secondary) error = %v", err)
+	}
+	primary, err := store.GetPlaylistSource(ctx, primaryPlaylistSourceID)
+	if err != nil {
+		t.Fatalf("GetPlaylistSource(primary) error = %v", err)
+	}
+
+	if err := store.UpsertPlaylistItemsForSource(ctx, primaryPlaylistSourceID, []playlist.Item{
+		{
+			ItemKey:    "src:sourcefilter:primary:news",
+			ChannelKey: "name:sourcefilter-primary-news",
+			Name:       "Primary News",
+			Group:      "News",
+			StreamURL:  "http://example.com/sourcefilter-primary-news.ts",
+		},
+		{
+			ItemKey:    "src:sourcefilter:primary:sports",
+			ChannelKey: "name:sourcefilter-primary-sports",
+			Name:       "Primary Sports",
+			Group:      "Sports",
+			StreamURL:  "http://example.com/sourcefilter-primary-sports.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(primary) error = %v", err)
+	}
+	if err := store.UpsertPlaylistItemsForSource(ctx, secondary.SourceID, []playlist.Item{
+		{
+			ItemKey:    "src:sourcefilter:secondary:movies",
+			ChannelKey: "name:sourcefilter-secondary-movies",
+			Name:       "Secondary Movies",
+			Group:      "Movies",
+			StreamURL:  "http://example.com/sourcefilter-secondary-movies.ts",
+		},
+		{
+			ItemKey:    "src:sourcefilter:secondary:news",
+			ChannelKey: "name:sourcefilter-secondary-news",
+			Name:       "Secondary News",
+			Group:      "News",
+			StreamURL:  "http://example.com/sourcefilter-secondary-news.ts",
+		},
+	}); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(secondary) error = %v", err)
+	}
+
+	secondaryOnly, secondaryTotal, err := store.ListCatalogItems(ctx, playlist.Query{
+		SourceIDs: []int64{secondary.SourceID},
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListCatalogItems(secondary source filter) error = %v", err)
+	}
+	if secondaryTotal != 2 || len(secondaryOnly) != 2 {
+		t.Fatalf("ListCatalogItems(secondary source filter) total/len = %d/%d, want 2/2", secondaryTotal, len(secondaryOnly))
+	}
+	if got := itemKeys(secondaryOnly); strings.Join(got, ",") != "src:sourcefilter:secondary:movies,src:sourcefilter:secondary:news" {
+		t.Fatalf("ListCatalogItems(secondary source filter) keys = %#v, want [src:sourcefilter:secondary:movies src:sourcefilter:secondary:news]", got)
+	}
+	for _, item := range secondaryOnly {
+		if item.PlaylistSourceID != secondary.SourceID {
+			t.Fatalf("secondary-only item %q playlist_source_id = %d, want %d", item.ItemKey, item.PlaylistSourceID, secondary.SourceID)
+		}
+		if item.PlaylistSourceName != secondary.Name {
+			t.Fatalf("secondary-only item %q playlist_source_name = %q, want %q", item.ItemKey, item.PlaylistSourceName, secondary.Name)
+		}
+	}
+
+	combinedNews, combinedNewsTotal, err := store.ListCatalogItems(ctx, playlist.Query{
+		SourceIDs:  []int64{secondary.SourceID, primaryPlaylistSourceID, secondary.SourceID},
+		GroupNames: []string{"News"},
+		Limit:      10,
+		Offset:     0,
+	})
+	if err != nil {
+		t.Fatalf("ListCatalogItems(combined source+group filter) error = %v", err)
+	}
+	if combinedNewsTotal != 2 || len(combinedNews) != 2 {
+		t.Fatalf("ListCatalogItems(combined source+group filter) total/len = %d/%d, want 2/2", combinedNewsTotal, len(combinedNews))
+	}
+	if got := itemKeys(combinedNews); strings.Join(got, ",") != "src:sourcefilter:primary:news,src:sourcefilter:secondary:news" {
+		t.Fatalf("ListCatalogItems(combined source+group filter) keys = %#v, want [src:sourcefilter:primary:news src:sourcefilter:secondary:news]", got)
+	}
+	for _, item := range combinedNews {
+		switch item.ItemKey {
+		case "src:sourcefilter:primary:news":
+			if item.PlaylistSourceID != primary.SourceID || item.PlaylistSourceName != primary.Name {
+				t.Fatalf("combined primary item metadata = (%d,%q), want (%d,%q)", item.PlaylistSourceID, item.PlaylistSourceName, primary.SourceID, primary.Name)
+			}
+		case "src:sourcefilter:secondary:news":
+			if item.PlaylistSourceID != secondary.SourceID || item.PlaylistSourceName != secondary.Name {
+				t.Fatalf("combined secondary item metadata = (%d,%q), want (%d,%q)", item.PlaylistSourceID, item.PlaylistSourceName, secondary.SourceID, secondary.Name)
+			}
+		default:
+			t.Fatalf("unexpected combined item key %q", item.ItemKey)
+		}
+	}
+
+	allItems, allTotal, err := store.ListCatalogItems(ctx, playlist.Query{
+		SourceIDs: []int64{},
+		Limit:     10,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("ListCatalogItems(empty source filter) error = %v", err)
+	}
+	if allTotal != 4 || len(allItems) != 4 {
+		t.Fatalf("ListCatalogItems(empty source filter) total/len = %d/%d, want 4/4", allTotal, len(allItems))
+	}
+
+	if _, _, err := store.ListCatalogItems(ctx, playlist.Query{
+		SourceIDs: []int64{0},
+		Limit:     10,
+		Offset:    0,
+	}); err == nil {
+		t.Fatal("ListCatalogItems(invalid source_ids) error = nil, want validation error")
+	}
+}
+
 func TestListCatalogItemsStableOrderingForNameTies(t *testing.T) {
 	ctx := context.Background()
 
@@ -1477,6 +1610,62 @@ func TestListCatalogItemsQueryPlanAvoidsTempBTreeAtHighOffset(t *testing.T) {
 	}
 	if planContains(planDetails, "use temp b-tree for order by") {
 		t.Fatalf("plan details unexpectedly include temp b-tree sort: %q", strings.Join(planDetails, " | "))
+	}
+}
+
+func TestListCatalogItemsSourceFilteredQueryPlanUsesSourceSelectiveOrderedIndex(t *testing.T) {
+	ctx := context.Background()
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer store.Close()
+
+	secondary, err := store.CreatePlaylistSource(ctx, playlist.PlaylistSourceCreate{
+		Name:        "Plan Secondary",
+		PlaylistURL: "http://example.com/plan-secondary.m3u",
+		TunerCount:  2,
+	})
+	if err != nil {
+		t.Fatalf("CreatePlaylistSource(secondary) error = %v", err)
+	}
+
+	primaryItems := generateCatalogBenchmarkItems(12000)
+	if err := store.UpsertPlaylistItemsForSource(ctx, primaryPlaylistSourceID, primaryItems); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(primary) error = %v", err)
+	}
+
+	secondaryItems := make([]playlist.Item, 0, 120)
+	for i := 0; i < 120; i++ {
+		secondaryItems = append(secondaryItems, playlist.Item{
+			ItemKey:    fmt.Sprintf("src:source-plan:secondary:%04d", i),
+			ChannelKey: fmt.Sprintf("name:source-plan-secondary-%04d", i),
+			Name:       fmt.Sprintf("Secondary Plan Channel %04d", i),
+			Group:      fmt.Sprintf("Plan Group %02d", i%8),
+			StreamURL:  fmt.Sprintf("http://example.com/plan/secondary/%04d.ts", i),
+		})
+	}
+	if err := store.UpsertPlaylistItemsForSource(ctx, secondary.SourceID, secondaryItems); err != nil {
+		t.Fatalf("UpsertPlaylistItemsForSource(secondary) error = %v", err)
+	}
+
+	planDetails, err := explainCatalogListQueryPlan(ctx, store.db, playlist.Query{
+		SourceIDs: []int64{secondary.SourceID},
+		Limit:     100,
+		Offset:    0,
+	})
+	if err != nil {
+		t.Fatalf("explainCatalogListQueryPlan(source filtered) error = %v", err)
+	}
+	if len(planDetails) == 0 {
+		t.Fatal("expected source-filtered query-plan rows for catalog list query")
+	}
+	t.Logf("catalog source-filtered query plan: %s", strings.Join(planDetails, " | "))
+	if !planContains(planDetails, "idx_playlist_active_source_group_name_name_item") {
+		t.Fatalf("source-filtered plan missing source-selective ordered index: %q", strings.Join(planDetails, " | "))
+	}
+	if planContains(planDetails, "use temp b-tree for order by") {
+		t.Fatalf("source-filtered plan unexpectedly includes temp b-tree sort: %q", strings.Join(planDetails, " | "))
 	}
 }
 
@@ -1979,6 +2168,25 @@ func TestOpenEnsuresCatalogOrderedPaginationIndex(t *testing.T) {
 	}
 	if !exists {
 		t.Fatal("expected idx_playlist_active_group_name_name_item to exist after Open()")
+	}
+}
+
+func TestOpenEnsuresCatalogSourceFilteredOrderedPaginationIndex(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "catalog-source-filtered-ordered-pagination-index.db")
+
+	store, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open(file db) error = %v", err)
+	}
+	defer store.Close()
+
+	exists, err := indexExists(ctx, store.db, "idx_playlist_active_source_group_name_name_item")
+	if err != nil {
+		t.Fatalf("indexExists(idx_playlist_active_source_group_name_name_item) error = %v", err)
+	}
+	if !exists {
+		t.Fatal("expected idx_playlist_active_source_group_name_name_item to exist after Open()")
 	}
 }
 
